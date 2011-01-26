@@ -156,7 +156,7 @@ def query(form):
     Each match contains position information and a list of the words and attributes in the match.
 
     The required parameters are
-     - corpus: the CWB corpus, or comma separated corpora
+     - corpus: the CWB corpus. Multiple corpus parameters are allowed.
      - cqp: the CQP query string
      - start, end: which result rows that should be returned
 
