@@ -182,8 +182,7 @@ def query(form):
     ############################################################################
     # First we read all CGI parameters and translate them to CQP
 
-    corpora = form.getfirst("corpus")
-    corpora = set(c.strip() for c in corpora.split(","))
+    corpora = set(form.getlist("corpus"))
     shown = set(form.getlist("show"))
     shown.add("word")
     context = form.getfirst("context", "10 words")
