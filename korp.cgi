@@ -37,7 +37,7 @@ MAX_KWIC_ROWS = 100
 # These variables should probably not need to be changed
 
 # The version of this script
-KORP_VERSION = "0.25"
+KORP_VERSION = "0.28"
 
 # The available CGI commands; for each command there must be a function
 # with the same name, taking one argument (the CGI form)
@@ -156,7 +156,7 @@ def query(form):
     Each match contains position information and a list of the words and attributes in the match.
 
     The required parameters are
-     - corpus: the CWB corpus. Multiple corpus parameters are allowed.
+     - corpus: the CWB corpus. More than one parameter can be used.
      - cqp: the CQP query string
      - start, end: which result rows that should be returned
 
@@ -165,6 +165,7 @@ def query(form):
        (default '10 words')
      - show: add once for each corpus parameter (positional/strutural/alignment)
        (default only show the 'word' parameter)
+     - show_struct: structural annotations for matched region. Multiple parameters possible.
      - within: only search for matches within the given s-attribute (e.g., within a sentence)
        (default: no within)
      - cut: set cutoff threshold to reduce the size of the result
@@ -176,6 +177,7 @@ def query(form):
     assert_key("end", form, IS_NUMBER, True)
     assert_key("context", form, r"^\d+ [\w-]+$")
     assert_key("show", form, IS_IDENT)
+    assert_key("show_struct", form, IS_IDENT)
     assert_key("within", form, IS_IDENT)
     assert_key("cut", form, IS_NUMBER)
 
@@ -185,6 +187,7 @@ def query(form):
     corpora = set(form.getlist("corpus"))
     shown = set(form.getlist("show"))
     shown.add("word")
+    shown_structs = set(form.getlist("show_struct"))
     context = form.getfirst("context", "10 words")
     start, end = int(form.getfirst("start")), int(form.getfirst("end"))
 
@@ -211,6 +214,7 @@ def query(form):
         # No extra queries need to be made if only one corpus is selected
         if len(corpora) == 1:
             shown_local = shown
+            shown_structs_local = shown_structs
             start_local = start
             end_local = end
         else:
@@ -231,6 +235,7 @@ def query(form):
             attrs = read_attributes(lines)
             attrs = attrs["p"] + attrs["s"] + attrs["a"]
             shown_local = set(attr for attr in shown if attr in attrs)
+            shown_structs_local = set(attr for attr in shown_structs if attr in attrs)
             
             # Read number of hits
             corpus_hits = int(lines.next())
@@ -266,6 +271,8 @@ def query(form):
             cmd += ["show +%s;" % " +".join(shown_local)]
             cmd += ["set Context %s;" % context]
             cmd += ["set LeftKWICDelim '%s '; set RightKWICDelim ' %s';" % (LEFT_DELIM, RIGHT_DELIM)]
+            if shown_structs_local:
+                cmd += ["set PrintStructures '%s';" % ", ".join(shown_structs_local)]
             # This prints the result rows:
             cmd += ["cat Last %s %s;" % (start_local, end_local)]
 
@@ -282,6 +289,7 @@ def query(form):
             p_attrs = [attr for attr in attrs["p"] if attr in shown_local]
             nr_splits = len(p_attrs) - 1
             s_attrs = set(attr for attr in attrs["s"] if attr in shown_local)
+            ls_attrs = set(attr for attr in attrs["s"] if attr in shown_structs_local)
             a_attrs = set(attr for attr in attrs["a"] if attr in shown_local)
 
             # Read the size of the query, i.e., the number of results
@@ -293,6 +301,7 @@ def query(form):
 
             kwic = []
             for line in lines:
+                linestructs = {}
                 match = {}
 
                 header, line = line.split(":", 1)
@@ -303,6 +312,22 @@ def query(form):
                     # This is the result row for the query corpus
                     aligned = None
                     match["position"] = int(header)
+
+                # Handle PrintStructures
+                if shown_structs_local.intersection(ls_attrs):
+                    lineattr, line = line.split(":", 1)
+                    lineattrs = lineattr.split("<")[1:]
+                    
+                    for s in lineattrs:
+                        s = s[:-1]
+                        
+                        if s in ls_attrs:
+                            s_key = s
+                            s_val = None
+                        else:
+                            s_key, s_val = s.split(" ", 1)
+
+                        linestructs[s_key] = s_val
 
                 words = line.split()
                 tokens = []
@@ -364,7 +389,7 @@ def query(form):
                         kwic[-1].setdefault("aligned", {})[aligned] = tokens
                 else:
                     # Otherwise we add a new kwic row
-                    kwic.append({"corpus": corpus, "match": match, "tokens": tokens})
+                    kwic.append({"corpus": corpus, "structs": linestructs, "match": match, "tokens": tokens})
 
             result["hits"] = nr_hits
             if result.has_key("kwic"):
