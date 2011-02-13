@@ -389,7 +389,11 @@ def query(form):
                         kwic[-1].setdefault("aligned", {})[aligned] = tokens
                 else:
                     # Otherwise we add a new kwic row
-                    kwic.append({"corpus": corpus, "structs": linestructs, "match": match, "tokens": tokens})
+                    kwic_row = {"corpus": corpus, "match": match}
+                    if linestructs:
+                    	kwic_row["structs"] = linestructs
+                    kwic_row["tokens"] = tokens
+                    kwic.append(kwic_row)
 
             result["hits"] = nr_hits
             if result.has_key("kwic"):
