@@ -15,6 +15,7 @@ import time
 import cgi
 import re
 import json
+import sqlite3 as sqlite
 
 ######################################################################
 # These variables could be changed depending on the corpus server
@@ -41,7 +42,7 @@ KORP_VERSION = "0.28"
 
 # The available CGI commands; for each command there must be a function
 # with the same name, taking one argument (the CGI form)
-COMMANDS = "info query count".split()
+COMMANDS = "info query count relations".split()
 
 def default_command(form):
     return "query" if "cqp" in form else "info"
@@ -53,7 +54,7 @@ RIGHT_DELIM = ":::---"
 
 # Regular expressions for parsing CGI parameters
 IS_NUMBER = re.compile(r"^\d+$")
-IS_IDENT = re.compile(r"^[,\w-]+$")
+IS_IDENT = re.compile(r"^[\w-]+$")
 
 
 ######################################################################
@@ -491,6 +492,36 @@ def count(form):
         result["DEBUG"] = {"cqp": cqp, "cmd": cmd}
     return result
 
+
+def relations(form):
+    assert_key("corpus", form, IS_IDENT, True)
+    
+    corpus = form.getfirst("corpus")
+    head = form.getfirst("head")
+    dep = form.getfirst("dep")
+    
+    col = "head" if head else "dep"
+    find = head or dep or ""
+    result = {}
+
+    conn = sqlite.connect('relations.db')
+    cur = conn.cursor()
+    cur.execute("""SELECT * FROM relations WHERE corpus = ? AND %s = ? ORDER BY head, rel""" % col, (corpus, find.decode("UTF-8")))
+    
+    for row in cur:
+        r = {}
+        r["head"] = row[0]
+        r["rel"] = row[1]
+        r["dep"] = row[2]
+        r["freq"] = row[3]
+        r["sources"] = row[4].split(";")
+        r["corpus"] = row[5]
+        result.setdefault("relations", []).append(r)
+    
+    conn.commit()
+    cur.close()
+    
+    return result
 
 ######################################################################
 # Helper functions
