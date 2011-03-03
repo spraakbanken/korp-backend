@@ -501,18 +501,17 @@ def count(form):
 
 def relations(form):
     assert_key("corpus", form, IS_IDENT, True)
+    assert_key("lemgram", form, r"", True)
     
     corpus = form.getfirst("corpus")
-    head = form.getfirst("head")
-    dep = form.getfirst("dep")
+    lemgram = form.getfirst("lemgram")
+    lemgram = "%|" + lemgram.decode("UTF-8") + "|%"
     
-    col = "head" if head else "dep"
-    find = head or dep or ""
     result = {}
 
     conn = sqlite.connect('relations.db')
     cur = conn.cursor()
-    cur.execute("""SELECT * FROM relations WHERE corpus = ? AND %s = ? ORDER BY head, rel""" % col, (corpus, find.decode("UTF-8")))
+    cur.execute("""SELECT * FROM relations WHERE corpus = ? AND head LIKE ? OR dep LIKE ? ORDER BY head, rel""", (corpus, lemgram, lemgram))
     
     for row in cur:
         r = {}
