@@ -205,7 +205,7 @@ def query(form):
     current_position = 0
     result = {}
 
-	############################################################################
+    ############################################################################
     # Iterate through the corpora to find from which we will fetch our results
     
     for corpus in corpora:
@@ -335,7 +335,9 @@ def query(form):
                 n = 0
                 structs = defaultdict(list)
                 struct = None
+
                 for word in words:
+                
                     if struct:
                         # Structural attrs can be split in the middle (<s_n 123>),
                         # so we need to finish the structure here
@@ -358,10 +360,14 @@ def query(form):
                             # wee need to continue with the next word
                             struct = word[1:]
                             break
-                        # This is for s-attrs that have no arguments (<s>)
-                        struct, word = word[1:].split(">", 1)
-                        structs["open"].append(struct)
-                        struct = None
+                        elif ">" in word and word[1:word.find(">")] in s_attrs:
+                            # This is for s-attrs that have no arguments (<s>)
+                            struct, word = word[1:].split(">", 1)
+                            structs["open"].append(struct)
+                            struct = None
+                        else:
+                            # What we've found is not a structural attribute
+                            break
 
                     if struct:
                         # If we stopped in the middle of a struct (<s_n 123>),
@@ -369,7 +375,7 @@ def query(form):
                         continue
 
                     # Now we read all s-attrs that are closing (from the right)
-                    while word[-1] == ">":
+                    while word[-1] == ">" and "</" in word:
                         word, struct = word[:-1].rsplit("</", 1)
                         structs["close"].insert(0, struct)
                         struct = None
@@ -392,7 +398,7 @@ def query(form):
                     # Otherwise we add a new kwic row
                     kwic_row = {"corpus": corpus, "match": match}
                     if linestructs:
-                    	kwic_row["structs"] = linestructs
+                        kwic_row["structs"] = linestructs
                     kwic_row["tokens"] = tokens
                     kwic.append(kwic_row)
 
