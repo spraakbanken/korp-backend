@@ -42,7 +42,7 @@ KORP_VERSION = "0.28"
 
 # The available CGI commands; for each command there must be a function
 # with the same name, taking one argument (the CGI form)
-COMMANDS = "info query count relations".split()
+COMMANDS = "info query count relations relations_sentences".split()
 
 def default_command(form):
     return "query" if "cqp" in form else "info"
@@ -531,6 +531,52 @@ def relations(form):
     cur.close()
     
     return result
+
+
+def relations_sentences(form):
+    corpus = form.getfirst("corpus")
+    head = form.getfirst("head").decode("UTF-8")
+    dep = form.getfirst("dep").decode("UTF-8")
+    rel = form.getfirst("rel").decode("UTF-8")
+    
+    conn = sqlite.connect('relations.db')
+    cur = conn.cursor()
+    cur.execute("""SELECT * FROM relations WHERE corpus = ? AND head = ? AND dep = ? AND rel = ? ORDER BY head, rel""", (corpus, head, dep, rel))
+    
+    cqp = []
+
+    for row in cur:
+        ids = row[4].split(";")
+        for sid in ids:
+            cqp.append(u'<sentence_id="%s"> []* </sentence_id>' % sid)
+    
+    conn.commit()
+    cur.close()
+
+    cqp = u" | ".join(cqp)
+    result = {}
+    cmd = ["%s;" % corpus]
+    cmd += make_query(cqp)
+    cmd += ["set Context 1 sentence;"]
+    cmd += ["set LeftKWICDelim ''; set RightKWICDelim '';"]
+    cmd += ["cat Last;"]
+    lines = runCQP(cmd, form)
+    # Skip the CQP version
+    lines.next()
+
+    kwic = []
+    for line in lines:
+        words = line.split(":", 1)[1].split()
+        tokens = []
+
+        for word in words:
+            tokens.append({"word": word})
+
+        kwic.append({"corpus": corpus, "tokens": tokens})
+
+    result["kwic"] = kwic
+    return result
+
 
 ######################################################################
 # Helper functions
