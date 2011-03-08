@@ -503,24 +503,28 @@ def relations(form):
     assert_key("corpus", form, IS_IDENT, True)
     assert_key("lemgram", form, r"", True)
     
-    corpus = form.getfirst("corpus")
-    lemgram = form.getfirst("lemgram")
-    lemgram = "%|" + lemgram.decode("UTF-8") + "|%"
+    corpora = set(form.getlist("corpus"))
+    lemgram = "%|" + form.getfirst("lemgram").decode("UTF-8") + "|%"
+    
+    corporasql = []
+    for corpus in corpora:
+        corporasql.append("corpus = '%s'" % corpus)
+    corporasql = " OR ".join(corporasql)
     
     result = {}
 
     conn = sqlite.connect('relations.db')
     cur = conn.cursor()
-    cur.execute("""SELECT * FROM relations WHERE corpus = ? AND head LIKE ? OR dep LIKE ? ORDER BY head, rel""", (corpus, lemgram, lemgram))
+    cur.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND head LIKE ? OR dep LIKE ? ORDER BY head, rel""", (lemgram, lemgram))
     
     for row in cur:
-        r = {}
-        r["head"] = row[0]
-        r["rel"] = row[1]
-        r["dep"] = row[2]
-        r["freq"] = row[3]
-        r["sources"] = row[4].split(";")
-        r["corpus"] = row[5]
+        r = { "head": row[0],
+              "rel": row[1],
+              "dep": row[2],
+              "freq": row[3],
+              "sources": row[4].split(";"),
+              "corpus": row[5]
+            }
         result.setdefault("relations", []).append(r)
     
     conn.commit()
