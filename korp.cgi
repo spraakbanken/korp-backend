@@ -31,7 +31,7 @@ CWB_REGISTRY = "/usr/contrib/etc/cwb_registry"
 CQP_ENCODING = "UTF-8"
 
 # The maximum number of search results that can be returned per query
-MAX_KWIC_ROWS = 100
+MAX_KWIC_ROWS = 1000
 
 
 ######################################################################
@@ -502,9 +502,12 @@ def count(form):
 def relations(form):
     assert_key("corpus", form, IS_IDENT, True)
     assert_key("lemgram", form, r"", True)
+    assert_key("min", form, IS_NUMBER, False)
     
     corpora = set(form.getlist("corpus"))
     lemgram = "%|" + form.getfirst("lemgram").decode("UTF-8") + "|%"
+    minfreq = form.getfirst("min")
+    if not minfreq: minfreq = 1
     
     corporasql = []
     for corpus in corpora:
@@ -518,17 +521,23 @@ def relations(form):
                            passwd = "",
                            db = "")
     cursor = conn.cursor()
-    cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND head LIKE %s OR dep LIKE %s ORDER BY head, rel""", (lemgram, lemgram))
+    cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (head LIKE %s OR dep LIKE %s) AND freq >= %s ORDER BY head, rel""", (lemgram, lemgram, minfreq))
+    
+    rels = {}
     
     for row in cursor:
-        r = { "head": row[0],
-              "rel": row[1],
-              "dep": row[2],
-              "freq": row[3],
-              "corpus": row[4],
+        rels.setdefault((row[0], row[1], row[2]), {"freq": 0, "corpus": []})
+        rels[(row[0], row[1], row[2])]["freq"] += row[3]
+        rels[(row[0], row[1], row[2])]["corpus"].append(row[4])
+    
+    for rel in rels:
+        r = { "head": rel[0],
+              "rel": rel[1],
+              "dep": rel[2],
+              "freq": rels[rel]["freq"],
+              "corpus": rels[rel]["corpus"],
               "sources": []
             }
-        # "sources": row[4].split(";"),
         result.setdefault("relations", []).append(r)
     
     cursor.close()
