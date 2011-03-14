@@ -505,7 +505,7 @@ def relations(form):
     assert_key("min", form, IS_NUMBER, False)
     
     corpora = set(form.getlist("corpus"))
-    lemgram = "%|" + form.getfirst("lemgram").decode("UTF-8") + "|%"
+    lemgram = "%|" + form.getfirst("lemgram") + "|%"
     minfreq = form.getfirst("min")
     if not minfreq: minfreq = 1
     
