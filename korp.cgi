@@ -15,7 +15,7 @@ import time
 import cgi
 import re
 import json
-import sqlite3 as sqlite
+import MySQLdb
 
 ######################################################################
 # These variables could be changed depending on the corpus server
@@ -513,22 +513,26 @@ def relations(form):
     
     result = {}
 
-    conn = sqlite.connect('relations.db')
-    cur = conn.cursor()
-    cur.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND head LIKE ? OR dep LIKE ? ORDER BY head, rel""", (lemgram, lemgram))
+    conn = MySQLdb.connect(host = "localhost",
+                           user = "",
+                           passwd = "",
+                           db = "")
+    cursor = conn.cursor()
+    cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND head LIKE %s OR dep LIKE %s ORDER BY head, rel""", (lemgram, lemgram))
     
-    for row in cur:
+    for row in cursor:
         r = { "head": row[0],
               "rel": row[1],
               "dep": row[2],
               "freq": row[3],
-              "sources": row[4].split(";"),
-              "corpus": row[5]
+              "corpus": row[4],
+              "sources": []
             }
+        # "sources": row[4].split(";"),
         result.setdefault("relations", []).append(r)
     
-    conn.commit()
-    cur.close()
+    cursor.close()
+    conn.close()
     
     return result
 
