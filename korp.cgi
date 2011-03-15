@@ -505,7 +505,7 @@ def relations(form):
     assert_key("min", form, IS_NUMBER, False)
     
     corpora = set(form.getlist("corpus"))
-    lemgram = "%|" + form.getfirst("lemgram") + "|%"
+    lemgram = form.getfirst("lemgram")
     minfreq = form.getfirst("min")
     if not minfreq: minfreq = 1
     
@@ -521,7 +521,7 @@ def relations(form):
                            passwd = "",
                            db = "")
     cursor = conn.cursor()
-    cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (head LIKE %s OR dep LIKE %s) AND freq >= %s ORDER BY head, rel""", (lemgram, lemgram, minfreq))
+    cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (head = %s OR dep = %s) AND freq >= %s""", (lemgram, lemgram, minfreq))
     
     rels = {}
     
