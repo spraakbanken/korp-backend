@@ -535,8 +535,7 @@ def relations(form):
               "rel": rel[1],
               "dep": rel[2],
               "freq": rels[rel]["freq"],
-              "corpus": rels[rel]["corpus"],
-              "sources": []
+              "corpus": rels[rel]["corpus"]
             }
         result.setdefault("relations", []).append(r)
     
