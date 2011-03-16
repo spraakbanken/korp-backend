@@ -507,7 +507,9 @@ def relations(form):
     corpora = set(form.getlist("corpus"))
     lemgram = form.getfirst("lemgram")
     minfreq = form.getfirst("min")
-    if not minfreq: minfreq = 1
+   	minfreqsql = " AND freq >= %s" % minfreq if minfreq else ""
+    
+    headdep = "dep" if "..av." in lemgram else "head"
     
     corporasql = []
     for corpus in corpora:
@@ -521,7 +523,7 @@ def relations(form):
                            passwd = "",
                            db = "")
     cursor = conn.cursor()
-    cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (head = %s OR dep = %s) AND freq >= %s""", (lemgram, lemgram, minfreq))
+    cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (""" + headdep + """ = %s)""" + minfreqsql, (lemgram))
     
     rels = {}
     
