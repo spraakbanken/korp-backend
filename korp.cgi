@@ -526,7 +526,7 @@ def relations(form):
                            passwd = "",
                            db = "")
     cursor = conn.cursor()
-    cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (""" + headdep + """ = %s) ORDER BY rel, freq""" + minfreqsql, (lemgram,))
+    cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (""" + headdep + """ = %s)""" + minfreqsql, (lemgram,))
     
     rels = {}
     counter = {}
