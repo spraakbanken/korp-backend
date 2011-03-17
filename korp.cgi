@@ -503,10 +503,13 @@ def relations(form):
     assert_key("corpus", form, IS_IDENT, True)
     assert_key("lemgram", form, r"", True)
     assert_key("min", form, IS_NUMBER, False)
+    assert_key("max", form, IS_NUMBER, False)
     
     corpora = set(form.getlist("corpus"))
     lemgram = form.getfirst("lemgram")
     minfreq = form.getfirst("min")
+    maxresults = form.getfirst("max") or 15
+    maxresults = int(maxresults)
     minfreqsql = " AND freq >= %s" % minfreq if minfreq else ""
     
     headdep = "dep" if "..av." in lemgram else "head"
@@ -523,23 +526,31 @@ def relations(form):
                            passwd = "",
                            db = "")
     cursor = conn.cursor()
-    cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (""" + headdep + """ = %s)""" + minfreqsql, (lemgram,))
+    cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (""" + headdep + """ = %s) ORDER BY rel, freq""" + minfreqsql, (lemgram,))
     
     rels = {}
+    counter = {}
     
     for row in cursor:
         rels.setdefault((row[0], row[1], row[2]), {"freq": 0, "corpus": []})
         rels[(row[0], row[1], row[2])]["freq"] += row[3]
         rels[(row[0], row[1], row[2])]["corpus"].append(row[4])
     
-    for rel in rels:
-        r = { "head": rel[0],
-              "rel": rel[1],
-              "dep": rel[2],
-              "freq": rels[rel]["freq"],
-              "corpus": rels[rel]["corpus"]
-            }
-        result.setdefault("relations", []).append(r)
+    sortedrels = sorted(rels.items(), key=lambda x: (x[0][1], x[1]["freq"]), reverse=True)
+    
+    for rel in sortedrels:
+        counter.setdefault(rel[0][1], 0)
+        if counter[rel[0][1]] >= maxresults:
+            continue
+        else:
+            counter[rel[0][1]] += 1
+            r = { "head": rel[0][0],
+                  "rel": rel[0][1],
+                  "dep": rel[0][2],
+                  "freq": rel[1]["freq"],
+                  "corpus": rel[1]["corpus"]
+                }
+            result.setdefault("relations", []).append(r)
     
     cursor.close()
     conn.close()
