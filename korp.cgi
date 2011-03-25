@@ -42,7 +42,7 @@ KORP_VERSION = "0.28"
 
 # The available CGI commands; for each command there must be a function
 # with the same name, taking one argument (the CGI form)
-COMMANDS = "info query count relations".split()
+COMMANDS = "info query count relations lemgramstats".split()
 
 def default_command(form):
     return "query" if "cqp" in form else "info"
@@ -499,6 +499,36 @@ def count(form):
     result = {"hits": nr_hits, "counts": counts}
     if "debug" in form:
         result["DEBUG"] = {"cqp": cqp, "cmd": cmd}
+    return result
+
+
+def lemgramstats(form):
+    """    """
+    assert_key("lemgram", form, r"", True)
+    assert_key("corpus", form, IS_IDENT, True)
+    
+    corpora = set(form.getlist("corpus"))
+    lemgram = form.getfirst("lemgram").decode("utf-8")
+    
+    result = {}
+    
+    for corpus in corpora:
+
+        cmd = ["%s;" % corpus]
+        cmd += make_query('[lex contains "%s"]' % lemgram)
+        cmd += ["group Last match word;"]
+
+        lines = runCQP(cmd, form)
+
+        # skip CQP version
+        lines.next()
+
+        corpus_stats = defaultdict(int)
+        for line in lines:
+            wordform, count = line.split("\t")
+            corpus_stats[wordform.lower()] += int(count)
+        result[corpus] = corpus_stats
+        
     return result
 
 
