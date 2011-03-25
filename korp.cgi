@@ -202,6 +202,7 @@ def query(form):
         cqp += " cut %s" % form.getfirst("cut")
 
     total_hits = 0
+    statistics = {}
     current_position = 0
     result = {}
 
@@ -241,6 +242,7 @@ def query(form):
             # Read number of hits
             corpus_hits = int(lines.next())
             total_hits += corpus_hits
+            statistics[corpus] = corpus_hits
             
             start_local = 0
             end_local = 0
@@ -413,6 +415,7 @@ def query(form):
             
     if len(corpora) > 1:
         result["hits"] = total_hits
+        result["corpus_hits"] = statistics
     
     return result
 
