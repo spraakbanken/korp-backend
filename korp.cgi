@@ -54,8 +54,9 @@ RIGHT_DELIM = ":::---"
 
 # Regular expressions for parsing CGI parameters
 IS_NUMBER = re.compile(r"^\d+$")
-IS_IDENT = re.compile(r"^[\w-]+$")
+IS_IDENT = re.compile(r"^[\w\-,]+$")
 
+QUERY_DELIM = ","
 
 ######################################################################
 # And now the functions corresponding to the CGI commands
@@ -185,10 +186,22 @@ def query(form):
     ############################################################################
     # First we read all CGI parameters and translate them to CQP
 
-    corpora = set(form.getlist("corpus"))
-    shown = set(form.getlist("show"))
+    if form.getfirst("corpus") and QUERY_DELIM in form.getfirst("corpus"):
+        corpora = form.getfirst("corpus").split(QUERY_DELIM)
+    else:
+        corpora = set(form.getlist("corpus"))
+
+    if form.getfirst("show") and QUERY_DELIM in form.getfirst("show"):
+        shown = set(form.getfirst("show").split(QUERY_DELIM))
+    else:
+        shown = set(form.getlist("show"))
+    
     shown.add("word")
-    shown_structs = set(form.getlist("show_struct"))
+    if form.getfirst("show_struct") and QUERY_DELIM in form.getfirst("show_struct"):
+        shown_structs = set(form.getfirst("show_struct").split(QUERY_DELIM))
+    else:
+        shown_structs = set(form.getlist("show_struct"))
+    
     context = form.getfirst("context", "10 words")
     start, end = int(form.getfirst("start")), int(form.getfirst("end"))
 
@@ -440,7 +453,11 @@ def count(form):
     assert_key("cut", form, IS_NUMBER)
 
     corpus = form.getfirst("corpus")
-    shown = form.getlist("show")
+    if form.getfirst("show") and QUERY_DELIM in form.getfirst("show"):
+        shown = set(form.getfirst("show").split(QUERY_DELIM))
+    else:
+        shown = form.getlist("show")
+
     cqp = form.getfirst("cqp").decode("utf-8")
     if "within" in form:
         cqp += " within %s" % form.getfirst("within")
@@ -507,7 +524,11 @@ def lemgramstats(form):
     assert_key("lemgram", form, r"", True)
     assert_key("corpus", form, IS_IDENT, True)
     
-    corpora = set(form.getlist("corpus"))
+    if form.getfirst("corpus") and QUERY_DELIM in form.getfirst("corpus"):
+        corpora = set(form.getfirst("corpus").split(QUERY_DELIM))
+    else:
+        corpora = set(form.getlist("corpus"))
+        
     lemgram = form.getfirst("lemgram").decode("utf-8")
     
     result = {}
@@ -538,7 +559,11 @@ def relations(form):
     assert_key("min", form, IS_NUMBER, False)
     assert_key("max", form, IS_NUMBER, False)
     
-    corpora = set(form.getlist("corpus"))
+    if form.getfirst("corpus") and QUERY_DELIM in form.getfirst("corpus"):
+        corpora = set(form.getfirst("corpus").split(QUERY_DELIM))
+    else:
+        corpora = set(form.getlist("corpus"))
+        
     lemgram = form.getfirst("lemgram")
     word = form.getfirst("word")
     minfreq = form.getfirst("min")
