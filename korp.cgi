@@ -534,18 +534,17 @@ def lemgramstats(form):
 
 def relations(form):
     assert_key("corpus", form, IS_IDENT, True)
-    assert_key("lemgram", form, r"", True)
+    #assert_key("lemgram", form, r"", True)
     assert_key("min", form, IS_NUMBER, False)
     assert_key("max", form, IS_NUMBER, False)
     
     corpora = set(form.getlist("corpus"))
     lemgram = form.getfirst("lemgram")
+    word = form.getfirst("word")
     minfreq = form.getfirst("min")
     maxresults = form.getfirst("max") or 15
     maxresults = int(maxresults)
     minfreqsql = " AND freq >= %s" % minfreq if minfreq else ""
-    
-    headdep = "dep" if "..av." in lemgram else "head"
     
     corporasql = []
     for corpus in corpora:
@@ -559,7 +558,12 @@ def relations(form):
                            passwd = "",
                            db = "")
     cursor = conn.cursor()
-    cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (""" + headdep + """ = %s)""" + minfreqsql, (lemgram,))
+    
+    if lemgram:
+        headdep = "dep" if "..av." in lemgram else "head"
+        cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (""" + headdep + """ = %s)""" + minfreqsql, (lemgram,))
+    elif word:
+        cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (head = %s OR head = %s OR dep = %s)""" + minfreqsql, (word + "_VB", word + "_NN", word + "_JJ"))
     
     rels = {}
     counter = {}
