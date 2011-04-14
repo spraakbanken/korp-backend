@@ -42,7 +42,7 @@ KORP_VERSION = "0.28"
 
 # The available CGI commands; for each command there must be a function
 # with the same name, taking one argument (the CGI form)
-COMMANDS = "info query count relations lemgramstats".split()
+COMMANDS = "info query count relations relations_sentences lemgramstats".split()
 
 def default_command(form):
     return "query" if "cqp" in form else "info"
@@ -74,8 +74,12 @@ def main():
     """
     starttime = time.time()
     print_header()
-    form = cgi.FieldStorage()
-    command = form.getfirst("command")
+    
+    # Convert form fields to regular dictionary
+    form_raw = cgi.FieldStorage()
+    form = dict((field, form_raw.getvalue(field)) for field in form_raw.keys())
+    
+    command = form.get("command")
     if not command:
         command = default_command(form)
     try:
@@ -122,7 +126,7 @@ def corpus_info(form):
     """Return information about a specific corpus.
     """
     assert_key("corpus", form, IS_IDENT, True)
-    corpus = form.getfirst("corpus")
+    corpus = form.get("corpus")
 
     cmd = ["%s;" % corpus]
     cmd += show_attributes()
@@ -185,34 +189,34 @@ def query(form):
 
     ############################################################################
     # First we read all CGI parameters and translate them to CQP
-
-    if form.getfirst("corpus") and QUERY_DELIM in form.getfirst("corpus"):
-        corpora = form.getfirst("corpus").split(QUERY_DELIM)
-    else:
-        corpora = set(form.getlist("corpus"))
-
-    if form.getfirst("show") and QUERY_DELIM in form.getfirst("show"):
-        shown = set(form.getfirst("show").split(QUERY_DELIM))
-    else:
-        shown = set(form.getlist("show"))
     
+    corpora = form.get("corpus")
+    if isinstance(corpora, basestring):
+        corpora = corpora.split(QUERY_DELIM)
+    corpora = set(corpora)
+
+    shown = form.get("show", [])
+    if isinstance(shown, basestring):
+        shown = shown.split(QUERY_DELIM)
+    shown = set(shown)
     shown.add("word")
-    if form.getfirst("show_struct") and QUERY_DELIM in form.getfirst("show_struct"):
-        shown_structs = set(form.getfirst("show_struct").split(QUERY_DELIM))
-    else:
-        shown_structs = set(form.getlist("show_struct"))
+
+    shown_structs = form.get("show_struct", [])
+    if isinstance(shown_structs, basestring):
+        shown_structs = shown_structs.split(QUERY_DELIM)
+    shown_structs = set(shown_structs)
     
-    context = form.getfirst("context", "10 words")
-    start, end = int(form.getfirst("start")), int(form.getfirst("end"))
+    context = form.get("context", "10 words")
+    start, end = int(form.get("start")), int(form.get("end"))
 
     if end - start >= MAX_KWIC_ROWS:
         raise ValueError("At most %d KWIC rows can be returned per call." % MAX_KWIC_ROWS)
 
-    cqp = form.getfirst("cqp").decode("utf-8")
+    cqp = form.get("cqp").decode("utf-8")
     if "within" in form:
-        cqp += " within %s" % form.getfirst("within")
+        cqp += " within %s" % form.get("within")
     if "cut" in form:
-        cqp += " cut %s" % form.getfirst("cut")
+        cqp += " cut %s" % form.get("cut")
 
     total_hits = 0
     statistics = {}
@@ -452,17 +456,18 @@ def count(form):
     assert_key("show", form, IS_IDENT, True)
     assert_key("cut", form, IS_NUMBER)
 
-    corpus = form.getfirst("corpus")
-    if form.getfirst("show") and QUERY_DELIM in form.getfirst("show"):
-        shown = set(form.getfirst("show").split(QUERY_DELIM))
-    else:
-        shown = form.getlist("show")
+    corpus = form.get("corpus")
+    
+    shown = form.get("show")
+    if isinstance(shown, basestring):
+        shown = shown.split(QUERY_DELIM)
+    shown = set(shown)
 
-    cqp = form.getfirst("cqp").decode("utf-8")
+    cqp = form.get("cqp").decode("utf-8")
     if "within" in form:
-        cqp += " within %s" % form.getfirst("within")
+        cqp += " within %s" % form.get("within")
     if "cut" in form:
-        cqp += " cut %s" % form.getfirst("cut")
+        cqp += " cut %s" % form.get("cut")
 
     # TODO: we could use cwb-scan-corpus for counting:
     #   cwb-scan-corpus -q SUC2 '?word=/^en$/c' 'pos' 'pos+1' | sort -n -r
@@ -523,13 +528,13 @@ def lemgramstats(form):
     """    """
     assert_key("lemgram", form, r"", True)
     assert_key("corpus", form, IS_IDENT, True)
+
+    corpora = form.get("corpus")
+    if isinstance(corpora, basestring):
+        corpora = corpora.split(QUERY_DELIM)
+    corpora = set(corpora)
     
-    if form.getfirst("corpus") and QUERY_DELIM in form.getfirst("corpus"):
-        corpora = set(form.getfirst("corpus").split(QUERY_DELIM))
-    else:
-        corpora = set(form.getlist("corpus"))
-        
-    lemgram = form.getfirst("lemgram").decode("utf-8")
+    lemgram = form.get("lemgram")
     
     result = {}
     
@@ -559,17 +564,19 @@ def relations(form):
     assert_key("min", form, IS_NUMBER, False)
     assert_key("max", form, IS_NUMBER, False)
     
-    if form.getfirst("corpus") and QUERY_DELIM in form.getfirst("corpus"):
-        corpora = set(form.getfirst("corpus").split(QUERY_DELIM))
-    else:
-        corpora = set(form.getlist("corpus"))
+    corpora = form.get("corpus")
+    if isinstance(corpora, basestring):
+        corpora = corpora.split(QUERY_DELIM)
+    corpora = set(corpora)
         
-    lemgram = form.getfirst("lemgram")
-    word = form.getfirst("word")
-    minfreq = form.getfirst("min")
-    maxresults = form.getfirst("max") or 15
+    lemgram = form.get("lemgram")
+    word = form.get("word")
+    minfreq = form.get("min")
+    maxresults = form.get("max") or 15
     maxresults = int(maxresults)
     minfreqsql = " AND freq >= %s" % minfreq if minfreq else ""
+    
+    assert lemgram or word, "lemgram or word missing."
     
     corporasql = []
     for corpus in corpora:
@@ -586,17 +593,17 @@ def relations(form):
     
     if lemgram:
         headdep = "dep" if "..av." in lemgram else "head"
-        cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (""" + headdep + """ = %s)""" + minfreqsql, (lemgram,))
+        cursor.execute("""SELECT * FROM relations2 WHERE (""" + corporasql + """) AND (""" + headdep + """ = %s)""" + minfreqsql, (lemgram,))
     elif word:
-        cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (head = %s OR head = %s OR dep = %s)""" + minfreqsql, (word + "_VB", word + "_NN", word + "_JJ"))
+        cursor.execute("""SELECT * FROM relations2 WHERE (""" + corporasql + """) AND (head = %s OR head = %s OR dep = %s)""" + minfreqsql, (word + "_VB", word + "_NN", word + "_JJ"))
     
     rels = {}
     counter = {}
     
     for row in cursor:
-        rels.setdefault((row[0], row[1], row[2]), {"freq": 0, "corpus": []})
-        rels[(row[0], row[1], row[2])]["freq"] += row[3]
-        rels[(row[0], row[1], row[2])]["corpus"].append(row[4])
+        rels.setdefault((row[0], row[1], row[2], row[3]), {"freq": 0, "corpus": []})
+        rels[(row[0], row[1], row[2], row[3])]["freq"] += row[4]
+        rels[(row[0], row[1], row[2], row[3])]["corpus"].append(row[5])
     
     sortedrels = sorted(rels.items(), key=lambda x: (x[0][1], x[1]["freq"]), reverse=True)
     
@@ -609,6 +616,7 @@ def relations(form):
             r = { "head": rel[0][0],
                   "rel": rel[0][1],
                   "dep": rel[0][2],
+                  "depextra": rel[0][3],
                   "freq": rel[1]["freq"],
                   "corpus": rel[1]["corpus"]
                 }
@@ -619,6 +627,94 @@ def relations(form):
     
     return result
 
+
+def relations_sentences(form):
+    from copy import deepcopy
+    
+    assert_key("corpus", form, IS_IDENT, True)
+    assert_key("head", form, "", True)
+    assert_key("dep", form, "", True)
+    assert_key("rel", form, "", True)
+    assert_key("start", form, IS_NUMBER, False)
+    assert_key("end", form, IS_NUMBER, False)
+    
+    corpora = form.get("corpus")
+    if isinstance(corpora, basestring):
+        corpora = corpora.split(QUERY_DELIM)
+    corpora = set(corpora)
+    
+    head = form.get("head")
+    dep = form.get("dep")
+    depextra = form.get("depextra") or ""
+    rel = form.get("rel")
+    start = int(form.get("start", "0"))
+    end = int(form.get("end", "199"))
+    
+    corporasql = []
+    for corpus in corpora:
+        corporasql.append("corpus = '%s'" % corpus)
+    corporasql = " OR ".join(corporasql)
+    
+    querystarttime = time.time()
+
+    conn = MySQLdb.connect(host = "localhost",
+                           user = "",
+                           passwd = "",
+                           db = "")
+    cursor = conn.cursor()
+    cursor.execute("""SELECT sentences, corpus FROM relations2 WHERE (""" + corporasql + """) AND head = %s AND dep = %s AND depextra = %s AND rel = %s""", (head, dep, depextra, rel))
+    
+    querytime = time.time() - querystarttime
+   
+    counter = 0
+    corpora_dict = {}
+    sids = {}
+    used_corpora = set()
+    for row in cursor:
+        ids = [s.split(":") for s in row[0].split(";")]
+        for s in ids:
+            if counter >= start and counter <= end:
+                sids.setdefault(s[0], []).append(s[1:3])
+                used_corpora.add(row[1])
+                corpora_dict.setdefault(row[1], {}).setdefault(s[0], []).append(s[1:3])
+            if counter > end:
+                break
+            counter += 1
+
+    cursor.close()
+
+    if not sids:
+        return {"hits": 0}
+    
+    cqpstarttime = time.time()
+    result = {"hits": 0, "corpus_hits": {}}
+    
+    for corp, sids in corpora_dict.items():
+        cqp = u'<sentence_id="%s"> []* </sentence_id> within sentence' % "|".join(set(sids.keys()))
+        result_temp = query({"cqp": cqp, "corpus": corp, "start": "0", "end": str(end - start), "show_struct": "sentence_id", "context": "1 sentence"})
+
+        for i in range(len(result_temp["kwic"]) - 1, -1, -1):
+            s = result_temp["kwic"][i]
+            sid = s["structs"]["sentence_id"]
+            r = sids[sid][0]
+            s["match"]["start"] = min(map(int, r)) - 1
+            s["match"]["end"] = max(map(int, r)) - 1
+            
+            for r in sids[sid][1:]:
+                s2 = deepcopy(s)
+                s2["match"]["start"] = min(map(int, r)) - 1
+                s2["match"]["end"] = max(map(int, r)) - 1
+                result_temp["kwic"].insert(i + 1, s2)
+                result_temp["hits"] += 1
+    
+        result.setdefault("kwic", []).extend(result_temp["kwic"])
+        result["hits"] += result_temp["hits"]
+        result["corpus_hits"][corp] = result_temp["hits"]
+
+    result["querytime"] = querytime
+    result["cqptime"] = time.time() - cqpstarttime
+    
+    return result
 
 ######################################################################
 # Helper functions
@@ -646,7 +742,7 @@ def runCQP(command, form, executable=CQP_EXECUTABLE, registry=CWB_REGISTRY):
     Yield one result line at the time, disregarding empty lines.
     If there is an error, raise a CQPError exception.
     """
-    encoding = form.getfirst("encoding", CQP_ENCODING)
+    encoding = form.get("encoding", CQP_ENCODING)
     if not isinstance(command, basestring):
         command = "\n".join(command)
     command = "set PrettyPrint off;\n" + command
@@ -685,12 +781,14 @@ def assert_key(key, form, regexp, required=False):
     matches the specification 'regexp'. If 'required' is True, then
     the key has to be in the form.
     """
-    values = form.getlist(key)
-    if required and not values:
+    value = form.get(key, "")
+    if value and not isinstance(value, list):
+        value = [value]
+    if required and not value:
         raise KeyError("Key is required: %s" % key)
-    if not all(re.match(regexp, x) for x in values):
+    if not all(re.match(regexp, x) for x in value):
         pattern = regexp.pattern if hasattr(regexp, "pattern") else regexp
-        raise ValueError("Value(s) for key %s do(es) not match /%s/: %s" % (key, pattern, values))
+        raise ValueError("Value(s) for key %s do(es) not match /%s/: %s" % (key, pattern, value))
 
 
 def print_header():
@@ -703,10 +801,10 @@ def print_object(obj, form):
     The CGI form can contain optional parameters 'callback' and 'indent'
     which change the output format.
     """
-    callback = form.getfirst("callback")
+    callback = form.get("callback")
     if callback: print callback + "(",
     try:
-        indent = int(form.getfirst("indent"))
+        indent = int(form.get("indent"))
         print json.dumps(obj, sort_keys=True, indent=indent),
     except:
         print json.dumps(obj, separators=(",",":"))
