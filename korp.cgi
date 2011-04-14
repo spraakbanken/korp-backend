@@ -593,9 +593,9 @@ def relations(form):
     
     if lemgram:
         headdep = "dep" if "..av." in lemgram else "head"
-        cursor.execute("""SELECT * FROM relations2 WHERE (""" + corporasql + """) AND (""" + headdep + """ = %s)""" + minfreqsql, (lemgram,))
+        cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (""" + headdep + """ = %s)""" + minfreqsql, (lemgram,))
     elif word:
-        cursor.execute("""SELECT * FROM relations2 WHERE (""" + corporasql + """) AND (head = %s OR head = %s OR dep = %s)""" + minfreqsql, (word + "_VB", word + "_NN", word + "_JJ"))
+        cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (head = %s OR head = %s OR dep = %s)""" + minfreqsql, (word + "_VB", word + "_NN", word + "_JJ"))
     
     rels = {}
     counter = {}
@@ -662,7 +662,7 @@ def relations_sentences(form):
                            passwd = "",
                            db = "")
     cursor = conn.cursor()
-    cursor.execute("""SELECT sentences, corpus FROM relations2 WHERE (""" + corporasql + """) AND head = %s AND dep = %s AND depextra = %s AND rel = %s""", (head, dep, depextra, rel))
+    cursor.execute("""SELECT sentences, corpus FROM relations WHERE (""" + corporasql + """) AND head = %s AND dep = %s AND depextra = %s AND rel = %s""", (head, dep, depextra, rel))
     
     querytime = time.time() - querystarttime
    
