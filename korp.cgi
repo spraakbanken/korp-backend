@@ -534,7 +534,7 @@ def lemgramstats(form):
         corpora = corpora.split(QUERY_DELIM)
     corpora = set(corpora)
     
-    lemgram = form.get("lemgram")
+    lemgram = form.get("lemgram").decode("utf-8")
     
     result = {}
     
