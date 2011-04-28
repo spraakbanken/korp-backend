@@ -7,7 +7,7 @@ Currently it acts as a wrapper for the CQP querying language of Corpus Workbench
 """
 
 from subprocess import Popen, PIPE
-from cStringIO import StringIO
+#from cStringIO import StringIO
 from collections import defaultdict
 
 import random
@@ -16,6 +16,7 @@ import cgi
 import re
 import json
 import MySQLdb
+import zlib
 
 ######################################################################
 # These variables could be changed depending on the corpus server
@@ -220,67 +221,31 @@ def query(form):
 
     total_hits = 0
     statistics = {}
-    current_position = 0
     result = {}
-
+    
+    saved_statistics = {}
+    saved_total_hits = 0
+    saved_hits = form.get("querydata", "")
+    if saved_hits:
+        saved_hits = zlib.decompress(saved_hits.replace("\\n", "\n").replace("-", "+").replace("_", "/").decode("base64"))
+        saved_crc32, saved_total_hits, stats_temp = saved_hits.split(";", 2)
+        checksum = str(zlib.crc32(cqp + "".join(sorted(corpora))))
+        if saved_crc32 == checksum:
+            saved_total_hits = int(saved_total_hits)
+            for pair in stats_temp.split(";"):
+                c, h = pair.split(":")
+                saved_statistics[c] = int(h)
+    
     ############################################################################
     # Iterate through the corpora to find from which we will fetch our results
     
+    start_local = start
+    end_local = end
+    
     for corpus in corpora:
-    
-        skip = False
-    
-        # No extra queries need to be made if only one corpus is selected
-        if len(corpora) == 1:
-            shown_local = shown
-            shown_structs_local = shown_structs
-            start_local = start
-            end_local = end
-        else:
-            # First query is done to determine number of hits. This is needed for
-            # pagination in multiple corpora to work.
-            cmd = ["%s;" % corpus]
-            # Show attributes, to determine which attributes are available
-            cmd += show_attributes()
-            cmd += make_query(cqp)
-            cmd += ["size Last;"]
-            
-            lines = runCQP(cmd, form)
-            
-            # Skip the CQP version
-            lines.next()
-            
-            # Read attributes and filter out unavailable ones
-            attrs = read_attributes(lines)
-            attrs = attrs["p"] + attrs["s"] + attrs["a"]
-            shown_local = set(attr for attr in shown if attr in attrs)
-            shown_structs_local = set(attr for attr in shown_structs if attr in attrs)
-            
-            # Read number of hits
-            corpus_hits = int(lines.next())
-            total_hits += corpus_hits
-            statistics[corpus] = corpus_hits
-            
-            start_local = 0
-            end_local = 0
-            
-            # Calculate which hits from this corpus is needed, if any
-            if start >= current_position and start < total_hits:
-                start_local = start - current_position
-                end_local = min(end - current_position, corpus_hits - 1)
-            elif end >= current_position and end < total_hits:
-                start_local = max(start - current_position, 0)
-                end_local = end - current_position
-            elif start < current_position and end >= total_hits:
-                start_local = 0
-                end_local = corpus_hits - 1
-            else:
-                skip = True
-
-            current_position += corpus_hits
+        skip = (end_local < 0)
         
-        # If hits from this corpus is needed, query corpos again and fetch results
-        if not skip:
+        if not saved_statistics or (saved_statistics and saved_statistics[corpus] > start_local and not skip):
             
             cmd = ["%s;" % corpus]
             # This prints the attributes and their relative order:
@@ -288,151 +253,179 @@ def query(form):
             cmd += make_query(cqp)
             # This prints the size of the query (i.e., the number of results):
             cmd += ["size Last;"]
-            cmd += ["show +%s;" % " +".join(shown_local)]
+            cmd += ["show +%s;" % " +".join(shown)]
             cmd += ["set Context %s;" % context]
             cmd += ["set LeftKWICDelim '%s '; set RightKWICDelim ' %s';" % (LEFT_DELIM, RIGHT_DELIM)]
-            if shown_structs_local:
-                cmd += ["set PrintStructures '%s';" % ", ".join(shown_structs_local)]
+            if shown_structs:
+                cmd += ["set PrintStructures '%s';" % ", ".join(shown_structs)]
             # This prints the result rows:
-            cmd += ["cat Last %s %s;" % (start_local, end_local)]
+            if not skip:
+                cmd += ["cat Last %s %s;" % (start_local, end_local)]
 
             ######################################################################
             # Then we call the CQP binary, and read the results
 
-            lines = runCQP(cmd, form)
+            lines = runCQP(cmd, form, attr_ignore=True)
 
             # Skip the CQP version
             lines.next()
-
+            
             # Read the attributes and their relative order 
             attrs = read_attributes(lines)
-            p_attrs = [attr for attr in attrs["p"] if attr in shown_local]
-            nr_splits = len(p_attrs) - 1
-            s_attrs = set(attr for attr in attrs["s"] if attr in shown_local)
-            ls_attrs = set(attr for attr in attrs["s"] if attr in shown_structs_local)
-            a_attrs = set(attr for attr in attrs["a"] if attr in shown_local)
-
+            
             # Read the size of the query, i.e., the number of results
             nr_hits = int(lines.next())
 
-            ######################################################################
-            # Now we create the concordance (kwic = keywords in context)
-            # from the remaining lines
-
-            kwic = []
-            for line in lines:
-                linestructs = {}
-                match = {}
-
-                header, line = line.split(":", 1)
-                if header[:3] == "-->":
-                    # For aligned corpora, every other line is the aligned result
-                    aligned = header[3:]
-                else:
-                    # This is the result row for the query corpus
-                    aligned = None
-                    match["position"] = int(header)
-
-                # Handle PrintStructures
-                if shown_structs_local.intersection(ls_attrs):
-                    lineattr, line = line.split(":", 1)
-                    lineattrs = lineattr.split("<")[1:]
-                    
-                    for s in lineattrs:
-                        s = s[:-1]
-                        
-                        if s in ls_attrs:
-                            s_key = s
-                            s_val = None
-                        else:
-                            s_key, s_val = s.split(" ", 1)
-
-                        linestructs[s_key] = s_val
-
-                words = line.split()
-                tokens = []
-                n = 0
-                structs = defaultdict(list)
-                struct = None
-
-                for word in words:
+            if len(corpora) == 1:
+                shown_local = shown
+                shown_structs_local = shown_structs
+            else:
+                # Filter out unavailable attributes
+                all_attrs = attrs["p"] + attrs["s"] + attrs["a"]
+                shown_local = set(attr for attr in shown if attr in all_attrs)
+                shown_structs_local = set(attr for attr in shown_structs if attr in all_attrs)
                 
-                    if struct:
-                        # Structural attrs can be split in the middle (<s_n 123>),
-                        # so we need to finish the structure here
-                        struct_id, word = word.split(">", 1)
-                        structs["open"].append(struct + " " + struct_id)
-                        struct = None
+        else:
+            nr_hits = saved_statistics[corpus]
+            skip = True
+        
+        statistics[corpus] = nr_hits
+        total_hits += nr_hits
+        
+        # Calculate which hits from next corpus we need, if any
+        start_local = start_local - nr_hits
+        end_local = end_local - nr_hits
+        if start_local < 0:
+            start_local = 0
 
-                    # We use special delimiters to see when we enter and leave the match region
-                    if word == LEFT_DELIM:
-                        match["start"] = n
-                        continue
-                    elif word == RIGHT_DELIM:
-                        match["end"] = n
-                        continue
+        if skip:
+            continue
 
-                    # We read all structural attributes that are opening (from the left)
-                    while word[0] == "<":
-                        if word[1:] in s_attrs:
-                            # If we stopped in the middle of a struct (<s_n 123>),
-                            # wee need to continue with the next word
-                            struct = word[1:]
-                            break
-                        elif ">" in word and word[1:word.find(">")] in s_attrs:
-                            # This is for s-attrs that have no arguments (<s>)
-                            struct, word = word[1:].split(">", 1)
-                            structs["open"].append(struct)
-                            struct = None
-                        else:
-                            # What we've found is not a structural attribute
-                            break
+        p_attrs = [attr for attr in attrs["p"] if attr in shown_local]
+        nr_splits = len(p_attrs) - 1
+        s_attrs = set(attr for attr in attrs["s"] if attr in shown_local)
+        ls_attrs = set(attr for attr in attrs["s"] if attr in shown_structs_local)
+        a_attrs = set(attr for attr in attrs["a"] if attr in shown_local)
 
-                    if struct:
+        ######################################################################
+        # Now we create the concordance (kwic = keywords in context)
+        # from the remaining lines
+
+        kwic = []
+        for line in lines:
+            linestructs = {}
+            match = {}
+
+            header, line = line.split(":", 1)
+            if header[:3] == "-->":
+                # For aligned corpora, every other line is the aligned result
+                aligned = header[3:]
+            else:
+                # This is the result row for the query corpus
+                aligned = None
+                match["position"] = int(header)
+
+            # Handle PrintStructures
+            if shown_structs_local.intersection(ls_attrs):
+                lineattr, line = line.split(":  ", 1)
+                lineattrs = lineattr.split("<")[1:]
+                
+                for s in lineattrs:
+                    s = s[:-1]
+                    
+                    if s in ls_attrs:
+                        s_key = s
+                        s_val = None
+                    else:
+                        s_key, s_val = s.split(" ", 1)
+
+                    linestructs[s_key] = s_val
+
+            words = line.split()
+            tokens = []
+            n = 0
+            structs = defaultdict(list)
+            struct = None
+
+            for word in words:
+            
+                if struct:
+                    # Structural attrs can be split in the middle (<s_n 123>),
+                    # so we need to finish the structure here
+                    struct_id, word = word.split(">", 1)
+                    structs["open"].append(struct + " " + struct_id)
+                    struct = None
+
+                # We use special delimiters to see when we enter and leave the match region
+                if word == LEFT_DELIM:
+                    match["start"] = n
+                    continue
+                elif word == RIGHT_DELIM:
+                    match["end"] = n
+                    continue
+
+                # We read all structural attributes that are opening (from the left)
+                while word[0] == "<":
+                    if word[1:] in s_attrs:
                         # If we stopped in the middle of a struct (<s_n 123>),
                         # wee need to continue with the next word
-                        continue
-
-                    # Now we read all s-attrs that are closing (from the right)
-                    while word[-1] == ">" and "</" in word:
-                        word, struct = word[:-1].rsplit("</", 1)
-                        structs["close"].insert(0, struct)
+                        struct = word[1:]
+                        break
+                    elif ">" in word and word[1:word.find(">")] in s_attrs:
+                        # This is for s-attrs that have no arguments (<s>)
+                        struct, word = word[1:].split(">", 1)
+                        structs["open"].append(struct)
                         struct = None
+                    else:
+                        # What we've found is not a structural attribute
+                        break
 
-                    # What's left is the word with its p-attrs
-                    values = word.rsplit("/", nr_splits)
-                    token = dict((attr, translate_undef(val)) for (attr, val) in zip(p_attrs, values))
-                    if structs:
-                        token["structs"] = structs
-                        structs = defaultdict(list)
-                    tokens.append(token)
+                if struct:
+                    # If we stopped in the middle of a struct (<s_n 123>),
+                    # wee need to continue with the next word
+                    continue
 
-                    n += 1
+                # Now we read all s-attrs that are closing (from the right)
+                while word[-1] == ">" and "</" in word:
+                    word, struct = word[:-1].rsplit("</", 1)
+                    structs["close"].insert(0, struct)
+                    struct = None
 
-                if aligned:
-                    # If this was an aligned row, we add it to the previous kwic row
-                    if words != ["(no", "alignment", "found)"]:
-                        kwic[-1].setdefault("aligned", {})[aligned] = tokens
-                else:
-                    # Otherwise we add a new kwic row
-                    kwic_row = {"corpus": corpus, "match": match}
-                    if linestructs:
-                        kwic_row["structs"] = linestructs
-                    kwic_row["tokens"] = tokens
-                    kwic.append(kwic_row)
+                # What's left is the word with its p-attrs
+                values = word.rsplit("/", nr_splits)
+                token = dict((attr, translate_undef(val)) for (attr, val) in zip(p_attrs, values))
+                if structs:
+                    token["structs"] = structs
+                    structs = defaultdict(list)
+                tokens.append(token)
 
-            result["hits"] = nr_hits
-            if result.has_key("kwic"):
-                result["kwic"].extend(kwic)
+                n += 1
+
+            if aligned:
+                # If this was an aligned row, we add it to the previous kwic row
+                if words != ["(no", "alignment", "found)"]:
+                    kwic[-1].setdefault("aligned", {})[aligned] = tokens
             else:
-                result["kwic"] = kwic
-            
-            if "debug" in form:
-                result_local["DEBUG"] = {"cqp": cqp, "cmd": cmd}
-            
-    if len(corpora) > 1:
-        result["hits"] = total_hits
-        result["corpus_hits"] = statistics
+                # Otherwise we add a new kwic row
+                kwic_row = {"corpus": corpus, "match": match}
+                if linestructs:
+                    kwic_row["structs"] = linestructs
+                kwic_row["tokens"] = tokens
+                kwic.append(kwic_row)
+
+        result["hits"] = nr_hits
+        if result.has_key("kwic"):
+            result["kwic"].extend(kwic)
+        else:
+            result["kwic"] = kwic
+        
+        if "debug" in form:
+            result_local["DEBUG"] = {"cqp": cqp, "cmd": cmd}
+
+    result["hits"] = total_hits
+    result["corpus_hits"] = statistics
+    checksum = str(zlib.crc32(cqp + "".join(sorted(corpora))))
+    result["querydata"] = zlib.compress(checksum + ";" + str(total_hits) + ";" + ";".join("%s:%d" % (c, h) for c, h in statistics.iteritems())).encode("base64").replace("+", "-").replace("/", "_")
     
     return result
 
@@ -737,7 +730,7 @@ class CQPError(Exception):
     pass
 
 
-def runCQP(command, form, executable=CQP_EXECUTABLE, registry=CWB_REGISTRY):
+def runCQP(command, form, executable=CQP_EXECUTABLE, registry=CWB_REGISTRY, attr_ignore=False):
     """Call the CQP binary with the given command, and the CGI form.
     Yield one result line at the time, disregarding empty lines.
     If there is an error, raise a CQPError exception.
@@ -756,7 +749,8 @@ def runCQP(command, form, executable=CQP_EXECUTABLE, registry=CWB_REGISTRY):
         # keep only the first CQP error (the rest are consequences):
         error = re.sub(r"^CQP Error: *", r"", error)
         error = re.sub(r" *(CQP Error:).*$", r"", error)
-        raise CQPError(error)
+        if not (attr_ignore and "No such attribute:" in error):
+            raise CQPError(error)
     for line in reply.decode(encoding).splitlines():
         if line:
             yield line
