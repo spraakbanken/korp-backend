@@ -229,7 +229,7 @@ def query(form):
     if saved_hits:
         saved_hits = zlib.decompress(saved_hits.replace("\\n", "\n").replace("-", "+").replace("_", "/").decode("base64"))
         saved_crc32, saved_total_hits, stats_temp = saved_hits.split(";", 2)
-        checksum = str(zlib.crc32(cqp + "".join(sorted(corpora))))
+        checksum = str(zlib.crc32(cqp.encode("utf-8")  + "".join(sorted(corpora))))
         if saved_crc32 == checksum:
             saved_total_hits = int(saved_total_hits)
             for pair in stats_temp.split(";"):
@@ -424,7 +424,7 @@ def query(form):
 
     result["hits"] = total_hits
     result["corpus_hits"] = statistics
-    checksum = str(zlib.crc32(cqp + "".join(sorted(corpora))))
+    checksum = str(zlib.crc32(cqp.encode("utf-8") + "".join(sorted(corpora))))
     result["querydata"] = zlib.compress(checksum + ";" + str(total_hits) + ";" + ";".join("%s:%d" % (c, h) for c, h in statistics.iteritems())).encode("base64").replace("+", "-").replace("/", "_")
     
     return result
