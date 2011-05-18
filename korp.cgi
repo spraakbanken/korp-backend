@@ -43,7 +43,7 @@ KORP_VERSION = "0.28"
 
 # The available CGI commands; for each command there must be a function
 # with the same name, taking one argument (the CGI form)
-COMMANDS = "info query count relations relations_sentences lemgramstats".split()
+COMMANDS = "info query count relations relations_sentences annotationstats".split()
 
 def default_command(form):
     return "query" if "cqp" in form else "info"
@@ -127,31 +127,44 @@ def corpus_info(form):
     """Return information about a specific corpus.
     """
     assert_key("corpus", form, IS_IDENT, True)
-    corpus = form.get("corpus")
-
-    cmd = ["%s;" % corpus]
-    cmd += show_attributes()
-    cmd += ["info;"]
-
-    # call the CQP binary
-    lines = runCQP(cmd, form)
-
-    # skip CQP version 
-    lines.next()
-
-    # read attributes
-    attrs = read_attributes(lines)
-
-    # corpus information
-    raw_info = list(lines)
-    info = {}
     
-    for infoline in raw_info:
-        if ":" in infoline and not infoline.endswith(":"):
-            infokey, infoval = (x.strip() for x in infoline.split(":", 1))
-            info[infokey] = infoval
+    corpora = form.get("corpus")
+    if isinstance(corpora, basestring):
+        corpora = corpora.split(QUERY_DELIM)
+    corpora = set(corpora)
+    
+    result = {}
+    total_size = 0
 
-    result = {"attrs": attrs, "info": info}
+    for corpus in corpora:
+        cmd = ["%s;" % corpus]
+        cmd += show_attributes()
+        cmd += ["info;"]
+
+        # call the CQP binary
+        lines = runCQP(cmd, form)
+
+        # skip CQP version 
+        lines.next()
+    
+        # read attributes
+        attrs = read_attributes(lines)
+
+        # corpus information
+        raw_info = list(lines)
+        info = {}
+        
+        for infoline in raw_info:
+            if ":" in infoline and not infoline.endswith(":"):
+                infokey, infoval = (x.strip() for x in infoline.split(":", 1))
+                info[infokey] = infoval
+                if infokey == "Size":
+                    total_size += int(infoval)
+
+        result[corpus] = {"attrs": attrs, "info": info}
+    
+    result["TOTAL_SIZE"] = total_size
+    
     if "debug" in form:
         result["DEBUG"] = {"cmd": cmd}
     return result
@@ -182,7 +195,7 @@ def query(form):
     assert_key("corpus", form, IS_IDENT, True)
     assert_key("start", form, IS_NUMBER, True)
     assert_key("end", form, IS_NUMBER, True)
-    assert_key("context", form, r"^\d+ [\w-]+$")
+    #assert_key("context", form, r"^\d+ [\w-]+$")
     assert_key("show", form, IS_IDENT)
     assert_key("show_struct", form, IS_IDENT)
     assert_key("within", form, IS_IDENT)
@@ -207,7 +220,14 @@ def query(form):
         shown_structs = shown_structs.split(QUERY_DELIM)
     shown_structs = set(shown_structs)
     
-    context = form.get("context", "10 words")
+    defaultcontext = form.get("defaultcontext", "10 words")
+    
+    context = form.get("context", {})
+    if context:
+        if not ":" in context:
+            raise ValueError("Malformed value for key 'context'.")
+        context = dict(x.split(":") for x in context.split(","))
+    
     start, end = int(form.get("start")), int(form.get("end"))
 
     if end - start >= MAX_KWIC_ROWS:
@@ -254,7 +274,8 @@ def query(form):
             # This prints the size of the query (i.e., the number of results):
             cmd += ["size Last;"]
             cmd += ["show +%s;" % " +".join(shown)]
-            cmd += ["set Context %s;" % context]
+            setcontext = context[corpus] if corpus in context else defaultcontext
+            cmd += ["set Context %s;" % setcontext]
             cmd += ["set LeftKWICDelim '%s '; set RightKWICDelim ' %s';" % (LEFT_DELIM, RIGHT_DELIM)]
             if shown_structs:
                 cmd += ["set PrintStructures '%s';" % ", ".join(shown_structs)]
@@ -326,7 +347,7 @@ def query(form):
                 match["position"] = int(header)
 
             # Handle PrintStructures
-            if shown_structs_local.intersection(ls_attrs):
+            if shown_structs_local.intersection(ls_attrs) and not aligned:
                 lineattr, line = line.split(":  ", 1)
                 lineattrs = lineattr.split("<")[1:]
                 
@@ -420,7 +441,7 @@ def query(form):
             result["kwic"] = kwic
         
         if "debug" in form:
-            result_local["DEBUG"] = {"cqp": cqp, "cmd": cmd}
+            result["DEBUG"] = {"cqp": cqp, "cmd": cmd}
 
     result["hits"] = total_hits
     result["corpus_hits"] = statistics
@@ -517,9 +538,11 @@ def count(form):
     return result
 
 
-def lemgramstats(form):
+def annotationstats(form):
     """    """
-    assert_key("lemgram", form, r"", True)
+    assert_key("annotation", form, r"", True)
+    assert_key("group", form, r"", True)
+    assert_key("value", form, r"", True)
     assert_key("corpus", form, IS_IDENT, True)
 
     corpora = form.get("corpus")
@@ -527,26 +550,49 @@ def lemgramstats(form):
         corpora = corpora.split(QUERY_DELIM)
     corpora = set(corpora)
     
-    lemgram = form.get("lemgram").decode("utf-8")
+    group = form.get("group").decode("utf-8")
+    annotation = form.get("annotation").decode("utf-8")
+    value = form.get("value").decode("utf-8")
     
-    result = {}
+    result = {"corpora": {}}
+    total_stats = {"absolute": defaultdict(int),
+                   "relative": defaultdict(float)}
+    total_size = 0
     
     for corpus in corpora:
 
         cmd = ["%s;" % corpus]
-        cmd += make_query('[lex contains "%s"]' % lemgram)
-        cmd += ["group Last match word;"]
+        cmd += ["info; .EOL.;"]
+        cmd += make_query('[%s contains "%s"]' % (annotation, value))
+        cmd += ["group Last match %s;" % group]
 
         lines = runCQP(cmd, form)
 
         # skip CQP version
         lines.next()
-
-        corpus_stats = defaultdict(int)
+        
+        for line in lines:
+            if line.startswith("Size:"):
+                _, corpus_size = line.split(":")
+                corpus_size = int(corpus_size.strip())
+            elif line == END_OF_LINE:
+                break
+        
+        total_size += corpus_size
+        corpus_stats = {"absolute": defaultdict(int),
+                        "relative": defaultdict(float)}
         for line in lines:
             wordform, count = line.split("\t")
-            corpus_stats[wordform.lower()] += int(count)
-        result[corpus] = corpus_stats
+            corpus_stats["absolute"][wordform.lower()] += int(count)
+            corpus_stats["relative"][wordform.lower()] += int(count) / float(corpus_size) * 1000000
+            total_stats["absolute"][wordform.lower()]  += int(count)
+            
+        result["corpora"][corpus] = corpus_stats
+    
+    for wf, count in total_stats["absolute"].iteritems():
+        total_stats["relative"][wf] = count / float(total_size) * 1000000
+    
+    result["total"] = total_stats
         
     return result
 
