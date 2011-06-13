@@ -133,7 +133,7 @@ def corpus_info(form):
         corpora = corpora.split(QUERY_DELIM)
     corpora = set(corpora)
     
-    result = {}
+    result = {"corpora": {}}
     total_size = 0
 
     for corpus in corpora:
@@ -161,9 +161,9 @@ def corpus_info(form):
                 if infokey == "Size":
                     total_size += int(infoval)
 
-        result[corpus] = {"attrs": attrs, "info": info}
+        result["corpora"][corpus] = {"attrs": attrs, "info": info}
     
-    result["TOTAL_SIZE"] = total_size
+    result["total_size"] = total_size
     
     if "debug" in form:
         result["DEBUG"] = {"cmd": cmd}
