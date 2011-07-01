@@ -765,7 +765,7 @@ def relations_sentences(form):
     
     for corp, sids in corpora_dict.items():
         cqp = u'<sentence_id="%s"> []* </sentence_id> within sentence' % "|".join(set(sids.keys()))
-        result_temp = query({"cqp": cqp, "corpus": corp, "start": str(start), "end": str(end), "show_struct": "sentence_id", "defaultcontext": "1 sentence"})
+        result_temp = query({"cqp": cqp, "corpus": corp, "start": "0", "end": str(end - start), "show_struct": "sentence_id", "defaultcontext": "1 sentence"})
 
         for i in range(len(result_temp["kwic"]) - 1, -1, -1):
             s = result_temp["kwic"][i]
