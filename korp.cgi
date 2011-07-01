@@ -34,6 +34,8 @@ CQP_ENCODING = "UTF-8"
 # The maximum number of search results that can be returned per query
 MAX_KWIC_ROWS = 1000
 
+# The name of the MySQL database
+DBNAME = ""
 
 ######################################################################
 # These variables should probably not need to be changed
@@ -598,6 +600,17 @@ def annotationstats(form):
 
 
 def relations(form):
+
+    import math
+
+    rel_grouping = {
+        "OO": "OBJ",
+        "IO": "OBJ",
+        "RA": "ADV",
+        "TA": "ADV",
+        "OA": "ADV"
+    }
+
     assert_key("corpus", form, IS_IDENT, True)
     #assert_key("lemgram", form, r"", True)
     assert_key("min", form, IS_NUMBER, False)
@@ -611,7 +624,8 @@ def relations(form):
     lemgram = form.get("lemgram")
     word = form.get("word")
     minfreq = form.get("min")
-    maxresults = form.get("max") or 15
+    sortby = form.get("sortby", "mi")
+    maxresults = form.get("max", 15)
     maxresults = int(maxresults)
     minfreqsql = " AND freq >= %s" % minfreq if minfreq else ""
     
@@ -627,24 +641,44 @@ def relations(form):
     conn = MySQLdb.connect(host = "localhost",
                            user = "",
                            passwd = "",
-                           db = "")
+                           db = "",
+                           use_unicode = True)
     cursor = conn.cursor()
     
     if lemgram:
+        lemgram = lemgram.decode("utf-8")
         headdep = "dep" if "..av." in lemgram else "head"
-        cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (""" + headdep + """ = %s)""" + minfreqsql, (lemgram,))
+        cursor.execute(u"""SELECT * FROM """ + DBNAME + """ WHERE (""" + corporasql + u""") AND (""" + headdep + u""" = %s)""" + minfreqsql, (lemgram,))
     elif word:
-        cursor.execute("""SELECT * FROM relations WHERE (""" + corporasql + """) AND (head = %s OR head = %s OR dep = %s)""" + minfreqsql, (word + "_VB", word + "_NN", word + "_JJ"))
+        word = word.decode("utf-8")
+        cursor.execute(u"""SELECT * FROM """ + DBNAME + """ WHERE (""" + corporasql + u""") AND (head = %s OR head = %s OR dep = %s)""" + minfreqsql, (word + u"_VB", word + u"_NN", word + u"_JJ"))
     
     rels = {}
     counter = {}
+    freq_rel = {}
+    freq_head_rel = {}
+    freq_rel_dep = {}
     
     for row in cursor:
-        rels.setdefault((row[0], row[1], row[2], row[3]), {"freq": 0, "corpus": []})
-        rels[(row[0], row[1], row[2], row[3])]["freq"] += row[4]
-        rels[(row[0], row[1], row[2], row[3])]["corpus"].append(row[5])
+        if (lemgram and row[0] <> lemgram) or (word and not row[0].startswith(word)):
+            continue
+        rel = rel_grouping.get(row[1], row[1])
+        rels.setdefault((row[0], rel, row[2], row[3]), {"freq": 0, "corpus": set()})
+        rels[(row[0], rel, row[2], row[3])]["freq"] += row[4]
+        rels[(row[0], rel, row[2], row[3])]["corpus"].add(row[8])
+        
+        freq_rel.setdefault(rel, {})[(row[8], row[1])] = row[5]
+        freq_head_rel.setdefault((row[0], rel), {})[(row[8], row[1])] = row[6]
+        freq_rel_dep.setdefault((rel, row[2], row[3]), {})[(row[8], row[1])] = row[7]
     
-    sortedrels = sorted(rels.items(), key=lambda x: (x[0][1], x[1]["freq"]), reverse=True)
+    # Calculate MI
+    for rel in rels:
+        f_rel = sum(freq_rel[rel[1]].values())
+        f_head_rel = sum(freq_head_rel[(rel[0], rel[1])].values())
+        f_rel_dep = sum(freq_rel_dep[(rel[1], rel[2], rel[3])].values())
+        rels[rel]["mi"] = rels[rel]["freq"] * math.log((f_rel * rels[rel]["freq"]) / (f_head_rel * f_rel_dep * 1.0), 2)
+    
+    sortedrels = sorted(rels.items(), key=lambda x: (x[0][1], x[1][sortby]), reverse=True)
     
     for rel in sortedrels:
         counter.setdefault(rel[0][1], 0)
@@ -657,7 +691,8 @@ def relations(form):
                   "dep": rel[0][2],
                   "depextra": rel[0][3],
                   "freq": rel[1]["freq"],
-                  "corpus": rel[1]["corpus"]
+                  "mi": rel[1]["mi"],
+                  "corpus": list(rel[1]["corpus"])
                 }
             result.setdefault("relations", []).append(r)
     
@@ -682,12 +717,12 @@ def relations_sentences(form):
         corpora = corpora.split(QUERY_DELIM)
     corpora = set(corpora)
     
-    head = form.get("head")
-    dep = form.get("dep")
-    depextra = form.get("depextra") or ""
-    rel = form.get("rel")
+    head = form.get("head").decode("utf-8")
+    dep = form.get("dep").decode("utf-8")
+    depextra = form.get("depextra", "").decode("utf-8")
+    rel = form.get("rel").decode("utf-8")
     start = int(form.get("start", "0"))
-    end = int(form.get("end", "199"))
+    end = int(form.get("end", "99"))
     
     corporasql = []
     for corpus in corpora:
@@ -701,7 +736,7 @@ def relations_sentences(form):
                            passwd = "",
                            db = "")
     cursor = conn.cursor()
-    cursor.execute("""SELECT sentences, corpus FROM relations WHERE (""" + corporasql + """) AND head = %s AND dep = %s AND depextra = %s AND rel = %s""", (head, dep, depextra, rel))
+    cursor.execute("""SELECT sentences, corpus FROM """ + DBNAME + """ WHERE (""" + corporasql + """) AND head = %s AND dep = %s AND depextra = %s AND rel = %s""", (head, dep, depextra, rel))
     
     querytime = time.time() - querystarttime
    
@@ -730,7 +765,7 @@ def relations_sentences(form):
     
     for corp, sids in corpora_dict.items():
         cqp = u'<sentence_id="%s"> []* </sentence_id> within sentence' % "|".join(set(sids.keys()))
-        result_temp = query({"cqp": cqp, "corpus": corp, "start": "0", "end": str(end - start), "show_struct": "sentence_id", "defaultcontext": "1 sentence"})
+        result_temp = query({"cqp": cqp, "corpus": corp, "start": str(start), "end": str(end), "show_struct": "sentence_id", "defaultcontext": "1 sentence"})
 
         for i in range(len(result_temp["kwic"]) - 1, -1, -1):
             s = result_temp["kwic"][i]
@@ -795,7 +830,7 @@ def runCQP(command, form, executable=CQP_EXECUTABLE, registry=CWB_REGISTRY, attr
         # keep only the first CQP error (the rest are consequences):
         error = re.sub(r"^CQP Error: *", r"", error)
         error = re.sub(r" *(CQP Error:).*$", r"", error)
-        if not (attr_ignore and "No such attribute:" in error):
+        if not (attr_ignore and "No such attribute:" in error) and not "is not defined for corpus" in error:
             raise CQPError(error)
     for line in reply.decode(encoding).splitlines():
         if line:
