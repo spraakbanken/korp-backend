@@ -660,7 +660,8 @@ def relations(form):
     freq_rel_dep = {}
     
     for row in cursor:
-        if (lemgram and row[0] <> lemgram) or (word and not row[0].startswith(word)):
+        val = row[2] if "..av." in lemgram else row[0]
+        if (lemgram and val <> lemgram) or (word and not val.startswith(word)):
             continue
         rel = rel_grouping.get(row[1], row[1])
         rels.setdefault((row[0], rel, row[2], row[3]), {"freq": 0, "corpus": set()})
@@ -723,6 +724,11 @@ def relations_sentences(form):
     rel = form.get("rel").decode("utf-8")
     start = int(form.get("start", "0"))
     end = int(form.get("end", "99"))
+    shown = form.get("show", "word")
+    shown_structs = form.get("show_struct", [])
+    if isinstance(shown_structs, basestring):
+        shown_structs = shown_structs.split(QUERY_DELIM)
+    shown_structs = set(shown_structs)
     
     corporasql = []
     for corpus in corpora:
@@ -744,8 +750,12 @@ def relations_sentences(form):
     corpora_dict = {}
     sids = {}
     used_corpora = set()
+    total_hits = 0
+    corpus_hits = {}
     for row in cursor:
         ids = [s.split(":") for s in row[0].split(";")]
+        total_hits += len(ids)
+        corpus_hits[row[1]] = len(ids)
         for s in ids:
             if counter >= start and counter <= end:
                 sids.setdefault(s[0], []).append(s[1:3])
@@ -761,30 +771,40 @@ def relations_sentences(form):
         return {"hits": 0}
     
     cqpstarttime = time.time()
-    result = {"hits": 0, "corpus_hits": {}}
+    result = {}
     
     for corp, sids in corpora_dict.items():
         cqp = u'<sentence_id="%s"> []* </sentence_id> within sentence' % "|".join(set(sids.keys()))
-        result_temp = query({"cqp": cqp, "corpus": corp, "start": "0", "end": str(end - start), "show_struct": "sentence_id", "defaultcontext": "1 sentence"})
+        q = {"cqp": cqp,
+             "corpus": corp,
+             "start": "0",
+             "end": str(end - start),
+             "show_struct": ["sentence_id"] + list(shown_structs),
+             "defaultcontext": "1 sentence"}
+        if shown:
+            q["show"] = shown
+        result_temp = query(q)
 
+        # Loop backwards since we might be adding new items
         for i in range(len(result_temp["kwic"]) - 1, -1, -1):
             s = result_temp["kwic"][i]
             sid = s["structs"]["sentence_id"]
             r = sids[sid][0]
             s["match"]["start"] = min(map(int, r)) - 1
-            s["match"]["end"] = max(map(int, r)) - 1
+            s["match"]["end"] = max(map(int, r))
             
+            # If the same relation appears more than once in the same sentence,
+            # append compies of the sentence as separate results
             for r in sids[sid][1:]:
                 s2 = deepcopy(s)
                 s2["match"]["start"] = min(map(int, r)) - 1
-                s2["match"]["end"] = max(map(int, r)) - 1
+                s2["match"]["end"] = max(map(int, r))
                 result_temp["kwic"].insert(i + 1, s2)
-                result_temp["hits"] += 1
     
         result.setdefault("kwic", []).extend(result_temp["kwic"])
-        result["hits"] += result_temp["hits"]
-        result["corpus_hits"][corp] = result_temp["hits"]
 
+    result["hits"] = total_hits
+    result["corpus_hits"] = corpus_hits
     result["querytime"] = querytime
     result["cqptime"] = time.time() - cqpstarttime
     
@@ -869,6 +889,7 @@ def assert_key(key, form, regexp, required=False):
 def print_header():
     """Prints the JSON header."""
     print "Content-Type: application/json"
+    print "Access-Control-Allow-Origin: *"
     print
 
 def print_object(obj, form):
