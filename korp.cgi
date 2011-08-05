@@ -643,6 +643,13 @@ def relations(form):
                            db = DBNAME,
                            use_unicode = True)
     cursor = conn.cursor()
+    
+    # Get available tables
+    cursor.execute("SHOW TABLES LIKE '" + DBTABLE + "_%';")
+    tables = set(x[0] for x in cursor)
+    # Filter out corpora which doesn't exist in database
+    corpora = filter(lambda x: DBTABLE + "_" + x.upper() in tables, corpora)
+    
     columns = "head, rel, dep, depextra, freq, freq_rel, freq_head_rel, freq_rel_dep"    
     selects = []
     if lemgram:
@@ -651,14 +658,16 @@ def relations(form):
         headdep = "dep" if "..av." in lemgram else "head"
         
         for corpus in corpora:
-            selects.append((u"(SELECT " + columns + u", %s as corpus FROM " % conn.string_literal(corpus.upper())) + DBTABLE + "_" + corpus.upper() + u" WHERE " + headdep + (u" = %s" % lemgram_sql) + minfreqsql + u")")
+            corpus_table = DBTABLE + "_" + corpus.upper()
+            selects.append(u"(SELECT " + columns + u", " + conn.string_literal(corpus.upper()) + u" as corpus FROM " + corpus_table + u" WHERE " + headdep + u" = " + lemgram_sql + minfreqsql + u")")
     elif word:
         word_vb_sql = conn.escape(word + "_VB").decode("utf-8")
         word_nn_sql = conn.escape(word + "_NN").decode("utf-8")
         word_jj_sql = conn.escape(word + "_JJ").decode("utf-8")
         
         for corpus in corpora:
-            selects.append((u"(SELECT " + columns + u", %s as corpus FROM " % conn.string_literal(corpus.upper())) + DBTABLE + "_" + corpus.upper() + (u" WHERE (head = %s OR head = %s OR dep = %s)" % (word_vb_sql, word_nn_sql, word_jj_sql)) + minfreqsql + ")")
+            corpus_table = DBTABLE + "_" + corpus.upper()
+            selects.append(u"(SELECT " + columns + u", " + conn.string_literal(corpus.upper()) + u" as corpus FROM " + corpus_table + (u" WHERE (head = %s OR head = %s OR dep = %s)" % (word_vb_sql, word_nn_sql, word_jj_sql)) + minfreqsql + ")")
     
     sql = " UNION ALL ".join(selects)
     cursor.execute(sql)
