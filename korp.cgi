@@ -1,5 +1,5 @@
 #!/usr/bin/python
-
+# -*- coding: utf-8 -*-
 """
 korp.cgi is a CGI interface for querying the corpora that are available on the server.
 
@@ -34,8 +34,9 @@ CQP_ENCODING = "UTF-8"
 # The maximum number of search results that can be returned per query
 MAX_KWIC_ROWS = 1000
 
-# The name of the MySQL database
+# The name of the MySQL database and table prefix
 DBNAME = ""
+DBTABLE = "relations"
 
 ######################################################################
 # These variables should probably not need to be changed
@@ -429,6 +430,9 @@ def query(form):
                 if words != ["(no", "alignment", "found)"]:
                     kwic[-1].setdefault("aligned", {})[aligned] = tokens
             else:
+                if not "start" in match:
+                    # CQP bug: CQP can't handle too long sentences, skipping
+                    continue
                 # Otherwise we add a new kwic row
                 kwic_row = {"corpus": corpus, "match": match}
                 if linestructs:
@@ -631,28 +635,34 @@ def relations(form):
     
     assert lemgram or word, "lemgram or word missing."
     
-    corporasql = []
-    for corpus in corpora:
-        corporasql.append("corpus = '%s'" % corpus)
-    corporasql = " OR ".join(corporasql)
-    
     result = {}
 
     conn = MySQLdb.connect(host = "localhost",
                            user = "",
                            passwd = "",
-                           db = "",
+                           db = DBNAME,
                            use_unicode = True)
     cursor = conn.cursor()
-    
+    columns = "head, rel, dep, depextra, freq, freq_rel, freq_head_rel, freq_rel_dep"    
+    selects = []
     if lemgram:
+        lemgram_sql = conn.escape(lemgram).decode("utf-8")
         lemgram = lemgram.decode("utf-8")
         headdep = "dep" if "..av." in lemgram else "head"
-        cursor.execute(u"""SELECT * FROM """ + DBNAME + """ WHERE (""" + corporasql + u""") AND (""" + headdep + u""" = %s)""" + minfreqsql, (lemgram,))
+        
+        for corpus in corpora:
+            selects.append((u"(SELECT " + columns + u", %s as corpus FROM " % conn.string_literal(corpus.upper())) + DBTABLE + "_" + corpus.upper() + u" WHERE " + headdep + (u" = %s" % lemgram_sql) + minfreqsql + u")")
     elif word:
-        word = word.decode("utf-8")
-        cursor.execute(u"""SELECT * FROM """ + DBNAME + """ WHERE (""" + corporasql + u""") AND (head = %s OR head = %s OR dep = %s)""" + minfreqsql, (word + u"_VB", word + u"_NN", word + u"_JJ"))
+        word_vb_sql = conn.escape(word + "_VB").decode("utf-8")
+        word_nn_sql = conn.escape(word + "_NN").decode("utf-8")
+        word_jj_sql = conn.escape(word + "_JJ").decode("utf-8")
+        
+        for corpus in corpora:
+            selects.append((u"(SELECT " + columns + u", %s as corpus FROM " % conn.string_literal(corpus.upper())) + DBTABLE + "_" + corpus.upper() + (u" WHERE (head = %s OR head = %s OR dep = %s)" % (word_vb_sql, word_nn_sql, word_jj_sql)) + minfreqsql + ")")
     
+    sql = " UNION ALL ".join(selects)
+    cursor.execute(sql)
+            
     rels = {}
     counter = {}
     freq_rel = {}
@@ -718,10 +728,10 @@ def relations_sentences(form):
         corpora = corpora.split(QUERY_DELIM)
     corpora = set(corpora)
     
-    head = form.get("head").decode("utf-8")
-    dep = form.get("dep").decode("utf-8")
-    depextra = form.get("depextra", "").decode("utf-8")
-    rel = form.get("rel").decode("utf-8")
+    head = form.get("head")
+    dep = form.get("dep")
+    depextra = form.get("depextra", "")
+    rel = form.get("rel")
     start = int(form.get("start", "0"))
     end = int(form.get("end", "99"))
     shown = form.get("show", "word")
@@ -730,11 +740,6 @@ def relations_sentences(form):
         shown_structs = shown_structs.split(QUERY_DELIM)
     shown_structs = set(shown_structs)
     
-    corporasql = []
-    for corpus in corpora:
-        corporasql.append("corpus = '%s'" % corpus)
-    corporasql = " OR ".join(corporasql)
-    
     querystarttime = time.time()
 
     conn = MySQLdb.connect(host = "localhost",
@@ -742,7 +747,17 @@ def relations_sentences(form):
                            passwd = "",
                            db = "")
     cursor = conn.cursor()
-    cursor.execute("""SELECT sentences, corpus FROM """ + DBNAME + """ WHERE (""" + corporasql + """) AND head = %s AND dep = %s AND depextra = %s AND rel = %s""", (head, dep, depextra, rel))
+    selects = []
+    
+    head_sql = conn.escape(head).decode("utf-8")
+    dep_sql = conn.escape(dep).decode("utf-8")
+    depextra_sql = conn.escape(depextra).decode("utf-8")
+    rel_sql = conn.escape(rel).decode("utf-8")
+    
+    for corpus in corpora:
+        selects.append(u"""(SELECT sentences, %s as corpus FROM """ % conn.string_literal(corpus.upper()) + DBTABLE + u"_" + corpus.upper() + (u""" WHERE head = %s AND dep = %s AND depextra = %s AND rel = %s""" % (head_sql, dep_sql, depextra_sql, rel_sql)) + u")")
+    sql = u" UNION ALL ".join(selects)
+    cursor.execute(sql)
     
     querytime = time.time() - querystarttime
    
