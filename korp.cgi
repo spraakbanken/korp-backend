@@ -7,8 +7,8 @@ Currently it acts as a wrapper for the CQP querying language of Corpus Workbench
 """
 
 from subprocess import Popen, PIPE
-#from cStringIO import StringIO
 from collections import defaultdict
+from concurrent import futures
 
 import random
 import time
@@ -33,6 +33,9 @@ CQP_ENCODING = "UTF-8"
 
 # The maximum number of search results that can be returned per query
 MAX_KWIC_ROWS = 1000
+
+# Number of threads to use during parallel processing
+PARALLEL_THREADS = 6
 
 # The name of the MySQL database and table prefix
 DBNAME = ""
@@ -134,32 +137,37 @@ def corpus_info(form):
     corpora = form.get("corpus")
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
-    corpora = set(corpora)
+    corpora = sorted(set(corpora))
     
     result = {"corpora": {}}
     total_size = 0
+    
+    cmd = []
 
     for corpus in corpora:
-        cmd = ["%s;" % corpus]
+        cmd += ["%s;" % corpus]
         cmd += show_attributes()
-        cmd += ["info;"]
+        cmd += ["info; .EOL.;"]
 
-        # call the CQP binary
-        lines = runCQP(cmd, form)
+    cmd += ["exit;"]
 
-        # skip CQP version 
-        lines.next()
+    # call the CQP binary
+    lines = runCQP(cmd, form)
+
+    # skip CQP version 
+    lines.next()
     
+    for corpus in corpora:
         # read attributes
         attrs = read_attributes(lines)
 
         # corpus information
-        raw_info = list(lines)
         info = {}
         
-        for infoline in raw_info:
-            if ":" in infoline and not infoline.endswith(":"):
-                infokey, infoval = (x.strip() for x in infoline.split(":", 1))
+        for line in lines:
+            if line == END_OF_LINE: break
+            if ":" in line and not line.endswith(":"):
+                infokey, infoval = (x.strip() for x in line.split(":", 1))
                 info[infokey] = infoval
                 if infokey == "Size":
                     total_size += int(infoval)
@@ -171,6 +179,181 @@ def corpus_info(form):
     if "debug" in form:
         result["DEBUG"] = {"cmd": cmd}
     return result
+
+
+def query_corpus(form, corpus, cqp, shown, shown_structs, context, defaultcontext, sortcmd, start, end, no_results=False):
+
+    cmd = ["%s;" % corpus]
+    # This prints the attributes and their relative order:
+    cmd += show_attributes()
+    cmd += make_query(cqp)
+    # This prints the size of the query (i.e., the number of results):
+    cmd += ["size Last;"]
+    cmd += ["show +%s;" % " +".join(shown)]
+    setcontext = context[corpus] if corpus in context else defaultcontext
+    cmd += ["set Context %s;" % setcontext]
+    cmd += ["set LeftKWICDelim '%s '; set RightKWICDelim ' %s';" % (LEFT_DELIM, RIGHT_DELIM)]
+    if shown_structs:
+        cmd += ["set PrintStructures '%s';" % ", ".join(shown_structs)]
+    # This prints the result rows:
+    if not no_results:
+        cmd += sortcmd
+        cmd += ["cat Last %s %s;" % (start, end)]
+    cmd += ["exit;"]
+    ######################################################################
+    # Then we call the CQP binary, and read the results
+
+    lines = runCQP(cmd, form, attr_ignore=True)
+
+    # Skip the CQP version
+    lines.next()
+    
+    # Read the attributes and their relative order 
+    attrs = read_attributes(lines)
+    
+    # Read the size of the query, i.e., the number of results
+    nr_hits = int(lines.next())
+    
+    return (lines, nr_hits, attrs)
+
+
+def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
+    ######################################################################
+    # Now we create the concordance (kwic = keywords in context)
+    # from the remaining lines
+
+    # Filter out unavailable attributes
+    p_attrs = [attr for attr in attrs["p"] if attr in shown]
+    nr_splits = len(p_attrs) - 1
+    s_attrs = set(attr for attr in attrs["s"] if attr in shown)
+    ls_attrs = set(attr for attr in attrs["s"] if attr in shown_structs)
+    a_attrs = set(attr for attr in attrs["a"] if attr in shown)
+
+    kwic = []
+    for line in lines:
+        linestructs = {}
+        match = {}
+
+        header, line = line.split(":", 1)
+        if header[:3] == "-->":
+            # For aligned corpora, every other line is the aligned result
+            aligned = header[3:]
+        else:
+            # This is the result row for the query corpus
+            aligned = None
+            match["position"] = int(header)
+
+        # Handle PrintStructures
+        if ls_attrs and not aligned:
+            lineattr, line = line.rsplit(":  ", 1)
+            lineattrs = lineattr[2:-1].split("><")
+            
+            for s in lineattrs:
+                if s in ls_attrs:
+                    s_key = s
+                    s_val = None
+                else:
+                    s_key, s_val = s.split(" ", 1)
+
+                linestructs[s_key] = s_val
+
+        words = line.split()
+        tokens = []
+        n = 0
+        structs = defaultdict(list)
+        struct = None
+
+        for word in words:
+        
+            if struct:
+                # Structural attrs can be split in the middle (<s_n 123>),
+                # so we need to finish the structure here
+                struct_id, word = word.split(">", 1)
+                structs["open"].append(struct + " " + struct_id)
+                struct = None
+
+            # We use special delimiters to see when we enter and leave the match region
+            if word == LEFT_DELIM:
+                match["start"] = n
+                continue
+            elif word == RIGHT_DELIM:
+                match["end"] = n
+                continue
+
+            # We read all structural attributes that are opening (from the left)
+            while word[0] == "<":
+                if word[1:] in s_attrs:
+                    # If we stopped in the middle of a struct (<s_n 123>),
+                    # we need to continue with the next word
+                    struct = word[1:]
+                    break
+                elif ">" in word and word[1:word.find(">")] in s_attrs:
+                    # This is for s-attrs that have no arguments (<s>)
+                    struct, word = word[1:].split(">", 1)
+                    structs["open"].append(struct)
+                    struct = None
+                else:
+                    # What we've found is not a structural attribute
+                    break
+
+            if struct:
+                # If we stopped in the middle of a struct (<s_n 123>),
+                # we need to continue with the next word
+                continue
+
+            # Now we read all s-attrs that are closing (from the right)
+            while word[-1] == ">" and "</" in word:
+                word, struct = word[:-1].rsplit("</", 1)
+                structs["close"].insert(0, struct)
+                struct = None
+
+            # What's left is the word with its p-attrs
+            values = word.rsplit("/", nr_splits)
+            token = dict((attr, translate_undef(val)) for (attr, val) in zip(p_attrs, values))
+            if structs:
+                token["structs"] = structs
+                structs = defaultdict(list)
+            tokens.append(token)
+
+            n += 1
+
+        if aligned:
+            # If this was an aligned row, we add it to the previous kwic row
+            if words != ["(no", "alignment", "found)"]:
+                kwic[-1].setdefault("aligned", {})[aligned] = tokens
+        else:
+            if not "start" in match:
+                # CQP bug: CQP can't handle too long sentences, skipping
+                continue
+            # Otherwise we add a new kwic row
+            kwic_row = {"corpus": corpus, "match": match}
+            if linestructs:
+                kwic_row["structs"] = linestructs
+            kwic_row["tokens"] = tokens
+            kwic.append(kwic_row)
+
+    return kwic
+
+
+def query_and_parse(form, corpus, cqp, shown, shown_structs, context, defaultcontext, sortcmd, start, end, no_results=False):
+    lines, nr_hits, attrs = query_corpus(form, corpus, cqp, shown, shown_structs, context, defaultcontext, sortcmd, start, end, no_results)
+    kwic = query_parse_lines(corpus, lines, attrs, shown, shown_structs)
+    return kwic, nr_hits
+    
+
+def which_hits(corpora, stats, start, end):
+    corpus_hits = {}
+    for corpus in corpora:
+        hits = stats[corpus]
+        if hits > start:
+            corpus_hits[corpus] = (start, min(hits - 1, end))
+        
+        start -= hits
+        end -= hits
+        if start < 0: start = 0
+        if end < 0: break
+    
+    return corpus_hits
 
 
 def query(form):
@@ -203,6 +386,7 @@ def query(form):
     assert_key("show_struct", form, IS_IDENT)
     assert_key("within", form, IS_IDENT)
     assert_key("cut", form, IS_NUMBER)
+    assert_key("sort", form, IS_IDENT)
 
     ############################################################################
     # First we read all CGI parameters and translate them to CQP
@@ -210,7 +394,7 @@ def query(form):
     corpora = form.get("corpus")
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
-    corpora = set(corpora)
+    corpora = sorted(set(corpora))
 
     shown = form.get("show", [])
     if isinstance(shown, basestring):
@@ -242,6 +426,16 @@ def query(form):
     if "cut" in form:
         cqp += " cut %s" % form.get("cut")
 
+    sort = form.get("sort")
+    if sort == "left":
+        sortcmd = ["sort by word on match[-1] .. match[-3];"]
+    elif sort == "keyword":
+        sortcmd = ["sort by word;"]
+    elif sort == "right":
+        sortcmd = ["sort by word on matchend[1] .. matchend[3];"]
+    else:
+        sortcmd = []
+
     total_hits = 0
     statistics = {}
     result = {}
@@ -258,204 +452,123 @@ def query(form):
             for pair in stats_temp.split(";"):
                 c, h = pair.split(":")
                 saved_statistics[c] = int(h)
-    
-    ############################################################################
-    # Iterate through the corpora to find from which we will fetch our results
-    
+        
     start_local = start
     end_local = end
     
-    for corpus in corpora:
-        skip = (end_local < 0)
+    ############################################################################
+    # If saved_statistics is available, calculate which corpora need to be queried
+    # and then query them in parallel.
+    # If saved_statistics is NOT available, query the corpora in serial until we
+    # have the needed rows, and then query the remaining corpora in parallel to get
+    # number of hits.
+    
+    if saved_statistics:
+        statistics = saved_statistics
+        total_hits = sum(saved_statistics.values())
+        corpora_hits = which_hits(corpora, saved_statistics, start, end)
+        corpora_kwics = {}
         
-        if not saved_statistics or (saved_statistics and saved_statistics[corpus] > start_local and not skip):
-            
-            cmd = ["%s;" % corpus]
-            # This prints the attributes and their relative order:
-            cmd += show_attributes()
-            cmd += make_query(cqp)
-            # This prints the size of the query (i.e., the number of results):
-            cmd += ["size Last;"]
-            cmd += ["show +%s;" % " +".join(shown)]
-            setcontext = context[corpus] if corpus in context else defaultcontext
-            cmd += ["set Context %s;" % setcontext]
-            cmd += ["set LeftKWICDelim '%s '; set RightKWICDelim ' %s';" % (LEFT_DELIM, RIGHT_DELIM)]
-            if shown_structs:
-                cmd += ["set PrintStructures '%s';" % ", ".join(shown_structs)]
-            # This prints the result rows:
-            if not skip:
-                cmd += ["cat Last %s %s;" % (start_local, end_local)]
+        # If only one corpus, it is faster to not use threads
+        if len(corpora_hits) == 1:
+            corpus, hits = corpora_hits.items()[0]
+            kwic, _ = query_and_parse(form, corpus, cqp, shown, shown_structs, context, defaultcontext, sortcmd, hits[0], hits[1])
 
-            ######################################################################
-            # Then we call the CQP binary, and read the results
-
-            lines = runCQP(cmd, form, attr_ignore=True)
-
-            # Skip the CQP version
-            lines.next()
-            
-            # Read the attributes and their relative order 
-            attrs = read_attributes(lines)
-            
-            # Read the size of the query, i.e., the number of results
-            nr_hits = int(lines.next())
-
-            if len(corpora) == 1:
-                shown_local = shown
-                shown_structs_local = shown_structs
+            if result.has_key("kwic"):
+                result["kwic"].extend(kwic)
             else:
-                # Filter out unavailable attributes
-                all_attrs = attrs["p"] + attrs["s"] + attrs["a"]
-                shown_local = set(attr for attr in shown if attr in all_attrs)
-                shown_structs_local = set(attr for attr in shown_structs if attr in all_attrs)
-                
+                result["kwic"] = kwic
         else:
-            nr_hits = saved_statistics[corpus]
-            skip = True
-        
-        statistics[corpus] = nr_hits
-        total_hits += nr_hits
-        
-        # Calculate which hits from next corpus we need, if any
-        start_local = start_local - nr_hits
-        end_local = end_local - nr_hits
-        if start_local < 0:
-            start_local = 0
-
-        if skip:
-            continue
-
-        p_attrs = [attr for attr in attrs["p"] if attr in shown_local]
-        nr_splits = len(p_attrs) - 1
-        s_attrs = set(attr for attr in attrs["s"] if attr in shown_local)
-        ls_attrs = set(attr for attr in attrs["s"] if attr in shown_structs_local)
-        a_attrs = set(attr for attr in attrs["a"] if attr in shown_local)
-
-        ######################################################################
-        # Now we create the concordance (kwic = keywords in context)
-        # from the remaining lines
-
-        kwic = []
-        for line in lines:
-            linestructs = {}
-            match = {}
-
-            header, line = line.split(":", 1)
-            if header[:3] == "-->":
-                # For aligned corpora, every other line is the aligned result
-                aligned = header[3:]
-            else:
-                # This is the result row for the query corpus
-                aligned = None
-                match["position"] = int(header)
-
-            # Handle PrintStructures
-            if shown_structs_local.intersection(ls_attrs) and not aligned:
-                lineattr, line = line.split(":  ", 1)
-                lineattrs = lineattr.split("<")[1:]
+            with futures.ThreadPoolExecutor(max_workers=PARALLEL_THREADS) as executor:
+                future_query = dict((executor.submit(query_and_parse, form, corpus, cqp, shown, shown_structs, context, defaultcontext, sortcmd, corpora_hits[corpus][0], corpora_hits[corpus][1]), corpus) for corpus in corpora_hits)
                 
-                for s in lineattrs:
-                    s = s[:-1]
-                    
-                    if s in ls_attrs:
-                        s_key = s
-                        s_val = None
+                for future in futures.as_completed(future_query):
+                    corpus = future_query[future]
+                    if future.exception() is not None:
+                        print '\nERROR: %r generated an exception: %s\n' % (corpus, future.exception())
                     else:
-                        s_key, s_val = s.split(" ", 1)
-
-                    linestructs[s_key] = s_val
-
-            words = line.split()
-            tokens = []
-            n = 0
-            structs = defaultdict(list)
-            struct = None
-
-            for word in words:
+                        kwic, _ = future.result()
+                        corpora_kwics[corpus] = kwic
+                
+                for corpus in corpora:
+                    if corpus in corpora_hits.keys():
+                        if result.has_key("kwic"):
+                            result["kwic"].extend(corpora_kwics[corpus])
+                        else:
+                            result["kwic"] = corpora_kwics[corpus]
+    else:
+        rest_corpora = []
+        # Serial until we've got all the requested rows
+        for i, corpus in enumerate(corpora):
+            if end_local < 0:
+                rest_corpora = corpora[i:]
+                break
+            kwic, nr_hits = query_and_parse(form, corpus, cqp, shown, shown_structs, context, defaultcontext, sortcmd, start_local, end_local)
             
-                if struct:
-                    # Structural attrs can be split in the middle (<s_n 123>),
-                    # so we need to finish the structure here
-                    struct_id, word = word.split(">", 1)
-                    structs["open"].append(struct + " " + struct_id)
-                    struct = None
+            statistics[corpus] = nr_hits
+            total_hits += nr_hits
+            
+            # Calculate which hits from next corpus we need, if any
+            start_local = start_local - nr_hits
+            end_local = end_local - nr_hits
+            if start_local < 0: start_local = 0
 
-                # We use special delimiters to see when we enter and leave the match region
-                if word == LEFT_DELIM:
-                    match["start"] = n
-                    continue
-                elif word == RIGHT_DELIM:
-                    match["end"] = n
-                    continue
-
-                # We read all structural attributes that are opening (from the left)
-                while word[0] == "<":
-                    if word[1:] in s_attrs:
-                        # If we stopped in the middle of a struct (<s_n 123>),
-                        # wee need to continue with the next word
-                        struct = word[1:]
-                        break
-                    elif ">" in word and word[1:word.find(">")] in s_attrs:
-                        # This is for s-attrs that have no arguments (<s>)
-                        struct, word = word[1:].split(">", 1)
-                        structs["open"].append(struct)
-                        struct = None
-                    else:
-                        # What we've found is not a structural attribute
-                        break
-
-                if struct:
-                    # If we stopped in the middle of a struct (<s_n 123>),
-                    # wee need to continue with the next word
-                    continue
-
-                # Now we read all s-attrs that are closing (from the right)
-                while word[-1] == ">" and "</" in word:
-                    word, struct = word[:-1].rsplit("</", 1)
-                    structs["close"].insert(0, struct)
-                    struct = None
-
-                # What's left is the word with its p-attrs
-                values = word.rsplit("/", nr_splits)
-                token = dict((attr, translate_undef(val)) for (attr, val) in zip(p_attrs, values))
-                if structs:
-                    token["structs"] = structs
-                    structs = defaultdict(list)
-                tokens.append(token)
-
-                n += 1
-
-            if aligned:
-                # If this was an aligned row, we add it to the previous kwic row
-                if words != ["(no", "alignment", "found)"]:
-                    kwic[-1].setdefault("aligned", {})[aligned] = tokens
+            if result.has_key("kwic"):
+                result["kwic"].extend(kwic)
             else:
-                if not "start" in match:
-                    # CQP bug: CQP can't handle too long sentences, skipping
-                    continue
-                # Otherwise we add a new kwic row
-                kwic_row = {"corpus": corpus, "match": match}
-                if linestructs:
-                    kwic_row["structs"] = linestructs
-                kwic_row["tokens"] = tokens
-                kwic.append(kwic_row)
-
-        result["hits"] = nr_hits
-        if result.has_key("kwic"):
-            result["kwic"].extend(kwic)
-        else:
-            result["kwic"] = kwic
+                result["kwic"] = kwic
         
-        if "debug" in form:
-            result["DEBUG"] = {"cqp": cqp, "cmd": cmd}
+        if rest_corpora:
+            with futures.ThreadPoolExecutor(max_workers=PARALLEL_THREADS) as executor:
+                future_query = dict((executor.submit(query_corpus, form, corpus, cqp, shown, shown_structs, context, defaultcontext, sortcmd, 0, 0, True), corpus) for corpus in rest_corpora)
+                
+                for future in futures.as_completed(future_query):
+                    corpus = future_query[future]
+                    if future.exception() is not None:
+                        print '\nERROR: %r generated an exception: %s\n' % (corpus, future.exception())
+                    else:
+                        _, nr_hits, _ = future.result()
+                        statistics[corpus] = nr_hits
+                        total_hits += nr_hits
+
+    if "debug" in form:
+        result["DEBUG"] = {"cqp": cqp, "cmd": cmd}
 
     result["hits"] = total_hits
     result["corpus_hits"] = statistics
+    result["corpus_order"] = corpora
     checksum = str(zlib.crc32(cqp.encode("utf-8") + "".join(sorted(corpora))))
     result["querydata"] = zlib.compress(checksum + ";" + str(total_hits) + ";" + ";".join("%s:%d" % (c, h) for c, h in statistics.iteritems())).encode("base64").replace("+", "-").replace("/", "_")
-    
+
     return result
 
+
+def count_query_worker(corpus, cqp, groupby, form):
+
+    cmd = ["%s;" % corpus]
+    cmd += make_query(cqp)
+    cmd += ["size Last;"]
+    cmd += ["info; .EOL.;"]
+    cmd += ["count Last by %s;" % groupby[0]]
+    cmd += ["exit;"]
+
+    lines = runCQP(cmd, form)
+
+    # skip CQP version
+    lines.next()
+
+    # size of the query result
+    nr_hits = int(lines.next())
+
+    # Get corpus size
+    for line in lines:
+        if line.startswith("Size:"):
+            _, corpus_size = line.split(":")
+            corpus_size = int(corpus_size.strip())
+        elif line == END_OF_LINE:
+            break
+
+    return lines, nr_hits, corpus_size
 
 def count(form):
     """Perform a CQP query and return a count of the given words/attrs.
@@ -463,7 +576,7 @@ def count(form):
     The required parameters are
      - corpus: the CWB corpus
      - cqp: the CQP query string
-     - show: add once for each corpus positional attribute
+     - groupby: add once for each corpus positional attribute
 
     The optional parameters are
      - within: only search for matches within the given s-attribute (e.g., within a sentence)
@@ -473,56 +586,80 @@ def count(form):
     """
     assert_key("cqp", form, r"", True)
     assert_key("corpus", form, IS_IDENT, True)
-    assert_key("show", form, IS_IDENT, True)
+    assert_key("groupby", form, IS_IDENT, True)
     assert_key("cut", form, IS_NUMBER)
-
-    corpus = form.get("corpus")
     
-    shown = form.get("show")
-    if isinstance(shown, basestring):
-        shown = shown.split(QUERY_DELIM)
-    shown = set(shown)
+    case_normalize = False
 
+    corpora = form.get("corpus")
+    if isinstance(corpora, basestring):
+        corpora = corpora.split(QUERY_DELIM)
+    corpora = set(corpora)
+    
+    groupby = form.get("groupby")
+    if isinstance(groupby, basestring):
+        groupby = groupby.split(QUERY_DELIM)
+    groupby = list(set(groupby))
+    
+    start = int(form.get("start", 0))
+    end = int(form.get("end", -1))
+    
     cqp = form.get("cqp").decode("utf-8")
     if "within" in form:
         cqp += " within %s" % form.get("within")
     if "cut" in form:
         cqp += " cut %s" % form.get("cut")
 
+    result = {"corpora": {}}
+    total_stats = {"absolute": defaultdict(int),
+                   "relative": defaultdict(float),
+                   "sums": {"absolute": 0, "relative": 0.0}}
+    total_size = 0
+
     # TODO: we could use cwb-scan-corpus for counting:
     #   cwb-scan-corpus -q SUC2 '?word=/^en$/c' 'pos' 'pos+1' | sort -n -r
     # it's efficient, but I think more limited
 
-    if False: # if len(shown) == 1:
-        # If we only want to show one attribute, we can use CQP's internal statistics
-        # (but it seems to be slower anyway, so we skip that)
-        # TODO: probably it's faster for large corpora, we should perhaps test that
-        cmd = ["%s;" % corpus]
-        cmd += make_query(cqp)
-        cmd += ["size Last;"]
-        cmd += ["count Last by %s;" % shown[0]]
+    # If we only want to group by one attribute, we can use CQP's internal statistics
+    if len(groupby) == 1:
+        with futures.ThreadPoolExecutor(max_workers=PARALLEL_THREADS) as executor:
+            future_query = dict((executor.submit(count_query_worker, corpus, cqp, groupby, form), corpus) for corpus in corpora)
+            
+            for future in futures.as_completed(future_query):
+                corpus = future_query[future]
+                if future.exception() is not None:
+                    print '\nERROR: %r generated an exception: %s\n' % (corpus, future.exception())
+                else:
+                    lines, nr_hits, corpus_size = future.result()
 
-        lines = runCQP(cmd, form)
-
-        # skip CQP version
-        lines.next()
-
-        # size of the query result
-        nr_hits = int(lines.next())
-
-        counts = []
-        for line in lines:
-            count, _pos, ngram = line.split(None, 2)
-            counts.append([count, ngram.split()])
-
+                    total_size += corpus_size
+                    corpus_stats = {"absolute": defaultdict(int),
+                                    "relative": defaultdict(float),
+                                    "sums": {"absolute": 0, "relative": 0.0}}
+                    
+                    for i, line in enumerate(lines):
+                        count, _pos, ngram = line.split(None, 2)
+                        if case_normalize:
+                            ngram = ngram.lower()
+                        corpus_stats["absolute"][ngram] += int(count)
+                        corpus_stats["relative"][ngram] += int(count) / float(corpus_size) * 1000000
+                        corpus_stats["sums"]["absolute"] += int(count)
+                        corpus_stats["sums"]["relative"] += int(count) / float(corpus_size) * 1000000
+                        total_stats["absolute"][ngram]  += int(count)
+                        total_stats["sums"]["absolute"] += int(count)
+                    
+                    result["corpora"][corpus] = corpus_stats
+    """
     else:
         cmd = ["%s;" % corpus]
+        cmd += ["info; .EOL.;"]
         cmd += make_query(cqp)
         cmd += ["set LeftKWICDelim ''; set RightKWICDelim '';"]
         cmd += ["set Context 0 words;"]
         cmd += ["show -cpos -word;"]
-        cmd += ["show +%s;" % " +".join(shown)]
+        cmd += ["show +%s;" % " +".join(groupby)]
         cmd += ["cat Last;"]
+        cmd += ["exit;"]
 
         lines = runCQP(cmd, form)
 
@@ -537,15 +674,41 @@ def count(form):
 
         counts = [[count, ngram.split()] for (ngram, count) in counts.iteritems()]
         counts.sort(reverse=True)
+    """
 
-    result = {"hits": nr_hits, "counts": counts}
+    result["count"] = len(total_stats["absolute"])
+
+    if end > -1 and (start > 0 or len(total_stats["absolute"]) > (end - start) + 1):
+        total_absolute = sorted(total_stats["absolute"].iteritems(), key=lambda x: x[1], reverse=True)[start:end+1]
+        new_corpora = {}
+        for ngram, count in total_absolute:
+            total_stats["relative"][ngram] = count / float(total_size) * 1000000
+                    
+            for corpus in corpora:
+                new_corpora.setdefault(corpus, {"absolute": {}, "relative": {}, "sums": result["corpora"][corpus]["sums"]})
+                if ngram in result["corpora"][corpus]["absolute"]:
+                    new_corpora[corpus]["absolute"][ngram] = result["corpora"][corpus]["absolute"][ngram]
+                if ngram in result["corpora"][corpus]["relative"]:
+                    new_corpora[corpus]["relative"][ngram] = result["corpora"][corpus]["relative"][ngram]
+        
+        result["corpora"] = new_corpora
+        total_stats["absolute"] = dict(total_absolute)
+    else:
+        for ngram, count in total_stats["absolute"].iteritems():
+            total_stats["relative"][ngram] = count / float(total_size) * 1000000
+    
+    total_stats["sums"]["relative"] = total_stats["sums"]["absolute"] / float(total_size) * 1000000
+    result["total"] = total_stats
+    
     if "debug" in form:
         result["DEBUG"] = {"cqp": cqp, "cmd": cmd}
+        
     return result
 
 
 def annotationstats(form):
-    """    """
+    """ Deprecated. Use count() instead. """
+    
     assert_key("annotation", form, r"", True)
     assert_key("group", form, r"", True)
     assert_key("value", form, r"", True)
@@ -571,6 +734,7 @@ def annotationstats(form):
         cmd += ["info; .EOL.;"]
         cmd += make_query('[%s contains "%s"]' % (annotation, value))
         cmd += ["group Last match %s;" % group]
+        cmd += ["exit;"]
 
         lines = runCQP(cmd, form)
 
@@ -680,7 +844,8 @@ def relations(form):
     
     for row in cursor:
         val = row[2] if "..av." in lemgram else row[0]
-        if (lemgram and val <> lemgram) or (word and not val.startswith(word)):
+        # TODO: Ta bort  or row[2] == "" när stöd för intransitiva verb finns i framändan
+        if (lemgram and val <> lemgram) or (word and not val.startswith(word)) or row[2] == "":
             continue
         rel = rel_grouping.get(row[1], row[1])
         rels.setdefault((row[0], rel, row[2], row[3]), {"freq": 0, "corpus": set()})
@@ -735,7 +900,7 @@ def relations_sentences(form):
     corpora = form.get("corpus")
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
-    corpora = set(corpora)
+    corpora = sorted(set(corpora))
     
     head = form.get("head")
     dep = form.get("dep")
@@ -773,7 +938,6 @@ def relations_sentences(form):
     counter = 0
     corpora_dict = {}
     sids = {}
-    used_corpora = set()
     total_hits = 0
     corpus_hits = {}
     for row in cursor:
@@ -783,7 +947,6 @@ def relations_sentences(form):
         for s in ids:
             if counter >= start and counter <= end:
                 sids.setdefault(s[0], []).append(s[1:3])
-                used_corpora.add(row[1])
                 corpora_dict.setdefault(row[1], {}).setdefault(s[0], []).append(s[1:3])
             if counter > end:
                 break
@@ -797,7 +960,7 @@ def relations_sentences(form):
     cqpstarttime = time.time()
     result = {}
     
-    for corp, sids in corpora_dict.items():
+    for corp, sids in sorted(corpora_dict.items(), key=lambda x: x[0]):
         cqp = u'<sentence_id="%s"> []* </sentence_id> within sentence' % "|".join(set(sids.keys()))
         q = {"cqp": cqp,
              "corpus": corp,
@@ -829,10 +992,12 @@ def relations_sentences(form):
 
     result["hits"] = total_hits
     result["corpus_hits"] = corpus_hits
+    result["corpus_order"] = corpora
     result["querytime"] = querytime
     result["cqptime"] = time.time() - cqpstarttime
     
     return result
+
 
 ######################################################################
 # Helper functions
@@ -863,7 +1028,8 @@ def runCQP(command, form, executable=CQP_EXECUTABLE, registry=CWB_REGISTRY, attr
     encoding = form.get("encoding", CQP_ENCODING)
     if not isinstance(command, basestring):
         command = "\n".join(command)
-    command = "set PrettyPrint off;\n" + command
+    # Regexp optimizer is not activated by default in CQP 3 beta
+    command = "set PrettyPrint off;\nset Optimize on;\n" + command
     command = command.encode(encoding)
     process = Popen([executable, "-c", "-r", registry],
                     stdin=PIPE, stdout=PIPE, stderr=PIPE)
@@ -884,6 +1050,7 @@ def runCQP(command, form, executable=CQP_EXECUTABLE, registry=CWB_REGISTRY, attr
 def show_attributes():
     """Command sequence for returning the corpus attributes."""
     return ["show cd; .EOL.;"]
+
 
 def read_attributes(lines):
     """Read the CQP output from the show_attributes() command."""
@@ -915,6 +1082,7 @@ def print_header():
     print "Content-Type: application/json"
     print "Access-Control-Allow-Origin: *"
     print
+
 
 def print_object(obj, form):
     """Prints an object in JSON format.
