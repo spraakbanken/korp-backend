@@ -543,15 +543,15 @@ def query(form):
     return result
 
 
-def count_query_worker(corpus, cqp, groupby, form):
+def count_query_worker(corpus, cqp, groupby, ignore_case, form):
 
     cmd = ["%s;" % corpus]
     cmd += make_query(cqp)
     cmd += ["size Last;"]
     cmd += ["info; .EOL.;"]
-    cmd += ["count Last by %s;" % groupby[0]]
+    cmd += ["""tabulate Last %s > "| sort | uniq -c | sort -nr";""" % ", ".join("match .. matchend %s%s" % (g, " %c" if g in ignore_case else "") for g in groupby)]
     cmd += ["exit;"]
-
+    
     lines = runCQP(cmd, form)
 
     # skip CQP version
@@ -588,8 +588,6 @@ def count(form):
     assert_key("corpus", form, IS_IDENT, True)
     assert_key("groupby", form, IS_IDENT, True)
     assert_key("cut", form, IS_NUMBER)
-    
-    case_normalize = False
 
     corpora = form.get("corpus")
     if isinstance(corpora, basestring):
@@ -599,7 +597,11 @@ def count(form):
     groupby = form.get("groupby")
     if isinstance(groupby, basestring):
         groupby = groupby.split(QUERY_DELIM)
-    groupby = list(set(groupby))
+    
+    ignore_case = form.get("ignore_case", [])
+    if isinstance(ignore_case, basestring):
+        ignore_case = ignore_case.split(QUERY_DELIM)
+    ignore_case = set(ignore_case)
     
     start = int(form.get("start", 0))
     end = int(form.get("end", -1))
@@ -620,61 +622,36 @@ def count(form):
     #   cwb-scan-corpus -q SUC2 '?word=/^en$/c' 'pos' 'pos+1' | sort -n -r
     # it's efficient, but I think more limited
 
-    # If we only want to group by one attribute, we can use CQP's internal statistics
-    if len(groupby) == 1:
-        with futures.ThreadPoolExecutor(max_workers=PARALLEL_THREADS) as executor:
-            future_query = dict((executor.submit(count_query_worker, corpus, cqp, groupby, form), corpus) for corpus in corpora)
-            
-            for future in futures.as_completed(future_query):
-                corpus = future_query[future]
-                if future.exception() is not None:
-                    print '\nERROR: %r generated an exception: %s\n' % (corpus, future.exception())
-                else:
-                    lines, nr_hits, corpus_size = future.result()
+    with futures.ThreadPoolExecutor(max_workers=PARALLEL_THREADS) as executor:
+        future_query = dict((executor.submit(count_query_worker, corpus, cqp, groupby, ignore_case, form), corpus) for corpus in corpora)
+        
+        for future in futures.as_completed(future_query):
+            corpus = future_query[future]
+            if future.exception() is not None:
+                print '\nERROR: %r generated an exception: %s\n' % (corpus, future.exception())
+            else:
+                lines, nr_hits, corpus_size = future.result()
 
-                    total_size += corpus_size
-                    corpus_stats = {"absolute": defaultdict(int),
-                                    "relative": defaultdict(float),
-                                    "sums": {"absolute": 0, "relative": 0.0}}
+                total_size += corpus_size
+                corpus_stats = {"absolute": defaultdict(int),
+                                "relative": defaultdict(float),
+                                "sums": {"absolute": 0, "relative": 0.0}}
+                
+                for i, line in enumerate(lines):
+                    count, ngram = line.split(None, 1)
                     
-                    for i, line in enumerate(lines):
-                        count, _pos, ngram = line.split(None, 2)
-                        if case_normalize:
-                            ngram = ngram.lower()
-                        corpus_stats["absolute"][ngram] += int(count)
-                        corpus_stats["relative"][ngram] += int(count) / float(corpus_size) * 1000000
-                        corpus_stats["sums"]["absolute"] += int(count)
-                        corpus_stats["sums"]["relative"] += int(count) / float(corpus_size) * 1000000
-                        total_stats["absolute"][ngram]  += int(count)
-                        total_stats["sums"]["absolute"] += int(count)
+                    if len(groupby) > 1:
+                        groups = [group.split(" ") for group in ngram.split("\t")]
+                        ngram = " ".join("/".join(token) for token in zip(*groups))
                     
-                    result["corpora"][corpus] = corpus_stats
-    """
-    else:
-        cmd = ["%s;" % corpus]
-        cmd += ["info; .EOL.;"]
-        cmd += make_query(cqp)
-        cmd += ["set LeftKWICDelim ''; set RightKWICDelim '';"]
-        cmd += ["set Context 0 words;"]
-        cmd += ["show -cpos -word;"]
-        cmd += ["show +%s;" % " +".join(groupby)]
-        cmd += ["cat Last;"]
-        cmd += ["exit;"]
-
-        lines = runCQP(cmd, form)
-
-        # skip CQP version
-        lines.next()
-
-        nr_hits = 0
-        counts = defaultdict(int)
-        for line in lines:
-            nr_hits += 1
-            counts[line] += 1
-
-        counts = [[count, ngram.split()] for (ngram, count) in counts.iteritems()]
-        counts.sort(reverse=True)
-    """
+                    corpus_stats["absolute"][ngram] += int(count)
+                    corpus_stats["relative"][ngram] += int(count) / float(corpus_size) * 1000000
+                    corpus_stats["sums"]["absolute"] += int(count)
+                    corpus_stats["sums"]["relative"] += int(count) / float(corpus_size) * 1000000
+                    total_stats["absolute"][ngram]  += int(count)
+                    total_stats["sums"]["absolute"] += int(count)
+                
+                result["corpora"][corpus] = corpus_stats
 
     result["count"] = len(total_stats["absolute"])
 
