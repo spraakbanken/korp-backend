@@ -49,7 +49,7 @@ KORP_VERSION = "0.28"
 
 # The available CGI commands; for each command there must be a function
 # with the same name, taking one argument (the CGI form)
-COMMANDS = "info query count relations relations_sentences annotationstats".split()
+COMMANDS = "info query count relations relations_sentences lemgram_count".split()
 
 def default_command(form):
     return "query" if "cqp" in form else "info"
@@ -181,23 +181,116 @@ def corpus_info(form):
     return result
 
 
-def query_corpus(form, corpus, cqp, shown, shown_structs, context, defaultcontext, sortcmd, start, end, no_results=False):
+def query_optimize(cqp, cqpextra):
+    """ Optimizes simple queries with multiple words by converting them to an MU query.
+        Optimization only works for queries with at least two tokens, or one token preceded
+        by one or more wildcards. The query also must use "within".
+        """
+    
+    q, rest = parse_cqp(cqp)
+    expand = cqpextra.get("within", "sentence")
+    
+    leading_wildcards = False
+    # Remove leading and trailing wildcards since they will only slow us down
+    while q and q[0].startswith("[]"):
+        leading_wildcards = True
+        del q[0]
+    while q and q[-1].startswith("[]"):
+        del q[-1]
+    
+    # Determine if this query may not benefit from optimization
+    if len(q) == 0 or (len(q) == 1 and not leading_wildcards) or rest or not "within" in cqpextra:
+        return make_query(make_cqp(cqp, cqpextra))
+    
+    cmd = ["MU"]
+    wildcards = {}
 
+    for i in range(len(q) - 1):
+        if q[i].startswith(u"[]"):
+            n1 = n2 = None
+            if q[i] == u"[]":
+                n1 = n2 = 1
+            elif re.search(r"{\s*(\d+)\s*,\s*(\d*)\s*}$", q[i]):
+                n = re.search(r"{\s*(\d+)\s*,\s*(\d*)\s*}$", q[i]).groups()
+                n1 = int(n[0])
+                n2 = int(n[1]) if n[1] else 9999
+            elif re.search(r"{\s*(\d*)\s*}$", q[i]):
+                n1 = n2 = int(re.search(r"{\s*(\d*)\s*}$", q[i]).groups()[0])
+            if not n1 == None:
+                wildcards[i] = (n1, n2)
+            continue
+        elif re.search(r"{.+?}$", q[i]):
+            # Repetition for anything other than wildcards can't be optimized
+            return make_query(make_cqp(cqp, cqpextra))
+        cmd[0] += " (meet %s" % (q[i])
+    
+    cmd[0] += " %s" % q[-1]
+    
+    wildcard_range = [1, 1]
+    for i in range(len(q) - 2, -1, -1):
+        if i in wildcards:
+            wildcard_range[0] += wildcards[i][0]
+            wildcard_range[1] += wildcards[i][1]
+            continue
+        elif i + 1 in wildcards:
+            if wildcard_range[1] >= 9999:
+                cmd[0] += " %s)" % expand
+            else:
+                cmd[0] += " %d %d)" % (wildcard_range[0], wildcard_range[1])
+            wildcard_range = [1, 1]
+        else:
+            cmd[0] += " 1 1)"
+
+    cmd[0] += " expand to %s;" % expand
+    cmd += ["Last;"]
+    cmd += make_query(make_cqp(cqp, cqpextra))
+
+    return cmd
+
+def query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results=False):
+
+    # Optimization
+    optimize = True # bool(form.get("optimize"))
+    
+    # Context
+    defaultcontext = form.get("defaultcontext", "10 words")
+    
+    context = form.get("context", {})
+    if context:
+        if not ":" in context:
+            raise ValueError("Malformed value for key 'context'.")
+        context = dict(x.split(":") for x in context.split(","))
+    
+    # Sorting
+    sort = form.get("sort")
+    if sort == "left":
+        sortcmd = ["sort by word on match[-1] .. match[-3];"]
+    elif sort == "keyword":
+        sortcmd = ["sort by word;"]
+    elif sort == "right":
+        sortcmd = ["sort by word on matchend[1] .. matchend[3];"]
+    else:
+        sortcmd = []
+
+    # Build the CQP query
     cmd = ["%s;" % corpus]
     # This prints the attributes and their relative order:
     cmd += show_attributes()
-    cmd += make_query(cqp)
+    if optimize:
+        cmd += query_optimize(cqp, cqpextra)
+    else:
+        cmd += make_query(make_cqp(cqp, cqpextra))
     # This prints the size of the query (i.e., the number of results):
     cmd += ["size Last;"]
-    cmd += ["show +%s;" % " +".join(shown)]
-    setcontext = context[corpus] if corpus in context else defaultcontext
-    cmd += ["set Context %s;" % setcontext]
-    cmd += ["set LeftKWICDelim '%s '; set RightKWICDelim ' %s';" % (LEFT_DELIM, RIGHT_DELIM)]
-    if shown_structs:
-        cmd += ["set PrintStructures '%s';" % ", ".join(shown_structs)]
-    # This prints the result rows:
     if not no_results:
+        cmd += ["show +%s;" % " +".join(shown)]
+        setcontext = context[corpus] if corpus in context else defaultcontext
+        cmd += ["set Context %s;" % setcontext]
+        cmd += ["set LeftKWICDelim '%s '; set RightKWICDelim ' %s';" % (LEFT_DELIM, RIGHT_DELIM)]
+        if shown_structs:
+            cmd += ["set PrintStructures '%s';" % ", ".join(shown_structs)]
         cmd += sortcmd
+        # This prints the result rows:
         cmd += ["cat Last %s %s;" % (start, end)]
     cmd += ["exit;"]
     ######################################################################
@@ -335,8 +428,8 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
     return kwic
 
 
-def query_and_parse(form, corpus, cqp, shown, shown_structs, context, defaultcontext, sortcmd, start, end, no_results=False):
-    lines, nr_hits, attrs = query_corpus(form, corpus, cqp, shown, shown_structs, context, defaultcontext, sortcmd, start, end, no_results)
+def query_and_parse(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results=False):
+    lines, nr_hits, attrs = query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results)
     kwic = query_parse_lines(corpus, lines, attrs, shown, shown_structs)
     return kwic, nr_hits
     
@@ -407,34 +500,17 @@ def query(form):
         shown_structs = shown_structs.split(QUERY_DELIM)
     shown_structs = set(shown_structs)
     
-    defaultcontext = form.get("defaultcontext", "10 words")
-    
-    context = form.get("context", {})
-    if context:
-        if not ":" in context:
-            raise ValueError("Malformed value for key 'context'.")
-        context = dict(x.split(":") for x in context.split(","))
-    
     start, end = int(form.get("start")), int(form.get("end"))
 
     if end - start >= MAX_KWIC_ROWS:
         raise ValueError("At most %d KWIC rows can be returned per call." % MAX_KWIC_ROWS)
 
     cqp = form.get("cqp").decode("utf-8")
+    cqpextra = {}
     if "within" in form:
-        cqp += " within %s" % form.get("within")
+        cqpextra["within"] = form.get("within")
     if "cut" in form:
-        cqp += " cut %s" % form.get("cut")
-
-    sort = form.get("sort")
-    if sort == "left":
-        sortcmd = ["sort by word on match[-1] .. match[-3];"]
-    elif sort == "keyword":
-        sortcmd = ["sort by word;"]
-    elif sort == "right":
-        sortcmd = ["sort by word on matchend[1] .. matchend[3];"]
-    else:
-        sortcmd = []
+        cqpextra["cut"] = form.get("cut")
 
     total_hits = 0
     statistics = {}
@@ -446,7 +522,7 @@ def query(form):
     if saved_hits:
         saved_hits = zlib.decompress(saved_hits.replace("\\n", "\n").replace("-", "+").replace("_", "/").decode("base64"))
         saved_crc32, saved_total_hits, stats_temp = saved_hits.split(";", 2)
-        checksum = str(zlib.crc32(cqp.encode("utf-8")  + "".join(sorted(corpora))))
+        checksum = str(zlib.crc32(make_cqp(cqp, cqpextra).encode("utf-8") + "".join(sorted(corpora))))
         if saved_crc32 == checksum:
             saved_total_hits = int(saved_total_hits)
             for pair in stats_temp.split(";"):
@@ -472,15 +548,10 @@ def query(form):
         # If only one corpus, it is faster to not use threads
         if len(corpora_hits) == 1:
             corpus, hits = corpora_hits.items()[0]
-            kwic, _ = query_and_parse(form, corpus, cqp, shown, shown_structs, context, defaultcontext, sortcmd, hits[0], hits[1])
-
-            if result.has_key("kwic"):
-                result["kwic"].extend(kwic)
-            else:
-                result["kwic"] = kwic
+            result["kwic"], _ = query_and_parse(form, corpus, cqp, cqpextra, shown, shown_structs, hits[0], hits[1])
         else:
             with futures.ThreadPoolExecutor(max_workers=PARALLEL_THREADS) as executor:
-                future_query = dict((executor.submit(query_and_parse, form, corpus, cqp, shown, shown_structs, context, defaultcontext, sortcmd, corpora_hits[corpus][0], corpora_hits[corpus][1]), corpus) for corpus in corpora_hits)
+                future_query = dict((executor.submit(query_and_parse, form, corpus, cqp, cqpextra, shown, shown_structs, corpora_hits[corpus][0], corpora_hits[corpus][1]), corpus) for corpus in corpora_hits)
                 
                 for future in futures.as_completed(future_query):
                     corpus = future_query[future]
@@ -503,7 +574,7 @@ def query(form):
             if end_local < 0:
                 rest_corpora = corpora[i:]
                 break
-            kwic, nr_hits = query_and_parse(form, corpus, cqp, shown, shown_structs, context, defaultcontext, sortcmd, start_local, end_local)
+            kwic, nr_hits = query_and_parse(form, corpus, cqp, cqpextra, shown, shown_structs, start_local, end_local)
             
             statistics[corpus] = nr_hits
             total_hits += nr_hits
@@ -520,7 +591,7 @@ def query(form):
         
         if rest_corpora:
             with futures.ThreadPoolExecutor(max_workers=PARALLEL_THREADS) as executor:
-                future_query = dict((executor.submit(query_corpus, form, corpus, cqp, shown, shown_structs, context, defaultcontext, sortcmd, 0, 0, True), corpus) for corpus in rest_corpora)
+                future_query = dict((executor.submit(query_corpus, form, corpus, cqp, cqpextra, shown, shown_structs, 0, 0, True), corpus) for corpus in rest_corpora)
                 
                 for future in futures.as_completed(future_query):
                     corpus = future_query[future]
@@ -537,7 +608,7 @@ def query(form):
     result["hits"] = total_hits
     result["corpus_hits"] = statistics
     result["corpus_order"] = corpora
-    checksum = str(zlib.crc32(cqp.encode("utf-8") + "".join(sorted(corpora))))
+    checksum = str(zlib.crc32(make_cqp(cqp, cqpextra).encode("utf-8") + "".join(sorted(corpora))))
     result["querydata"] = zlib.compress(checksum + ";" + str(total_hits) + ";" + ";".join("%s:%d" % (c, h) for c, h in statistics.iteritems())).encode("base64").replace("+", "-").replace("/", "_")
 
     return result
@@ -569,6 +640,7 @@ def count_query_worker(corpus, cqp, groupby, ignore_case, form):
             break
 
     return lines, nr_hits, corpus_size
+
 
 def count(form):
     """Perform a CQP query and return a count of the given words/attrs.
@@ -638,11 +710,11 @@ def count(form):
                                 "sums": {"absolute": 0, "relative": 0.0}}
                 
                 for i, line in enumerate(lines):
-                    count, ngram = line.split(None, 1)
+                    count, ngram = line.lstrip().split(" ", 1)
                     
                     if len(groupby) > 1:
-                        groups = [group.split(" ") for group in ngram.split("\t")]
-                        ngram = " ".join("/".join(token) for token in zip(*groups))
+                        groups = ngram.split("\t")
+                        ngram = "/".join(groups)
                     
                     corpus_stats["absolute"][ngram] += int(count)
                     corpus_stats["relative"][ngram] += int(count) / float(corpus_size) * 1000000
@@ -674,7 +746,7 @@ def count(form):
         for ngram, count in total_stats["absolute"].iteritems():
             total_stats["relative"][ngram] = count / float(total_size) * 1000000
     
-    total_stats["sums"]["relative"] = total_stats["sums"]["absolute"] / float(total_size) * 1000000
+    total_stats["sums"]["relative"] = total_stats["sums"]["absolute"] / float(total_size) * 1000000 if total_size > 0 else 0.0
     result["total"] = total_stats
     
     if "debug" in form:
@@ -683,66 +755,40 @@ def count(form):
     return result
 
 
-def annotationstats(form):
-    """ Deprecated. Use count() instead. """
-    
-    assert_key("annotation", form, r"", True)
-    assert_key("group", form, r"", True)
-    assert_key("value", form, r"", True)
-    assert_key("corpus", form, IS_IDENT, True)
+def lemgram_count(form):
 
+    assert_key("lemgram", form, r"", True)
+    
     corpora = form.get("corpus")
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
-    corpora = set(corpora)
+    corpora = set(corpora) if corpora else set()
     
-    group = form.get("group").decode("utf-8")
-    annotation = form.get("annotation").decode("utf-8")
-    value = form.get("value").decode("utf-8")
+    lemgram = form.get("lemgram")
+    if isinstance(lemgram, basestring):
+        lemgram = lemgram.split(QUERY_DELIM)
+    lemgram = set(lemgram)
     
-    result = {"corpora": {}}
-    total_stats = {"absolute": defaultdict(int),
-                   "relative": defaultdict(float)}
-    total_size = 0
+    conn = MySQLdb.connect(host = "localhost",
+                           user = "",
+                           passwd = "",
+                           db = DBNAME,
+                           use_unicode = True,
+                           charset = "utf8")
+    cursor = conn.cursor()
     
-    for corpus in corpora:
-
-        cmd = ["%s;" % corpus]
-        cmd += ["info; .EOL.;"]
-        cmd += make_query('[%s contains "%s"]' % (annotation, value))
-        cmd += ["group Last match %s;" % group]
-        cmd += ["exit;"]
-
-        lines = runCQP(cmd, form)
-
-        # skip CQP version
-        lines.next()
-        
-        for line in lines:
-            if line.startswith("Size:"):
-                _, corpus_size = line.split(":")
-                corpus_size = int(corpus_size.strip())
-            elif line == END_OF_LINE:
-                break
-        
-        total_size += corpus_size
-        corpus_stats = {"absolute": defaultdict(int),
-                        "relative": defaultdict(float)}
-        for line in lines:
-            wordform, count = line.split("\t")
-            corpus_stats["absolute"][wordform.lower()] += int(count)
-            corpus_stats["relative"][wordform.lower()] += int(count) / float(corpus_size) * 1000000
-            total_stats["absolute"][wordform.lower()]  += int(count)
-            
-        result["corpora"][corpus] = corpus_stats
+    corpora_sql = " AND corpus IN (%s)" % ", ".join("'%s'" % c for c in corpora) if corpora else ""
+    lemgram_sql = " lemgram IN (%s)" % "%s" % ", ".join(conn.escape(l).decode("utf-8") for l in lemgram)
     
-    for wf, count in total_stats["absolute"].iteritems():
-        total_stats["relative"][wf] = count / float(total_size) * 1000000
+    sql = "SELECT lemgram, SUM(freq) FROM lemgram_index WHERE" + lemgram_sql + corpora_sql + " GROUP BY lemgram;"
     
-    result["total"] = total_stats
-        
+    result = {}
+    
+    cursor.execute(sql)
+    for row in cursor:
+        result[row[0]] = int(row[1])
+    
     return result
-
 
 def relations(form):
 
@@ -782,7 +828,8 @@ def relations(form):
                            user = "",
                            passwd = "",
                            db = DBNAME,
-                           use_unicode = True)
+                           use_unicode = True,
+                           charset = "utf8")
     cursor = conn.cursor()
     
     # Get available tables
@@ -800,7 +847,7 @@ def relations(form):
         
         for corpus in corpora:
             corpus_table = DBTABLE + "_" + corpus.upper()
-            selects.append(u"(SELECT " + columns + u", " + conn.string_literal(corpus.upper()) + u" as corpus FROM " + corpus_table + u" WHERE " + headdep + u" = " + lemgram_sql + minfreqsql + u")")
+            selects.append(u"(SELECT " + columns + u", " + conn.string_literal(corpus.upper()) + u" as corpus FROM " + corpus_table + u" WHERE head = " + lemgram_sql + u" or dep = " + lemgram_sql + minfreqsql + u")")
     elif word:
         word_vb_sql = conn.escape(word + "_VB").decode("utf-8")
         word_nn_sql = conn.escape(word + "_NN").decode("utf-8")
@@ -820,9 +867,7 @@ def relations(form):
     freq_rel_dep = {}
     
     for row in cursor:
-        val = row[2] if "..av." in lemgram else row[0]
-        # TODO: Ta bort  or row[2] == "" när stöd för intransitiva verb finns i framändan
-        if (lemgram and val <> lemgram) or (word and not val.startswith(word)) or row[2] == "":
+        if (lemgram and (row[0] <> lemgram and row[2] <> lemgram)) or (word and not row[0].startswith(word)):
             continue
         rel = rel_grouping.get(row[1], row[1])
         rels.setdefault((row[0], rel, row[2], row[3]), {"freq": 0, "corpus": set()})
@@ -843,20 +888,26 @@ def relations(form):
     sortedrels = sorted(rels.items(), key=lambda x: (x[0][1], x[1][sortby]), reverse=True)
     
     for rel in sortedrels:
-        counter.setdefault(rel[0][1], 0)
-        if counter[rel[0][1]] >= maxresults:
-            continue
+        counter.setdefault((rel[0][1], "h"), 0)
+        counter.setdefault((rel[0][1], "d"), 0)
+        if lemgram and rel[0][0] == lemgram:
+            counter[(rel[0][1], "h")] += 1
+            if counter[(rel[0][1], "h")] > maxresults:
+                continue
         else:
-            counter[rel[0][1]] += 1
-            r = { "head": rel[0][0],
-                  "rel": rel[0][1],
-                  "dep": rel[0][2],
-                  "depextra": rel[0][3],
-                  "freq": rel[1]["freq"],
-                  "mi": rel[1]["mi"],
-                  "corpus": list(rel[1]["corpus"])
-                }
-            result.setdefault("relations", []).append(r)
+            counter[(rel[0][1], "d")] += 1
+            if counter[(rel[0][1], "d")] > maxresults:
+                continue
+
+        r = { "head": rel[0][0],
+              "rel": rel[0][1],
+              "dep": rel[0][2],
+              "depextra": rel[0][3],
+              "freq": rel[1]["freq"],
+              "mi": rel[1]["mi"],
+              "corpus": list(rel[1]["corpus"])
+            }
+        result.setdefault("relations", []).append(r)
     
     cursor.close()
     conn.close()
@@ -869,7 +920,7 @@ def relations_sentences(form):
     
     assert_key("corpus", form, IS_IDENT, True)
     assert_key("head", form, "", True)
-    assert_key("dep", form, "", True)
+    #assert_key("dep", form, "", True)
     assert_key("rel", form, "", True)
     assert_key("start", form, IS_NUMBER, False)
     assert_key("end", form, IS_NUMBER, False)
@@ -880,7 +931,7 @@ def relations_sentences(form):
     corpora = sorted(set(corpora))
     
     head = form.get("head")
-    dep = form.get("dep")
+    dep = form.get("dep", "")
     depextra = form.get("depextra", "")
     rel = form.get("rel")
     start = int(form.get("start", "0"))
@@ -958,7 +1009,7 @@ def relations_sentences(form):
             s["match"]["end"] = max(map(int, r))
             
             # If the same relation appears more than once in the same sentence,
-            # append compies of the sentence as separate results
+            # append copies of the sentence as separate results
             for r in sids[sid][1:]:
                 s2 = deepcopy(s)
                 s2["match"]["start"] = min(map(int, r)) - 1
@@ -978,6 +1029,67 @@ def relations_sentences(form):
 
 ######################################################################
 # Helper functions
+
+def parse_cqp(cqp):
+    """ Tries to parse a CQP query, returning identified tokens and a
+    boolean indicating partial failure if True."""
+    
+    sections = []
+    last_start = 0
+    in_bracket = 0
+    in_quote = False
+    in_curly = False
+    quote_type = ""
+    
+    for i in range(len(cqp)):
+        c = cqp[i]
+        
+        if c in '"\'':
+            if in_quote and quote_type == c and not cqp[i - 1] == "\\":
+                in_quote = False
+                if not in_bracket:
+                    sections.append([last_start, i])
+            elif not in_quote:
+                in_quote = True
+                quote_type = c
+                if not in_bracket:
+                    last_start = i
+        elif c == "[":
+            if not in_bracket and not in_quote:
+                last_start = i
+                in_bracket = True
+        elif c == "]":
+            if in_bracket and not in_quote:
+                sections.append([last_start, i])
+                in_bracket = False
+        elif c == "{" and not in_bracket and not in_quote:
+            in_curly = True
+        elif c == "}" and not in_bracket and not in_quote and in_curly:
+            in_curly = False
+            sections[-1][1] = i
+
+    last_section = (0, 0)
+    sections.append([len(cqp), len(cqp)])
+    tokens = []
+    rest = False
+
+    for section in sections:
+        if last_section[1] < section[0]:
+            if cqp[last_section[1]+1:section[0]].strip():
+                rest = True
+        last_section = section
+        if cqp[section[0]:section[1]+1]:
+            tokens.append(cqp[section[0]:section[1]+1])
+    
+    return (tokens, rest)
+
+
+def make_cqp(cqp, cqpextra):
+    """ Combine CQP query and extra options. """
+    for i in cqpextra.items():
+        cqp += " %s %s" % i
+    return cqp
+
 
 def make_query(cqp):
     """Create web-safe commands for a CQP query.
@@ -1005,8 +1117,7 @@ def runCQP(command, form, executable=CQP_EXECUTABLE, registry=CWB_REGISTRY, attr
     encoding = form.get("encoding", CQP_ENCODING)
     if not isinstance(command, basestring):
         command = "\n".join(command)
-    # Regexp optimizer is not activated by default in CQP 3 beta
-    command = "set PrettyPrint off;\nset Optimize on;\n" + command
+    command = "set PrettyPrint off;\n" + command
     command = command.encode(encoding)
     process = Popen([executable, "-c", "-r", registry],
                     stdin=PIPE, stdout=PIPE, stderr=PIPE)
@@ -1017,7 +1128,8 @@ def runCQP(command, form, executable=CQP_EXECUTABLE, registry=CWB_REGISTRY, attr
         # keep only the first CQP error (the rest are consequences):
         error = re.sub(r"^CQP Error: *", r"", error)
         error = re.sub(r" *(CQP Error:).*$", r"", error)
-        if not (attr_ignore and "No such attribute:" in error) and not "is not defined for corpus" in error:
+        # Ignore certain errors: 1) "show +attr" for unknown attr, 2) querying unknown structural attribute, 3) calculating statistics for empty results
+        if not (attr_ignore and "No such attribute:" in error) and not "is not defined for corpus" in error and not "cl->range && cl->size > 0" in error:
             raise CQPError(error)
     for line in reply.decode(encoding).splitlines():
         if line:
