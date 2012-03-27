@@ -45,7 +45,7 @@ DBTABLE = "relations"
 # These variables should probably not need to be changed
 
 # The version of this script
-KORP_VERSION = "0.28"
+KORP_VERSION = "1.15"
 
 # The available CGI commands; for each command there must be a function
 # with the same name, taking one argument (the CGI form)
@@ -219,7 +219,7 @@ def query_optimize(cqp, cqpextra):
             if not n1 == None:
                 wildcards[i] = (n1, n2)
             continue
-        elif re.search(r"{.+?}$", q[i]):
+        elif re.search(r"{.*?}$", q[i]):
             # Repetition for anything other than wildcards can't be optimized
             return make_query(make_cqp(cqp, cqpextra))
         cmd[0] += " (meet %s" % (q[i])
@@ -341,6 +341,16 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
             lineattr, line = line.rsplit(":  ", 1)
             lineattrs = lineattr[2:-1].split("><")
             
+            # Handle "><" in attribute values
+            if not len(lineattrs) == len(ls_attrs):
+                new_lineattrs = []
+                for la in lineattrs:
+                    if not la.split(" ", 1)[0] in ls_attrs:
+                        new_lineattrs[-1] += "><" + la
+                    else:
+                        new_lineattrs.append(la)
+                lineattrs = new_lineattrs
+
             for s in lineattrs:
                 if s in ls_attrs:
                     s_key = s
@@ -416,7 +426,7 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
                 kwic[-1].setdefault("aligned", {})[aligned] = tokens
         else:
             if not "start" in match:
-                # CQP bug: CQP can't handle too long sentences, skipping
+                # TODO: CQP bug - CQP can't handle too long sentences, skipping
                 continue
             # Otherwise we add a new kwic row
             kwic_row = {"corpus": corpus, "match": match}
@@ -769,6 +779,17 @@ def lemgram_count(form):
         lemgram = lemgram.split(QUERY_DELIM)
     lemgram = set(lemgram)
     
+    count = form.get("count", "lemgram")
+    if isinstance(count, basestring):
+        count = count.split(QUERY_DELIM)
+    count = set(count)
+       
+    counts = {"lemgram": "freq",
+              "prefix": "freqprefix",
+              "suffix": "freqsuffix"}
+    
+    sums = " + ".join("SUM(%s)" % counts[c] for c in count)
+    
     conn = MySQLdb.connect(host = "localhost",
                            user = "",
                            passwd = "",
@@ -777,30 +798,24 @@ def lemgram_count(form):
                            charset = "utf8")
     cursor = conn.cursor()
     
-    corpora_sql = " AND corpus IN (%s)" % ", ".join("'%s'" % c for c in corpora) if corpora else ""
     lemgram_sql = " lemgram IN (%s)" % "%s" % ", ".join(conn.escape(l).decode("utf-8") for l in lemgram)
+    corpora_sql = " AND corpus IN (%s)" % ", ".join("%s" % conn.escape(c) for c in corpora) if corpora else ""
     
-    sql = "SELECT lemgram, SUM(freq) FROM lemgram_index WHERE" + lemgram_sql + corpora_sql + " GROUP BY lemgram;"
+    sql = "SELECT lemgram, " + sums + " FROM lemgram_index WHERE" + lemgram_sql + corpora_sql + " GROUP BY lemgram COLLATE utf8_bin;"
     
     result = {}
-    
     cursor.execute(sql)
+
     for row in cursor:
-        result[row[0]] = int(row[1])
+        # We need this check here, since a search for "hår" also returns "här" and "har".
+        if row[0].encode("utf-8") in lemgram and int(row[1]) > 0:
+            result[row[0]] = int(row[1])
     
     return result
 
 def relations(form):
 
     import math
-
-    rel_grouping = {
-        "OO": "OBJ",
-        "IO": "OBJ",
-        "RA": "ADV",
-        "TA": "ADV",
-        "OA": "ADV"
-    }
 
     assert_key("corpus", form, IS_IDENT, True)
     #assert_key("lemgram", form, r"", True)
@@ -843,11 +858,15 @@ def relations(form):
     if lemgram:
         lemgram_sql = conn.escape(lemgram).decode("utf-8")
         lemgram = lemgram.decode("utf-8")
-        headdep = "dep" if "..av." in lemgram else "head"
         
         for corpus in corpora:
             corpus_table = DBTABLE + "_" + corpus.upper()
-            selects.append(u"(SELECT " + columns + u", " + conn.string_literal(corpus.upper()) + u" as corpus FROM " + corpus_table + u" WHERE head = " + lemgram_sql + u" or dep = " + lemgram_sql + minfreqsql + u")")
+            
+            cursor.execute(u"SELECT * FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '" + DBNAME + "' AND TABLE_NAME = '" + corpus_table + "' AND COLUMN_NAME = 'wf'")
+            if len([x for x in cursor]) == 1:
+                selects.append(u"(SELECT " + columns + u", " + conn.string_literal(corpus.upper()) + u" as corpus FROM " + corpus_table + u" WHERE (head = " + lemgram_sql + u" OR dep = " + lemgram_sql + minfreqsql + u") AND wf = 0)")
+            else:
+                selects.append(u"(SELECT " + columns + u", " + conn.string_literal(corpus.upper()) + u" as corpus FROM " + corpus_table + u" WHERE head = " + lemgram_sql + u" OR dep = " + lemgram_sql + minfreqsql + u")")
     elif word:
         word_vb_sql = conn.escape(word + "_VB").decode("utf-8")
         word_nn_sql = conn.escape(word + "_NN").decode("utf-8")
@@ -869,14 +888,13 @@ def relations(form):
     for row in cursor:
         if (lemgram and (row[0] <> lemgram and row[2] <> lemgram)) or (word and not row[0].startswith(word)):
             continue
-        rel = rel_grouping.get(row[1], row[1])
-        rels.setdefault((row[0], rel, row[2], row[3]), {"freq": 0, "corpus": set()})
-        rels[(row[0], rel, row[2], row[3])]["freq"] += row[4]
-        rels[(row[0], rel, row[2], row[3])]["corpus"].add(row[8])
+        rels.setdefault((row[0], row[1], row[2], row[3]), {"freq": 0, "corpus": set()})
+        rels[(row[0], row[1], row[2], row[3])]["freq"] += row[4]
+        rels[(row[0], row[1], row[2], row[3])]["corpus"].add(row[8])
         
-        freq_rel.setdefault(rel, {})[(row[8], row[1])] = row[5]
-        freq_head_rel.setdefault((row[0], rel), {})[(row[8], row[1])] = row[6]
-        freq_rel_dep.setdefault((rel, row[2], row[3]), {})[(row[8], row[1])] = row[7]
+        freq_rel.setdefault(row[1], {})[(row[8], row[1])] = row[5]
+        freq_head_rel.setdefault((row[0], row[1]), {})[(row[8], row[1])] = row[6]
+        freq_rel_dep.setdefault((row[1], row[2], row[3]), {})[(row[8], row[1])] = row[7]
     
     # Calculate MI
     for rel in rels:
@@ -1131,9 +1149,11 @@ def runCQP(command, form, executable=CQP_EXECUTABLE, registry=CWB_REGISTRY, attr
         # Ignore certain errors: 1) "show +attr" for unknown attr, 2) querying unknown structural attribute, 3) calculating statistics for empty results
         if not (attr_ignore and "No such attribute:" in error) and not "is not defined for corpus" in error and not "cl->range && cl->size > 0" in error:
             raise CQPError(error)
-    for line in reply.decode(encoding).splitlines():
-        if line:
-            yield line
+    for line in reply.splitlines():
+        # TODO: Current version of CQP can't handle extremely long sentences.
+        # When fixed, remove len() check and move the decode back to reply.decode(encoding, errors="ignore").splitlines()
+        if line and len(line) < 32768:
+            yield line.decode(encoding, errors="ignore")
 
 
 def show_attributes():
