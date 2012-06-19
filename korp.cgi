@@ -10,6 +10,8 @@ from subprocess import Popen, PIPE
 from collections import defaultdict
 from concurrent import futures
 
+import sys
+import os
 import random
 import time
 import cgi
@@ -40,12 +42,15 @@ PARALLEL_THREADS = 6
 # The name of the MySQL database and table prefix
 DBNAME = ""
 DBTABLE = "relations"
+# Username and password for database access
+DBUSER = ""
+DBPASSWORD = ""
 
 ######################################################################
 # These variables should probably not need to be changed
 
 # The version of this script
-KORP_VERSION = "1.15"
+KORP_VERSION = "1.18"
 
 # The available CGI commands; for each command there must be a function
 # with the same name, taking one argument (the CGI form)
@@ -80,11 +85,17 @@ def main():
      - debug: if set, return some extra information (for debugging)
     """
     starttime = time.time()
+    sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0) # Open unbuffered stdout
     print_header()
     
     # Convert form fields to regular dictionary
     form_raw = cgi.FieldStorage()
     form = dict((field, form_raw.getvalue(field)) for field in form_raw.keys())
+    
+    incremental = form.get("incremental", "").lower() == "true"
+    
+    if incremental:
+        print "{"
     
     command = form.get("command")
     if not command:
@@ -101,15 +112,18 @@ def main():
         result["time"] = time.time() - starttime
         print_object(result, form)
     except:
-        import traceback, sys
+        import traceback
         exc = sys.exc_info()
         error = {"ERROR": {"type": exc[0].__name__,
-                           "value": str(exc[1]),
-                           "traceback": traceback.format_exc().splitlines(),
+                           "value": str(exc[1])
                            },
                  "time": time.time() - starttime}
+        if "debug" in form:
+            error["ERROR"]["traceback"] = traceback.format_exc().splitlines()
         print_object(error, form)
-
+    
+    if incremental:
+        print "}"
 
 def info(form):
     """Return information, either about a specific corpus
@@ -141,6 +155,7 @@ def corpus_info(form):
     
     result = {"corpora": {}}
     total_size = 0
+    total_sentences = 0
     
     cmd = []
 
@@ -171,10 +186,13 @@ def corpus_info(form):
                 info[infokey] = infoval
                 if infokey == "Size":
                     total_size += int(infoval)
+                elif infokey == "Sentences":
+                    total_sentences += int(infoval)
 
         result["corpora"][corpus] = {"attrs": attrs, "info": info}
     
     result["total_size"] = total_size
+    result["total_sentences"] = total_sentences
     
     if "debug" in form:
         result["DEBUG"] = {"cmd": cmd}
@@ -350,7 +368,7 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
                     else:
                         new_lineattrs.append(la)
                 lineattrs = new_lineattrs
-
+            
             for s in lineattrs:
                 if s in ls_attrs:
                     s_key = s
@@ -494,6 +512,8 @@ def query(form):
     ############################################################################
     # First we read all CGI parameters and translate them to CQP
     
+    incremental = form.get("incremental", "").lower() == "true"
+    
     corpora = form.get("corpus")
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
@@ -555,18 +575,25 @@ def query(form):
         corpora_hits = which_hits(corpora, saved_statistics, start, end)
         corpora_kwics = {}
         
+        progress_count = 0
+        
         # If only one corpus, it is faster to not use threads
         if len(corpora_hits) == 1:
             corpus, hits = corpora_hits.items()[0]
             result["kwic"], _ = query_and_parse(form, corpus, cqp, cqpextra, shown, shown_structs, hits[0], hits[1])
         else:
+            if incremental:
+                print '"progress_corpora": ["%s"],' % '", "'.join(corpora_hits.keys())
             with futures.ThreadPoolExecutor(max_workers=PARALLEL_THREADS) as executor:
                 future_query = dict((executor.submit(query_and_parse, form, corpus, cqp, cqpextra, shown, shown_structs, corpora_hits[corpus][0], corpora_hits[corpus][1]), corpus) for corpus in corpora_hits)
                 
                 for future in futures.as_completed(future_query):
                     corpus = future_query[future]
+                    if incremental:
+                        print '"progress_%d": {"corpus": "%s", "hits": %d},' % (progress_count, corpus, corpora_hits[corpus][1] - corpora_hits[corpus][0] + 1)
+                        progress_count += 1
                     if future.exception() is not None:
-                        print '\nERROR: %r generated an exception: %s\n' % (corpus, future.exception())
+                        raise CQPError(future.exception())
                     else:
                         kwic, _ = future.result()
                         corpora_kwics[corpus] = kwic
@@ -578,9 +605,15 @@ def query(form):
                         else:
                             result["kwic"] = corpora_kwics[corpus]
     else:
+        if incremental:
+            print '"progress_corpora": ["%s"],' % '", "'.join(corpora)
+        
+        progress_count = 0
         rest_corpora = []
+        
         # Serial until we've got all the requested rows
         for i, corpus in enumerate(corpora):
+                       
             if end_local < 0:
                 rest_corpora = corpora[i:]
                 break
@@ -598,22 +631,37 @@ def query(form):
                 result["kwic"].extend(kwic)
             else:
                 result["kwic"] = kwic
+            
+            if incremental:
+                print '"progress_%d": {"corpus": "%s", "hits": %d},' % (progress_count, corpus, nr_hits)
+                progress_count += 1
+        
+        if incremental:
+            print_object(result, form)
+            result = {}
         
         if rest_corpora:
+            if incremental:
+                print ",",
             with futures.ThreadPoolExecutor(max_workers=PARALLEL_THREADS) as executor:
                 future_query = dict((executor.submit(query_corpus, form, corpus, cqp, cqpextra, shown, shown_structs, 0, 0, True), corpus) for corpus in rest_corpora)
                 
                 for future in futures.as_completed(future_query):
                     corpus = future_query[future]
                     if future.exception() is not None:
-                        print '\nERROR: %r generated an exception: %s\n' % (corpus, future.exception())
+                        raise CQPError(future.exception())
                     else:
                         _, nr_hits, _ = future.result()
                         statistics[corpus] = nr_hits
                         total_hits += nr_hits
+                        if incremental:
+                            print '"progress_%d": {"corpus": "%s", "hits": %d},' % (progress_count, corpus, nr_hits)
+                            progress_count += 1
+        elif incremental:
+            print ",",
 
     if "debug" in form:
-        result["DEBUG"] = {"cqp": cqp, "cmd": cmd}
+        result["DEBUG"] = {"cqp": cqp}
 
     result["hits"] = total_hits
     result["corpus_hits"] = statistics
@@ -670,6 +718,8 @@ def count(form):
     assert_key("corpus", form, IS_IDENT, True)
     assert_key("groupby", form, IS_IDENT, True)
     assert_key("cut", form, IS_NUMBER)
+    
+    incremental = form.get("incremental", "").lower() == "true"
 
     corpora = form.get("corpus")
     if isinstance(corpora, basestring):
@@ -699,10 +749,15 @@ def count(form):
                    "relative": defaultdict(float),
                    "sums": {"absolute": 0, "relative": 0.0}}
     total_size = 0
-
+    total_hits = 0
+    
     # TODO: we could use cwb-scan-corpus for counting:
     #   cwb-scan-corpus -q SUC2 '?word=/^en$/c' 'pos' 'pos+1' | sort -n -r
     # it's efficient, but I think more limited
+
+    progress_count = 0
+    if incremental:
+        print '"progress_corpora": ["%s"],' % '", "'.join(corpora)
 
     with futures.ThreadPoolExecutor(max_workers=PARALLEL_THREADS) as executor:
         future_query = dict((executor.submit(count_query_worker, corpus, cqp, groupby, ignore_case, form), corpus) for corpus in corpora)
@@ -710,7 +765,7 @@ def count(form):
         for future in futures.as_completed(future_query):
             corpus = future_query[future]
             if future.exception() is not None:
-                print '\nERROR: %r generated an exception: %s\n' % (corpus, future.exception())
+                raise CQPError(future.exception())
             else:
                 lines, nr_hits, corpus_size = future.result()
 
@@ -734,6 +789,13 @@ def count(form):
                     total_stats["sums"]["absolute"] += int(count)
                 
                 result["corpora"][corpus] = corpus_stats
+                
+                if incremental:
+                    print '"progress_%d": "%s",' % (progress_count, corpus)
+                    progress_count += 1
+                    total_hits += nr_hits
+                    if total_hits > 1000000:
+                        print '"warning":"Over 1000000 hits!",'
 
     result["count"] = len(total_stats["absolute"])
 
@@ -791,8 +853,8 @@ def lemgram_count(form):
     sums = " + ".join("SUM(%s)" % counts[c] for c in count)
     
     conn = MySQLdb.connect(host = "localhost",
-                           user = "",
-                           passwd = "",
+                           user = DBUSER,
+                           passwd = DBPASSWORD,
                            db = DBNAME,
                            use_unicode = True,
                            charset = "utf8")
@@ -818,7 +880,6 @@ def relations(form):
     import math
 
     assert_key("corpus", form, IS_IDENT, True)
-    #assert_key("lemgram", form, r"", True)
     assert_key("min", form, IS_NUMBER, False)
     assert_key("max", form, IS_NUMBER, False)
     
@@ -826,68 +887,114 @@ def relations(form):
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
     corpora = set(corpora)
-        
-    lemgram = form.get("lemgram")
+    
+    incremental = form.get("incremental", "").lower() == "true"
+    
     word = form.get("word")
+    search_type = form.get("type", "")
     minfreq = form.get("min")
     sortby = form.get("sortby", "mi")
     maxresults = form.get("max", 15)
     maxresults = int(maxresults)
     minfreqsql = " AND freq >= %s" % minfreq if minfreq else ""
     
-    assert lemgram or word, "lemgram or word missing."
+    assert word, "lemgram or word missing"
+    assert search_type in ("lemgram", "word", ""), "illegal type"
     
     result = {}
 
     conn = MySQLdb.connect(host = "localhost",
-                           user = "",
-                           passwd = "",
+                           user = DBUSER,
+                           passwd = DBPASSWORD,
                            db = DBNAME,
                            use_unicode = True,
                            charset = "utf8")
     cursor = conn.cursor()
+    cursor.execute("SET @@session.long_query_time = 1000;")
     
     # Get available tables
     cursor.execute("SHOW TABLES LIKE '" + DBTABLE + "_%';")
     tables = set(x[0] for x in cursor)
     # Filter out corpora which doesn't exist in database
     corpora = filter(lambda x: DBTABLE + "_" + x.upper() in tables, corpora)
+    if not corpora: return {}
     
-    columns = "head, rel, dep, depextra, freq, freq_rel, freq_head_rel, freq_rel_dep"    
+    columns = ("head", "rel", "dep", "depextra", "freq")
     selects = []
-    if lemgram:
-        lemgram_sql = conn.escape(lemgram).decode("utf-8")
-        lemgram = lemgram.decode("utf-8")
-        
-        for corpus in corpora:
-            corpus_table = DBTABLE + "_" + corpus.upper()
-            
-            cursor.execute(u"SELECT * FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '" + DBNAME + "' AND TABLE_NAME = '" + corpus_table + "' AND COLUMN_NAME = 'wf'")
-            if len([x for x in cursor]) == 1:
-                selects.append(u"(SELECT " + columns + u", " + conn.string_literal(corpus.upper()) + u" as corpus FROM " + corpus_table + u" WHERE (head = " + lemgram_sql + u" OR dep = " + lemgram_sql + minfreqsql + u") AND wf = 0)")
-            else:
-                selects.append(u"(SELECT " + columns + u", " + conn.string_literal(corpus.upper()) + u" as corpus FROM " + corpus_table + u" WHERE head = " + lemgram_sql + u" OR dep = " + lemgram_sql + minfreqsql + u")")
-    elif word:
-        word_vb_sql = conn.escape(word + "_VB").decode("utf-8")
-        word_nn_sql = conn.escape(word + "_NN").decode("utf-8")
-        word_jj_sql = conn.escape(word + "_JJ").decode("utf-8")
-        
-        for corpus in corpora:
-            corpus_table = DBTABLE + "_" + corpus.upper()
-            selects.append(u"(SELECT " + columns + u", " + conn.string_literal(corpus.upper()) + u" as corpus FROM " + corpus_table + (u" WHERE (head = %s OR head = %s OR dep = %s)" % (word_vb_sql, word_nn_sql, word_jj_sql)) + minfreqsql + ")")
     
-    sql = " UNION ALL ".join(selects)
-    cursor.execute(sql)
+    if search_type == "lemgram":
+        lemgram_sql = conn.escape(word).decode("utf-8")
+        
+        for corpus in corpora:
+            corpus_table = DBTABLE + "_" + corpus.upper()
+            columns1 = ", ".join([corpus_table + "." + x for x in columns])
+            columns2 = corpus_table + "_rel.freq as rel_freq"
+            columns3 = corpus_table + "_head_rel.freq as head_rel_freq"
+            columns4 = corpus_table + "_dep_rel.freq as dep_rel_freq"
             
+            selects.append((corpus.upper(), u"(SELECT " + columns1 + ", " + columns2 + ", " + columns3 + ", " + columns4 + u", " + conn.string_literal(corpus.upper()) + u" as corpus " + \
+                           u"FROM " + corpus_table + ", " + corpus_table + "_rel, " + corpus_table + "_head_rel, " + corpus_table + "_dep_rel "
+                           u"WHERE (" + corpus_table + ".head = " + lemgram_sql + u" COLLATE utf8_bin OR " + corpus_table + ".dep = " + lemgram_sql + " COLLATE utf8_bin" + u") " + \
+                           minfreqsql + " AND " + corpus_table + ".wf = 0 " + \
+                           u"AND " + corpus_table + u".rel = " + corpus_table + "_rel.rel " + \
+                           u"AND " + corpus_table + ".head = " + corpus_table + "_head_rel.head " + \
+                           u"AND " + corpus_table + ".rel = " + corpus_table + "_head_rel.rel " + \
+                           u"AND " + corpus_table + ".dep = " + corpus_table + "_dep_rel.dep " + \
+                           u"AND " + corpus_table + ".depextra = " + corpus_table + "_dep_rel.depextra " + \
+                           u"AND " + corpus_table + ".rel = " + corpus_table + "_dep_rel.rel)"))
+    else:
+        suffixes = ("_VB", "_NN", "_JJ", "_PP")
+        words = []
+        for suffix in suffixes:
+            words.append(conn.escape(word + suffix).decode("utf-8"))
+        
+        words_list = "(" + ", ".join(words) + " COLLATE utf8_bin)"
+        word = word.decode("utf-8")
+        
+        for corpus in corpora:
+            corpus_table = DBTABLE + "_" + corpus.upper()
+            columns1 = ", ".join([corpus_table + "." + x for x in columns])
+            columns2 = corpus_table + "_rel.freq as rel_freq"
+            columns3 = corpus_table + "_head_rel.freq as head_rel_freq"
+            columns4 = corpus_table + "_dep_rel.freq as dep_rel_freq"
+    
+            selects.append((corpus.upper(), u"(SELECT " + columns1 + ", " + columns2 + ", " + columns3 + ", " + columns4 + u", " + conn.string_literal(corpus.upper()) + u" AS corpus " + \
+                           u"FROM " + corpus_table + ", " + corpus_table + "_rel, " + corpus_table + "_head_rel, " + corpus_table + "_dep_rel "
+                           u"WHERE ((" + corpus_table + ".head IN " + words_list + u" AND NOT " + corpus_table + ".wf = 2) OR (" + corpus_table + ".dep IN " + words_list + " AND NOT " + corpus_table + ".wf = 1)) " + \
+                           minfreqsql + \
+                           u"AND " + corpus_table + u".rel = " + corpus_table + "_rel.rel " + \
+                           u"AND " + corpus_table + ".head = " + corpus_table + "_head_rel.head " + \
+                           u"AND " + corpus_table + ".rel = " + corpus_table + "_head_rel.rel " + \
+                           u"AND " + corpus_table + ".dep = " + corpus_table + "_dep_rel.dep " + \
+                           u"AND " + corpus_table + ".depextra = " + corpus_table + "_dep_rel.depextra " + \
+                           u"AND " + corpus_table + ".rel = " + corpus_table + "_dep_rel.rel)"))
+    
+    cursor_result = []
+    if incremental:
+        print '"progress_corpora": ["%s"],' % '", "'.join(corpora)
+        progress_count = 0
+        for sql in selects:
+            cursor.execute(sql[1])
+            cursor_result.extend(list(cursor))
+            print '"progress_%d": {"corpus": "%s"},' % (progress_count, sql[0])
+            progress_count += 1
+    else:    
+        sql = u" UNION ALL ".join(x[1] for x in selects)
+        cursor.execute(sql)
+        cursor_result = cursor
+    
     rels = {}
     counter = {}
     freq_rel = {}
     freq_head_rel = {}
     freq_rel_dep = {}
     
-    for row in cursor:
-        if (lemgram and (row[0] <> lemgram and row[2] <> lemgram)) or (word and not row[0].startswith(word)):
-            continue
+    # 0     1    2    3         4     5         6              7             8
+    # head, rel, dep, depextra, freq, rel_freq, head_rel_freq, dep_rel_freq, corpus
+    
+    for row in cursor_result:
+        #if (lemgram and (row[0] <> lemgram and row[2] <> lemgram)) or (word and not (row[0].startswith(word) or row[2].startswith(word))):
+        #    continue
         rels.setdefault((row[0], row[1], row[2], row[3]), {"freq": 0, "corpus": set()})
         rels[(row[0], row[1], row[2], row[3])]["freq"] += row[4]
         rels[(row[0], row[1], row[2], row[3])]["corpus"].add(row[8])
@@ -908,7 +1015,7 @@ def relations(form):
     for rel in sortedrels:
         counter.setdefault((rel[0][1], "h"), 0)
         counter.setdefault((rel[0][1], "d"), 0)
-        if lemgram and rel[0][0] == lemgram:
+        if search_type == "lemgram" and rel[0][0] == word:
             counter[(rel[0][1], "h")] += 1
             if counter[(rel[0][1], "h")] > maxresults:
                 continue
@@ -963,11 +1070,13 @@ def relations_sentences(form):
     querystarttime = time.time()
 
     conn = MySQLdb.connect(host = "localhost",
-                           user = "",
-                           passwd = "",
-                           db = "")
+                           user = DBUSER,
+                           passwd = DBPASSWORD,
+                           db = DBNAME)
     cursor = conn.cursor()
+    cursor.execute("SET @@session.long_query_time = 1000;")
     selects = []
+    counts = []
     
     head_sql = conn.escape(head).decode("utf-8")
     dep_sql = conn.escape(dep).decode("utf-8")
@@ -975,32 +1084,43 @@ def relations_sentences(form):
     rel_sql = conn.escape(rel).decode("utf-8")
     
     for corpus in corpora:
-        selects.append(u"""(SELECT sentences, %s as corpus FROM """ % conn.string_literal(corpus.upper()) + DBTABLE + u"_" + corpus.upper() + (u""" WHERE head = %s AND dep = %s AND depextra = %s AND rel = %s""" % (head_sql, dep_sql, depextra_sql, rel_sql)) + u")")
-    sql = u" UNION ALL ".join(selects)
+        corpus_table = DBTABLE + "_" + corpus.upper()
+        corpus_table_sentences = DBTABLE + "_" + corpus.upper() + "_sentences"
+        
+        where = u" WHERE " + corpus_table_sentences + u".id = " + corpus_table + u".id AND " + \
+                corpus_table + (u'.head=%s AND ' % head_sql) + \
+                corpus_table + (u'.rel=%s AND ' % rel_sql) + \
+                corpus_table + (u'.dep=%s AND ' % dep_sql) + \
+                corpus_table + (u'.depextra=%s ' % depextra_sql)
+        
+        selects.append(u"(SELECT " + corpus_table_sentences + u".sentence, " + corpus_table_sentences + u".start, " + corpus_table_sentences + u".end, " + \
+                       conn.string_literal(corpus.upper()) + u" AS corpus FROM " + corpus_table_sentences + u", " + corpus_table + \
+                       where + \
+                       u")"
+                       )
+        counts.append(u"(SELECT " + conn.string_literal(corpus.upper()) + u" AS corpus, COUNT(*) FROM " + corpus_table + u", " + corpus_table_sentences + where + u")")
+    
+    sql_count = u" UNION ALL ".join(counts)
+    cursor.execute(sql_count)
+    
+    corpus_hits = {}
+    for row in cursor:
+        corpus_hits[row[0]] = int(row[1])
+    
+    sql = u" UNION ALL ".join(selects) + (u" LIMIT %d, %d" % (start, end-1))
     cursor.execute(sql)
     
     querytime = time.time() - querystarttime
-   
-    counter = 0
     corpora_dict = {}
-    sids = {}
-    total_hits = 0
-    corpus_hits = {}
     for row in cursor:
-        ids = [s.split(":") for s in row[0].split(";")]
-        total_hits += len(ids)
-        corpus_hits[row[1]] = len(ids)
-        for s in ids:
-            if counter >= start and counter <= end:
-                sids.setdefault(s[0], []).append(s[1:3])
-                corpora_dict.setdefault(row[1], {}).setdefault(s[0], []).append(s[1:3])
-            if counter > end:
-                break
-            counter += 1
+        # 0 sentence, 1 start, 2 end, 3 corpus
+        corpora_dict.setdefault(row[3], {}).setdefault(row[0], []).append((row[1], row[2]))
 
     cursor.close()
+    
+    total_hits = sum(corpus_hits.values())
 
-    if not sids:
+    if not corpora_dict:
         return {"hits": 0}
     
     cqpstarttime = time.time()
@@ -1147,7 +1267,7 @@ def runCQP(command, form, executable=CQP_EXECUTABLE, registry=CWB_REGISTRY, attr
         error = re.sub(r"^CQP Error: *", r"", error)
         error = re.sub(r" *(CQP Error:).*$", r"", error)
         # Ignore certain errors: 1) "show +attr" for unknown attr, 2) querying unknown structural attribute, 3) calculating statistics for empty results
-        if not (attr_ignore and "No such attribute:" in error) and not "is not defined for corpus" in error and not "cl->range && cl->size > 0" in error:
+        if not (attr_ignore and "No such attribute:" in error) and not "is not defined for corpus" in error and not "cl->range && cl->size > 0" in error and not "neither a positional/structural attribute" in error:
             raise CQPError(error)
     for line in reply.splitlines():
         # TODO: Current version of CQP can't handle extremely long sentences.
@@ -1202,11 +1322,14 @@ def print_object(obj, form):
     if callback: print callback + "(",
     try:
         indent = int(form.get("indent"))
-        print json.dumps(obj, sort_keys=True, indent=indent),
+        out = json.dumps(obj, sort_keys=True, indent=indent)
+        out = out[1:-1] if form.get("incremental", "").lower() == "true" else out
+        print out,
     except:
-        print json.dumps(obj, separators=(",",":"))
+        out = json.dumps(obj, separators=(",",":"))
+        out = out[1:-1] if form.get("incremental", "").lower() == "true" else out
+        print out,
     if callback: print ")",
-    print
 
 if __name__ == "__main__":
     main()
