@@ -66,7 +66,7 @@ RIGHT_DELIM = ":::---"
 
 # Regular expressions for parsing CGI parameters
 IS_NUMBER = re.compile(r"^\d+$")
-IS_IDENT = re.compile(r"^[\w\-,]+$")
+IS_IDENT = re.compile(r"^[\w\-,|]+$")
 
 QUERY_DELIM = ","
 
@@ -278,6 +278,13 @@ def query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
         if not ":" in context:
             raise ValueError("Malformed value for key 'context'.")
         context = dict(x.split(":") for x in context.split(","))
+    
+    # Handle aligned corpora
+    if "|" in corpus:
+        linked = corpus.split("|")
+        cqp = cqp.replace("<LINKED_CORPUS>", linked[1])
+        corpus = linked[0]
+        shown.add(linked[1].lower())
     
     # Sorting
     sort = form.get("sort")
