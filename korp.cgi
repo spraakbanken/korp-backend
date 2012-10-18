@@ -4,6 +4,8 @@
 korp.cgi is a CGI interface for querying the corpora that are available on the server.
 
 Currently it acts as a wrapper for the CQP querying language of Corpus Workbench.
+
+http://spraakbanken.gu.se/korp/
 """
 
 from subprocess import Popen, PIPE
@@ -19,6 +21,7 @@ import re
 import json
 import MySQLdb
 import zlib
+import urllib, urllib2, base64, md5
 
 ######################################################################
 # These variables could be changed depending on the corpus server
@@ -46,15 +49,19 @@ DBTABLE = "relations"
 DBUSER = ""
 DBPASSWORD = ""
 
+# URL to authorization server
+AUTH_SERVER = ""
+AUTH_SECRET = ""
+
 ######################################################################
 # These variables should probably not need to be changed
 
 # The version of this script
-KORP_VERSION = "1.18"
+KORP_VERSION = "2.0"
 
 # The available CGI commands; for each command there must be a function
 # with the same name, taking one argument (the CGI form)
-COMMANDS = "info query count relations relations_sentences lemgram_count".split()
+COMMANDS = "info query count relations relations_sentences lemgram_count timespan authenticate".split()
 
 def default_command(form):
     return "query" if "cqp" in form else "info"
@@ -96,7 +103,7 @@ def main():
     
     if incremental:
         print "{"
-    
+            
     command = form.get("command")
     if not command:
         command = default_command(form)
@@ -144,7 +151,7 @@ def general_info(form):
 
 
 def corpus_info(form):
-    """Return information about a specific corpus.
+    """Return information about a specific corpus or corpora.
     """
     assert_key("corpus", form, IS_IDENT, True)
     
@@ -206,7 +213,7 @@ def query_optimize(cqp, cqpextra):
         """
     
     q, rest = parse_cqp(cqp)
-    expand = cqpextra.get("within", "sentence")
+    expand = cqpextra.get("within")
     
     leading_wildcards = False
     # Remove leading and trailing wildcards since they will only slow us down
@@ -217,7 +224,7 @@ def query_optimize(cqp, cqpextra):
         del q[-1]
     
     # Determine if this query may not benefit from optimization
-    if len(q) == 0 or (len(q) == 1 and not leading_wildcards) or rest or not "within" in cqpextra:
+    if len(q) == 0 or (len(q) == 1 and not leading_wildcards) or rest or not expand:
         return make_query(make_cqp(cqp, cqpextra))
     
     cmd = ["MU"]
@@ -272,12 +279,20 @@ def query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
     
     # Context
     defaultcontext = form.get("defaultcontext", "10 words")
-    
     context = form.get("context", {})
     if context:
         if not ":" in context:
             raise ValueError("Malformed value for key 'context'.")
         context = dict(x.split(":") for x in context.split(","))
+    
+    # Within
+    defaultwithin = form.get("defaultwithin", "")
+    within = form.get("within", defaultwithin)
+    if within:
+        if ":" in within:
+            within = dict(x.split(":") for x in within.split(","))
+            within = within.get(corpus, defaultwithin)
+        cqpextra["within"] = within
     
     # Handle aligned corpora
     if "|" in corpus:
@@ -504,6 +519,9 @@ def query(form):
        (default: no within)
      - cut: set cutoff threshold to reduce the size of the result
        (default: no cutoff)
+     - sort: sort the results by keyword ('keyword'), left context ('left) or right context ('right')
+       (default: no sorting)
+     - incremental: returns the result incrementally instead of all at once
     """
     assert_key("cqp", form, r"", True)
     assert_key("corpus", form, IS_IDENT, True)
@@ -512,9 +530,10 @@ def query(form):
     #assert_key("context", form, r"^\d+ [\w-]+$")
     assert_key("show", form, IS_IDENT)
     assert_key("show_struct", form, IS_IDENT)
-    assert_key("within", form, IS_IDENT)
+    #assert_key("within", form, IS_IDENT)
     assert_key("cut", form, IS_NUMBER)
-    assert_key("sort", form, IS_IDENT)
+    assert_key("sort", form, r"(left|keyword|right)")
+    assert_key("incremental", form, r"(true|false)")
 
     ############################################################################
     # First we read all CGI parameters and translate them to CQP
@@ -525,6 +544,8 @@ def query(form):
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
     corpora = sorted(set(corpora))
+    
+    check_authentication(corpora)
 
     shown = form.get("show", [])
     if isinstance(shown, basestring):
@@ -544,6 +565,7 @@ def query(form):
 
     cqp = form.get("cqp").decode("utf-8")
     cqpextra = {}
+
     if "within" in form:
         cqpextra["within"] = form.get("within")
     if "cut" in form:
@@ -681,8 +703,26 @@ def query(form):
 
 def count_query_worker(corpus, cqp, groupby, ignore_case, form):
 
+    optimize = True
+    cqpextra = {}
+    
+    if "cut" in form:
+        cqpextra["cut"] = form.get("cut")
+
+    # Within
+    defaultwithin = form.get("defaultwithin", "")
+    within = form.get("within", defaultwithin)
+    if within:
+        if ":" in within:
+            within = dict(x.split(":") for x in within.split(","))
+            within = within.get(corpus, defaultwithin)
+        cqpextra["within"] = within
+
     cmd = ["%s;" % corpus]
-    cmd += make_query(cqp)
+    if optimize:
+        cmd += query_optimize(cqp, cqpextra)
+    else:
+        cmd += make_query(make_cqp(cqp, cqpextra))
     cmd += ["size Last;"]
     cmd += ["info; .EOL.;"]
     cmd += ["""tabulate Last %s > "| sort | uniq -c | sort -nr";""" % ", ".join("match .. matchend %s%s" % (g, " %c" if g in ignore_case else "") for g in groupby)]
@@ -713,18 +753,23 @@ def count(form):
     The required parameters are
      - corpus: the CWB corpus
      - cqp: the CQP query string
-     - groupby: add once for each corpus positional attribute
+     - groupby: add once for each corpus positional or structural attribute
 
     The optional parameters are
      - within: only search for matches within the given s-attribute (e.g., within a sentence)
        (default: no within)
      - cut: set cutoff threshold to reduce the size of the result
        (default: no cutoff)
+     - ignore_case: changes all values of the selected attribute to lower case
+     - incremental: incrementally report the progress while executing
+       (default: false)
     """
     assert_key("cqp", form, r"", True)
     assert_key("corpus", form, IS_IDENT, True)
     assert_key("groupby", form, IS_IDENT, True)
     assert_key("cut", form, IS_NUMBER)
+    assert_key("ignore_case", form, IS_IDENT)
+    assert_key("incremental", form, r"(true|false)")
     
     incremental = form.get("incremental", "").lower() == "true"
 
@@ -732,6 +777,8 @@ def count(form):
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
     corpora = set(corpora)
+    
+    check_authentication(corpora)
     
     groupby = form.get("groupby")
     if isinstance(groupby, basestring):
@@ -746,10 +793,6 @@ def count(form):
     end = int(form.get("end", -1))
     
     cqp = form.get("cqp").decode("utf-8")
-    if "within" in form:
-        cqp += " within %s" % form.get("within")
-    if "cut" in form:
-        cqp += " cut %s" % form.get("cut")
 
     result = {"corpora": {}}
     total_stats = {"absolute": defaultdict(int),
@@ -835,13 +878,28 @@ def count(form):
 
 
 def lemgram_count(form):
+    """Returns lemgram statistics per corpus.
+
+    The required parameters are
+     - lemgram: list of lemgrams
+
+    The optional parameters are
+     - corpus: the CWB corpus/corpora
+       (default: all corpora)
+     - count: what to count (lemgram/prefix/suffix)
+       (default: lemgram)
+    """
 
     assert_key("lemgram", form, r"", True)
+    assert_key("corpus", form, IS_IDENT)
+    assert_key("count", form, r"(lemgram|prefix|suffix)")
     
     corpora = form.get("corpus")
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
     corpora = set(corpora) if corpora else set()
+    
+    check_authentication(corpora)
     
     lemgram = form.get("lemgram")
     if isinstance(lemgram, basestring):
@@ -854,8 +912,8 @@ def lemgram_count(form):
     count = set(count)
        
     counts = {"lemgram": "freq",
-              "prefix": "freqprefix",
-              "suffix": "freqsuffix"}
+              "prefix": "freq_prefix",
+              "suffix": "freq_suffix"}
     
     sums = " + ".join("SUM(%s)" % counts[c] for c in count)
     
@@ -882,18 +940,203 @@ def lemgram_count(form):
     
     return result
 
+def timespan(form):
+    """Calculates timespan information for corpora.
+
+    The required parameters are
+     - corpus: the CWB corpus/corpora
+
+    The optional parameters are
+     - granularity: granularity of result (y = year, m = month, d = day)
+       (default: year)
+     - spans: give results as spans instead of points
+       (default: points)
+     - combined: combine results
+       (default: results per corpus)
+    """
+    
+    assert_key("corpus", form, IS_IDENT, True)
+    assert_key("granularity", form, r"[ymdYMD]")
+    assert_key("spans", form, r"(true|false)")
+    assert_key("combined", form, r"(true|false)")
+    
+    import datetime
+    from dateutil.relativedelta import relativedelta
+
+    def strftime(dt, fmt):
+        """Python datetime.strftime < 1900 workaround, taken from https://gist.github.com/2000837"""
+
+        if dt.year < 1900:
+            # create a copy of this datetime, just in case, then set the year to
+            # something acceptable, then replace that year in the resulting string
+            tmp_dt = datetime.datetime(datetime.MAXYEAR, dt.month, dt.day,
+                                      dt.hour, dt.minute,
+                                      dt.second, dt.microsecond,
+                                      dt.tzinfo)
+            
+            if re.search('(?<!%)((?:%%)*)(%y)', fmt):
+                util.log.warning("Using %y time format with year prior to 1900 could produce unusual results!")
+            
+            tmp_fmt = fmt
+            tmp_fmt = re.sub('(?<!%)((?:%%)*)(%y)', '\\1\x11\x11', tmp_fmt, re.U)
+            tmp_fmt = re.sub('(?<!%)((?:%%)*)(%Y)', '\\1\x12\x12\x12\x12', tmp_fmt, re.U)
+            tmp_fmt = tmp_fmt.replace(str(datetime.MAXYEAR), '\x13\x13\x13\x13')
+            tmp_fmt = tmp_fmt.replace(str(datetime.MAXYEAR)[-2:], '\x14\x14')
+            
+            result = tmp_dt.strftime(tmp_fmt)
+            
+            if '%c' in fmt:
+                # local datetime format - uses full year but hard for us to guess where.
+                result = result.replace(str(datetime.MAXYEAR), str(dt.year))
+            
+            result = result.replace('\x11\x11', str(dt.year)[-2:])
+            result = result.replace('\x12\x12\x12\x12', str(dt.year))
+            result = result.replace('\x13\x13\x13\x13', str(datetime.MAXYEAR))
+            result = result.replace('\x14\x14', str(datetime.MAXYEAR)[-2:])
+                
+            return result
+            
+        else:
+            return dt.strftime(fmt)
+
+    def plusminusone(date, value, df, negative=False):
+        d = datetime.datetime.strptime(str(date), df)
+        if negative:
+            d = d - value
+        else:
+            d = d + value
+        return int(strftime(d, df))
+
+    def shorten(date, g):
+        gs = {"y": 4, "m": 6, "d": 8, "h": 10, "n": 12, "s": 14}
+        return int(str(date)[:gs[g]])
+   
+    corpora = form.get("corpus")
+    if isinstance(corpora, basestring):
+        corpora = corpora.split(QUERY_DELIM)
+    corpora = set(corpora)
+    
+    #check_authentication(corpora)
+
+    granularity = form.get("granularity", "y").lower()
+    points = False if form.get("spans", "").lower() == "true" else True
+    combined = True if form.get("combined", "").lower() == "true" else False
+        
+    if granularity == "y":
+        df = "%Y"
+        add = relativedelta(years=1)
+    elif granularity == "m":
+        df = "%Y%m"
+        add = relativedelta(months=1)
+    elif granularity == "d":
+        df = "%Y%m%d"
+        add = relativedelta(days=1)
+    elif granularity == "h":
+        df = "%Y%m%d%H"
+        add = relativedelta(hours=1)
+    elif granularity == "n":
+        df = "%Y%m%d%H%M"
+        add = relativedelta(minutes=1)
+    elif granularity == "s":
+        df = "%Y%m%d%H%M%S"
+        add = relativedelta(seconds=1)
+    
+    conn = MySQLdb.connect(host = "localhost",
+                           user = DBUSER,
+                           passwd = DBPASSWORD,
+                           db = DBNAME,
+                           use_unicode = True,
+                           charset = "utf8")
+    cursor = conn.cursor()
+    
+    corpora_sql = "(%s)" % ", ".join("%s" % conn.escape(c) for c in corpora)
+    sql = "SELECT corpus, datefrom, dateto, tokens FROM timespans WHERE corpus IN " + corpora_sql + ";"
+    
+    result = defaultdict(int)
+    cursor.execute(sql)
+
+    rows = defaultdict(list)
+    nodes = defaultdict(set)
+
+    for row in cursor:
+        corpus = row[0]
+        datefrom = shorten(row[1], granularity) if not row[1] == "" else ""
+        dateto = shorten(row[2], granularity) if not row[2] == "" else ""
+        tokens = row[3]
+
+        r = {"datefrom": datefrom, "dateto": dateto, "corpus": corpus, "tokens": tokens}
+        if combined: corpus = "combined"
+        rows[corpus].append(r)
+        nodes[corpus].add(("f", datefrom))
+        nodes[corpus].add(("t", dateto))
+    
+    corpusnodes = dict((k, sorted(v, key=lambda x: (x[1], x[0]))) for k, v in nodes.iteritems())
+    result = {}
+    
+    for corpus, nodes in corpusnodes.iteritems():
+        result[corpus] = defaultdict(int)
+    
+        for i in range(0, len(nodes) - 1):
+            start = nodes[i]
+            end = nodes[i + 1]
+            if start[0] == "t":
+                start = plusminusone(start[1], add, df) if not start == "" else ""
+                if start == end[1] and end[0] == "f":
+                    continue
+            else:
+                start = start[1]
+            if end[1] == "":
+                end = ""
+            else:
+                end = end[1] if end[0] == "t" else plusminusone(end[1], add, df, True)
+            
+            if points and not start == "":
+                result[corpus]["%d" % start] = 0
+                
+            for row in rows[corpus]:
+                if row["datefrom"] <= start and row["dateto"] >= end:
+                    if points:
+                        result[corpus][str(start)] += row["tokens"]
+                    else:
+                        result[corpus]["%d - %d" % (start, end) if start else ""] += row["tokens"]
+            if points and not end == "":
+                result[corpus]["%d" % plusminusone(end, add, df, False)] = 0
+    
+    return result
+
 def relations(form):
+    """Calculates word picture data.
+
+    The required parameters are
+     - corpus: the CWB corpus/corpora
+     - word: a word or lemgram to lookup
+
+    The optional parameters are
+     - min: cut off results with a frequency lower than this
+       (default: no cut-off)
+     - max: maximum number of results
+       (default: 15)
+     - type: type of search (word/lemgram)
+       (default: word)
+     - incremental: incrementally report the progress while executing
+       (default: false)
+    """
 
     import math
 
     assert_key("corpus", form, IS_IDENT, True)
+    assert_key("word", form, "", True)
+    assert_key("type", form, r"(word|lemgram)", False)
     assert_key("min", form, IS_NUMBER, False)
     assert_key("max", form, IS_NUMBER, False)
+    assert_key("incremental", form, r"(true|false)")
     
     corpora = form.get("corpus")
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
     corpora = set(corpora)
+    
+    check_authentication(corpora)
     
     incremental = form.get("incremental", "").lower() == "true"
     
@@ -904,9 +1147,6 @@ def relations(form):
     maxresults = form.get("max", 15)
     maxresults = int(maxresults)
     minfreqsql = " AND freq >= %s" % minfreq if minfreq else ""
-    
-    assert word, "lemgram or word missing"
-    assert search_type in ("lemgram", "word", ""), "illegal type"
     
     result = {}
 
@@ -934,21 +1174,21 @@ def relations(form):
         
         for corpus in corpora:
             corpus_table = DBTABLE + "_" + corpus.upper()
-            columns1 = ", ".join([corpus_table + "." + x for x in columns])
-            columns2 = corpus_table + "_rel.freq as rel_freq"
-            columns3 = corpus_table + "_head_rel.freq as head_rel_freq"
-            columns4 = corpus_table + "_dep_rel.freq as dep_rel_freq"
+            columns1 = ", ".join(["`" + corpus_table + "`." + x for x in columns])
+            columns2 = "`" + corpus_table + "_rel`.freq as rel_freq"
+            columns3 = "`" + corpus_table + "_head_rel`.freq as head_rel_freq"
+            columns4 = "`" + corpus_table + "_dep_rel`.freq as dep_rel_freq"
             
             selects.append((corpus.upper(), u"(SELECT " + columns1 + ", " + columns2 + ", " + columns3 + ", " + columns4 + u", " + conn.string_literal(corpus.upper()) + u" as corpus " + \
-                           u"FROM " + corpus_table + ", " + corpus_table + "_rel, " + corpus_table + "_head_rel, " + corpus_table + "_dep_rel "
-                           u"WHERE (" + corpus_table + ".head = " + lemgram_sql + u" COLLATE utf8_bin OR " + corpus_table + ".dep = " + lemgram_sql + " COLLATE utf8_bin" + u") " + \
-                           minfreqsql + " AND " + corpus_table + ".wf = 0 " + \
-                           u"AND " + corpus_table + u".rel = " + corpus_table + "_rel.rel " + \
-                           u"AND " + corpus_table + ".head = " + corpus_table + "_head_rel.head " + \
-                           u"AND " + corpus_table + ".rel = " + corpus_table + "_head_rel.rel " + \
-                           u"AND " + corpus_table + ".dep = " + corpus_table + "_dep_rel.dep " + \
-                           u"AND " + corpus_table + ".depextra = " + corpus_table + "_dep_rel.depextra " + \
-                           u"AND " + corpus_table + ".rel = " + corpus_table + "_dep_rel.rel)"))
+                           u"FROM `" + corpus_table + "`, `" + corpus_table + "_rel`, `" + corpus_table + "_head_rel`, `" + corpus_table + "_dep_rel` " + \
+                           u"WHERE (`" + corpus_table + "`.head = " + lemgram_sql + u" COLLATE utf8_bin OR `" + corpus_table + "`.dep = " + lemgram_sql + " COLLATE utf8_bin" + u") " + \
+                           minfreqsql + " AND `" + corpus_table + "`.wf = 0 " + \
+                           u"AND `" + corpus_table + u"`.rel = `" + corpus_table + "_rel`.rel " + \
+                           u"AND `" + corpus_table + u"`.head = `" + corpus_table + "_head_rel`.head " + \
+                           u"AND `" + corpus_table + u"`.rel = `" + corpus_table + "_head_rel`.rel " + \
+                           u"AND `" + corpus_table + u"`.dep = `" + corpus_table + "_dep_rel`.dep " + \
+                           u"AND `" + corpus_table + u"`.depextra = `" + corpus_table + "_dep_rel`.depextra " + \
+                           u"AND `" + corpus_table + u"`.rel = `" + corpus_table + "_dep_rel`.rel)"))
     else:
         suffixes = ("_VB", "_NN", "_JJ", "_PP")
         words = []
@@ -960,21 +1200,21 @@ def relations(form):
         
         for corpus in corpora:
             corpus_table = DBTABLE + "_" + corpus.upper()
-            columns1 = ", ".join([corpus_table + "." + x for x in columns])
-            columns2 = corpus_table + "_rel.freq as rel_freq"
-            columns3 = corpus_table + "_head_rel.freq as head_rel_freq"
-            columns4 = corpus_table + "_dep_rel.freq as dep_rel_freq"
+            columns1 = ", ".join(["`" + corpus_table + "`." + x for x in columns])
+            columns2 = "`" + corpus_table + "_rel`.freq as rel_freq"
+            columns3 = "`" + corpus_table + "_head_rel`.freq as head_rel_freq"
+            columns4 = "`" + corpus_table + "_dep_rel`.freq as dep_rel_freq"
     
             selects.append((corpus.upper(), u"(SELECT " + columns1 + ", " + columns2 + ", " + columns3 + ", " + columns4 + u", " + conn.string_literal(corpus.upper()) + u" AS corpus " + \
-                           u"FROM " + corpus_table + ", " + corpus_table + "_rel, " + corpus_table + "_head_rel, " + corpus_table + "_dep_rel "
-                           u"WHERE ((" + corpus_table + ".head IN " + words_list + u" AND NOT " + corpus_table + ".wf = 2) OR (" + corpus_table + ".dep IN " + words_list + " AND NOT " + corpus_table + ".wf = 1)) " + \
+                           u"FROM `" + corpus_table + "`, `" + corpus_table + "_rel`, `" + corpus_table + "_head_rel`, `" + corpus_table + "_dep_rel` "
+                           u"WHERE ((`" + corpus_table + "`.head IN " + words_list + u" AND NOT `" + corpus_table + "`.wf = 2) OR (`" + corpus_table + "`.dep IN " + words_list + " AND NOT `" + corpus_table + "`.wf = 1)) " + \
                            minfreqsql + \
-                           u"AND " + corpus_table + u".rel = " + corpus_table + "_rel.rel " + \
-                           u"AND " + corpus_table + ".head = " + corpus_table + "_head_rel.head " + \
-                           u"AND " + corpus_table + ".rel = " + corpus_table + "_head_rel.rel " + \
-                           u"AND " + corpus_table + ".dep = " + corpus_table + "_dep_rel.dep " + \
-                           u"AND " + corpus_table + ".depextra = " + corpus_table + "_dep_rel.depextra " + \
-                           u"AND " + corpus_table + ".rel = " + corpus_table + "_dep_rel.rel)"))
+                           u"AND `" + corpus_table + u"`.rel = `" + corpus_table + "_rel`.rel " + \
+                           u"AND `" + corpus_table + u"`.head = `" + corpus_table + "_head_rel`.head " + \
+                           u"AND `" + corpus_table + u"`.rel = `" + corpus_table + "_head_rel`.rel " + \
+                           u"AND `" + corpus_table + u"`.dep = `" + corpus_table + "_dep_rel`.dep " + \
+                           u"AND `" + corpus_table + u"`.depextra = `" + corpus_table + "_dep_rel`.depextra " + \
+                           u"AND `" + corpus_table + u"`.rel = `" + corpus_table + "_dep_rel`.rel)"))
     
     cursor_result = []
     if incremental:
@@ -1048,12 +1288,28 @@ def relations(form):
 
 
 def relations_sentences(form):
+    """Executes a CQP query to find sentences with a given relation from a word picture.
+
+    The required parameters are
+     - corpus: the CWB corpus/corpora
+     - head: head of relation
+     - rel: relation
+
+    The optional parameters are
+     - dep: dependent of relation
+     - depextra: dependent prefix
+     - start, end: which result rows that should be returned
+     - show
+     - show_struct
+    """
+
     from copy import deepcopy
     
     assert_key("corpus", form, IS_IDENT, True)
     assert_key("head", form, "", True)
-    #assert_key("dep", form, "", True)
     assert_key("rel", form, "", True)
+    assert_key("dep", form, "", False)
+    assert_key("depextra", form, "", False)
     assert_key("start", form, IS_NUMBER, False)
     assert_key("end", form, IS_NUMBER, False)
     
@@ -1061,6 +1317,8 @@ def relations_sentences(form):
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
     corpora = sorted(set(corpora))
+    
+    check_authentication(corpora)
     
     head = form.get("head")
     dep = form.get("dep", "")
@@ -1094,18 +1352,18 @@ def relations_sentences(form):
         corpus_table = DBTABLE + "_" + corpus.upper()
         corpus_table_sentences = DBTABLE + "_" + corpus.upper() + "_sentences"
         
-        where = u" WHERE " + corpus_table_sentences + u".id = " + corpus_table + u".id AND " + \
-                corpus_table + (u'.head=%s AND ' % head_sql) + \
-                corpus_table + (u'.rel=%s AND ' % rel_sql) + \
-                corpus_table + (u'.dep=%s AND ' % dep_sql) + \
-                corpus_table + (u'.depextra=%s ' % depextra_sql)
+        where = u" WHERE `" + corpus_table_sentences + u"`.id = `" + corpus_table + u"`.id AND " + \
+                "`" + corpus_table + (u'`.head=%s AND ' % head_sql) + \
+                "`" + corpus_table + (u'`.rel=%s AND ' % rel_sql) + \
+                "`" + corpus_table + (u'`.dep=%s AND ' % dep_sql) + \
+                "`" + corpus_table + (u'`.depextra=%s ' % depextra_sql)
         
-        selects.append(u"(SELECT " + corpus_table_sentences + u".sentence, " + corpus_table_sentences + u".start, " + corpus_table_sentences + u".end, " + \
-                       conn.string_literal(corpus.upper()) + u" AS corpus FROM " + corpus_table_sentences + u", " + corpus_table + \
+        selects.append(u"(SELECT `" + corpus_table_sentences + u"`.sentence, `" + corpus_table_sentences + u"`.start, `" + corpus_table_sentences + u"`.end, " + \
+                       conn.string_literal(corpus.upper()) + u" AS corpus FROM `" + corpus_table_sentences + u"`, `" + corpus_table + "`" + \
                        where + \
                        u")"
                        )
-        counts.append(u"(SELECT " + conn.string_literal(corpus.upper()) + u" AS corpus, COUNT(*) FROM " + corpus_table + u", " + corpus_table_sentences + where + u")")
+        counts.append(u"(SELECT " + conn.string_literal(corpus.upper()) + u" AS corpus, COUNT(*) FROM `" + corpus_table + u"`, `" + corpus_table_sentences + "`" + where + u")")
     
     sql_count = u" UNION ALL ".join(counts)
     cursor.execute(sql_count)
@@ -1254,6 +1512,10 @@ class CQPError(Exception):
     pass
 
 
+class KorpAuthenticationError(Exception):
+    pass
+
+
 def runCQP(command, form, executable=CQP_EXECUTABLE, registry=CWB_REGISTRY, attr_ignore=False):
     """Call the CQP binary with the given command, and the CGI form.
     Yield one result line at the time, disregarding empty lines.
@@ -1317,6 +1579,8 @@ def print_header():
     """Prints the JSON header."""
     print "Content-Type: application/json"
     print "Access-Control-Allow-Origin: *"
+    print "Access-Control-Allow-Methods: GET, POST"
+    print "Access-Control-Allow-Headers: Authorization"
     print
 
 
@@ -1338,5 +1602,50 @@ def print_object(obj, form):
         print out,
     if callback: print ")",
 
+
+def authenticate(_=None):
+    """Authenticates a user against an authentication server.
+    """
+    
+    auth_header = cgi.os.environ.get('HTTP_AUTH_HEADER')
+
+    if auth_header and auth_header.startswith("Basic "):
+        user, pw = base64.b64decode(auth_header[6:]).split(":")
+
+        postdata = {
+            "username": user,
+            "password": pw,
+            "checksum": md5.new(user + pw + AUTH_SECRET).hexdigest()
+        }
+
+        try:
+            contents = urllib2.urlopen(AUTH_SERVER, urllib.urlencode(postdata)).read()
+            auth_response = json.loads(contents)
+        except urllib2.HTTPError:
+            raise KorpAuthenticationError("Could not contact authentication server.")
+        except ValueError:
+            raise KorpAuthenticationError("Invalid response from authentication server.")
+        except:
+            raise KorpAuthenticationError("Unexpected error during authentication.")
+        
+        if auth_response["authenticated"]:
+            return {"corpora": ["GSLC" if x == "MINISUC" else x for x in auth_response["permitted_resources"]["corpora"]]}
+
+    return {}
+
+
+def check_authentication(corpora):
+    """Takes a list of corpora, and if any of them are protected, runs authentication.
+    Raises an error if authentication fails."""
+    
+    with open("protected.txt") as infile:
+        protected = [x.strip() for x in infile.readlines()]
+    c = filter(lambda x: x.upper() in protected, corpora)
+    if c:
+        auth = authenticate()
+        if not auth:
+            raise KorpAuthenticationError("You do not have access to the following corpora: %s" % ", ".join(c))
+
 if __name__ == "__main__":
     main()
+
