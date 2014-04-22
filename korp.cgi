@@ -25,6 +25,7 @@ import urllib, urllib2, base64, md5
 from Queue import Queue, Empty
 import threading
 import ast
+import itertools
 
 ################################################################################
 # These variables could be changed depending on the corpus server
@@ -43,7 +44,7 @@ CQP_ENCODING = "UTF-8"
 MAX_KWIC_ROWS = 0
 
 # Number of threads to use during parallel processing
-PARALLEL_THREADS = 6
+PARALLEL_THREADS = 3
 
 # The name of the MySQL database and table prefix
 DBNAME = ""
@@ -51,6 +52,10 @@ DBTABLE = "relations"
 # Username and password for database access
 DBUSER = ""
 DBPASSWORD = ""
+
+# Part-of-speech suffixes used in the Word Picture database
+# TODO: Remove once database upgraded
+REL_SUFFIXES = ("_VB", "_NN", "_JJ", "_PP", "_AB")
 
 # URL to authentication server
 AUTH_SERVER = ""
@@ -67,11 +72,11 @@ CACHE_DIR = ""
 # These variables should probably not need to be changed
 
 # The version of this script
-KORP_VERSION = "2.31"
+KORP_VERSION = "2.35"
 
 # The available CGI commands; for each command there must be a function
 # with the same name, taking one argument (the CGI form)
-COMMANDS = "info query count relations relations_sentences lemgram_count timespan authenticate count_time optimize loglike".split()
+COMMANDS = "info query count relations relations_sentences lemgram_count timespan authenticate count_time optimize loglike query_sample".split()
 
 def default_command(form):
     return "query" if "cqp" in form else "info"
@@ -104,12 +109,17 @@ def main():
     starttime = time.time()
     sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0) # Open unbuffered stdout
     print_header()
+
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
     
     # Convert form fields to regular dictionary
     form_raw = cgi.FieldStorage()
     form = dict((field, form_raw.getvalue(field)) for field in form_raw.keys())
     
     incremental = form.get("incremental", "").lower() == "true"
+    callback = form.get("callback")
+    if callback: print callback + "(",
     
     if incremental:
         print "{"
@@ -144,6 +154,7 @@ def main():
     if incremental:
         print "}"
 
+    if callback: print ")",
 
 ################################################################################
 # INFO
@@ -164,7 +175,12 @@ def general_info(form):
     """
     corpora = runCQP("show corpora;", form)
     version = corpora.next()
-    return {"cqp-version": version, "corpora": list(corpora)}
+    
+    if PROTECTED_FILE:
+        with open(PROTECTED_FILE) as infile:
+            protected = [x.strip() for x in infile.readlines()]
+    
+    return {"cqp-version": version, "corpora": list(corpora), "protected_corpora": protected}
 
 
 def corpus_info(form):
@@ -210,7 +226,7 @@ def corpus_info(form):
                 info[infokey] = infoval
                 if infokey == "Size":
                     total_size += int(infoval)
-                elif infokey == "Sentences":
+                elif infokey == "Sentences" and infoval.isdigit():
                     total_sentences += int(infoval)
 
         result["corpora"][corpus] = {"attrs": attrs, "info": info}
@@ -226,6 +242,29 @@ def corpus_info(form):
 ################################################################################
 # QUERY
 ################################################################################
+
+def query_sample(form):
+    import random
+    
+    corpora = form.get("corpus")
+    if isinstance(corpora, basestring):
+        corpora = corpora.split(QUERY_DELIM)
+    corpora = list(set(corpora))
+    # Randomize corpus order
+    random.shuffle(corpora)
+    
+    for i in range(len(corpora)):
+        corpus = corpora[i]
+        check_authentication([corpus])
+        
+        form["corpus"] = corpus
+        form["sort"] = "random"
+        
+        result = query(form)
+        if result["hits"] > 0:
+            return result
+        
+    return result
 
 def query(form):
     """Perform a CQP query and return a number of matches.
@@ -267,6 +306,7 @@ def query(form):
     # First we read all CGI parameters and translate them to CQP
     
     incremental = form.get("incremental", "").lower() == "true"
+    use_cache = not form.get("cache", "").lower() == "false"
     
     corpora = form.get("corpus")
     if isinstance(corpora, basestring):
@@ -291,6 +331,7 @@ def query(form):
     if MAX_KWIC_ROWS and end - start >= MAX_KWIC_ROWS:
         raise ValueError("At most %d KWIC rows can be returned per call." % MAX_KWIC_ROWS)
 
+    # Arguments to be added at the end of every CQP query
     cqpextra = {}
 
     if "within" in form:
@@ -301,31 +342,43 @@ def query(form):
     # TODO: Sorting alphabetically, not numerically, leading to wrong order for cqp10 and above
     cqp = [form.get(key).decode("utf-8") for key in sorted(form.keys()) if key.startswith("cqp")]
 
+    result = {}
+
     # Calculate querydata checksum
-    checksum = querydata_checksum(cqp, cqpextra, corpora)
+    checksum = querydata_checksum(cqp, cqpextra, corpora, form)
+    if "debug" in form:
+        result["checksum"] = checksum
 
     ns = Namespace()
     ns.total_hits = 0
     statistics = {}
-    result = {}
     
     saved_statistics = {}
     saved_total_hits = 0
     saved_hits = form.get("querydata", "")
     
-    if saved_hits or (CACHE_DIR and os.path.exists(os.path.join(CACHE_DIR, checksum))):
+    if saved_hits or (use_cache and CACHE_DIR and os.path.exists(os.path.join(CACHE_DIR, checksum))):
         if not saved_hits:
             with open(os.path.join(CACHE_DIR, checksum), "r") as cachefile:
                 saved_hits = cachefile.read()
-                
-        saved_hits = zlib.decompress(saved_hits.replace("\\n", "\n").replace("-", "+").replace("_", "/").decode("base64"))
-        saved_crc32, saved_total_hits, stats_temp = saved_hits.split(";", 2)
-        checksum = querydata_checksum(cqp, cqpextra, corpora)
-        if saved_crc32 == checksum:
-            saved_total_hits = int(saved_total_hits)
-            for pair in stats_temp.split(";"):
-                c, h = pair.split(":")
-                saved_statistics[c] = int(h)
+            if "debug" in form:
+                result["using_cache"] = True
+        
+        try:
+            saved_hits = zlib.decompress(saved_hits.replace("\\n", "\n").replace("-", "+").replace("_", "/").decode("base64"))
+        except:
+            saved_hits = ""
+        
+        if saved_hits:
+            if "debug" in form and not "using_cache" in result:
+                result["using_querydata"] = True
+            saved_crc32, saved_total_hits, stats_temp = saved_hits.split(";", 2)
+            checksum = querydata_checksum(cqp, cqpextra, corpora, form)
+            if saved_crc32 == checksum:
+                saved_total_hits = int(saved_total_hits)
+                for pair in stats_temp.split(";"):
+                    c, h = pair.split(":")
+                    saved_statistics[c] = int(h)
         
     ns.start_local = start
     ns.end_local = end
@@ -345,8 +398,10 @@ def query(form):
         
         ns.progress_count = 0
         
-        # If only one corpus, it is faster to not use threads
-        if len(corpora_hits) == 1:
+        if len(corpora_hits) == 0:
+            result["kwic"] = []
+        elif len(corpora_hits) == 1:
+            # If only hits in one corpus, it is faster to not use threads
             corpus, hits = corpora_hits.items()[0]
             def anti_timeout0(queue):
                 result["kwic"], _ = query_and_parse(form, corpus, cqp, cqpextra, shown, shown_structs, hits[0], hits[1])
@@ -454,7 +509,7 @@ def query(form):
     result["corpus_order"] = corpora
     result["querydata"] = zlib.compress(checksum + ";" + str(ns.total_hits) + ";" + ";".join("%s:%d" % (c, h) for c, h in statistics.iteritems())).encode("base64").replace("+", "-").replace("/", "_")
     
-    if CACHE_DIR:
+    if use_cache and CACHE_DIR:
         #cache_filename = md5.new(checksum).hexdigest()
         with open(os.path.join(CACHE_DIR, checksum), "w") as cachefile:
             cachefile.write(result["querydata"])
@@ -920,8 +975,11 @@ def count(form):
                         
                         for i, ngram in enumerate(ngram_groups):
                             # Split value sets and treat each value as a hit
-                            if groupby[i] in split and ngram.startswith("|") and ngram.endswith("|"):
-                                ngrams = [x for x in ngram.split("|") if x]
+                            if groupby[i] in split:
+                                tokens = ngram.split(" ")
+                                split_tokens = [[x for x in token.split("|") if x] if not token == "|" else ["|"] for token in tokens]
+                                ngrams = itertools.product(*split_tokens)
+                                ngrams = [" ".join(x) for x in ngrams]
                             else:
                                 ngrams = [ngram]
                             
@@ -1454,7 +1512,7 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=False):
     """Calculates timespan information for corpora.
 
     The required parameters are
-     - corpus: the CWB corpus/corpora
+     - timedata: the time data to be processed
 
     The optional parameters are
      - granularity: granularity of result (y = year, m = month, d = day)
@@ -1611,7 +1669,7 @@ def relations(form):
      - incremental: incrementally report the progress while executing
        (default: false)
     """
-
+    
     import math
 
     assert_key("corpus", form, IS_IDENT, True)
@@ -1630,6 +1688,7 @@ def relations(form):
     
     incremental = form.get("incremental", "").lower() == "true"
     
+    use_cache = not form.get("cache", "").lower() == "false"
     word = form.get("word")
     search_type = form.get("type", "")
     minfreq = form.get("min")
@@ -1639,7 +1698,7 @@ def relations(form):
     
     checksum = str(zlib.crc32("".join(sorted(corpora)) + word + search_type + minfreqsql + sortby + str(maxresults)))
     
-    if CACHE_DIR and os.path.exists(os.path.join(CACHE_DIR, "wordpicture_" + checksum)):
+    if use_cache and CACHE_DIR and os.path.exists(os.path.join(CACHE_DIR, "wordpicture_" + checksum)):
         with open(os.path.join(CACHE_DIR, "wordpicture_" + checksum), "r") as cachefile:
             return ast.literal_eval(cachefile.read())
     
@@ -1661,56 +1720,88 @@ def relations(form):
     corpora = filter(lambda x: DBTABLE + "_" + x.upper() in tables, corpora)
     if not corpora: return {}
     
-    columns = ("head", "rel", "dep", "depextra", "freq")
     selects = []
     
+    # Identify tables in old and new format
+    corpora_old = filter(lambda x: DBTABLE + "_" + x.upper() + "_strings" not in tables, corpora)
+    corpora = filter(lambda x: DBTABLE + "_" + x.upper() + "_strings" in tables, corpora)
+    
+    # TODO: Remove all wfhead/wfdep references once frontend upgraded
     if search_type == "lemgram":
         lemgram_sql = conn.escape(word).decode("utf-8")
         
+        # Remove this once all tables are updated
+        for corpus in corpora_old:
+            columns = ("head", "rel", "dep", "depextra", "freq")
+            corpus_table = DBTABLE + "_" + corpus.upper()
+            
+            selects.append((corpus.upper(), u"(SELECT F.head as head, '' as headpos, F.rel, F.dep as dep, '' as deppos, F.depextra as depextra, F.freq, R.freq as rel_freq, HR.freq as head_rel_freq, DR.freq as dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " + \
+                           u"FROM `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " + \
+                           u"WHERE (F.head = " + lemgram_sql + u" COLLATE utf8_bin OR F.dep = " + lemgram_sql + " COLLATE utf8_bin" + u") " + \
+                           minfreqsql + " AND F.wf = 0 " + \
+                           u"AND F.rel = R.rel " + \
+                           u"AND F.head = HR.head " + \
+                           u"AND F.rel = HR.rel " + \
+                           u"AND F.dep = DR.dep " + \
+                           u"AND F.depextra = DR.depextra " + \
+                           u"AND F.rel = DR.rel)"))
+        
         for corpus in corpora:
             corpus_table = DBTABLE + "_" + corpus.upper()
-            columns1 = ", ".join(["`" + corpus_table + "`." + x for x in columns])
-            columns2 = "`" + corpus_table + "_rel`.freq as rel_freq"
-            columns3 = "`" + corpus_table + "_head_rel`.freq as head_rel_freq"
-            columns4 = "`" + corpus_table + "_dep_rel`.freq as dep_rel_freq"
-            
-            selects.append((corpus.upper(), u"(SELECT " + columns1 + ", " + columns2 + ", " + columns3 + ", " + columns4 + u", " + conn.string_literal(corpus.upper()) + u" as corpus " + \
-                           u"FROM `" + corpus_table + "`, `" + corpus_table + "_rel`, `" + corpus_table + "_head_rel`, `" + corpus_table + "_dep_rel` " + \
-                           u"WHERE (`" + corpus_table + "`.head = " + lemgram_sql + u" COLLATE utf8_bin OR `" + corpus_table + "`.dep = " + lemgram_sql + " COLLATE utf8_bin" + u") " + \
-                           minfreqsql + " AND `" + corpus_table + "`.wf = 0 " + \
-                           u"AND `" + corpus_table + u"`.rel = `" + corpus_table + "_rel`.rel " + \
-                           u"AND `" + corpus_table + u"`.head = `" + corpus_table + "_head_rel`.head " + \
-                           u"AND `" + corpus_table + u"`.rel = `" + corpus_table + "_head_rel`.rel " + \
-                           u"AND `" + corpus_table + u"`.dep = `" + corpus_table + "_dep_rel`.dep " + \
-                           u"AND `" + corpus_table + u"`.depextra = `" + corpus_table + "_dep_rel`.depextra " + \
-                           u"AND `" + corpus_table + u"`.rel = `" + corpus_table + "_dep_rel`.rel)"))
+
+            selects.append((corpus.upper(), u"(SELECT S1.string as head, S1.pos as headpos, F.rel, S2.string as dep, S2.pos as deppos, S2.stringextra as depextra, F.freq, R.freq as rel_freq, HR.freq as head_rel_freq, DR.freq as dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " + \
+                           u"FROM `" + corpus_table + "_strings` as S1, `" + corpus_table + "_strings` as S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " + \
+                           u"WHERE S1.string = " + lemgram_sql + " COLLATE utf8_bin AND F.head = S1.id AND S2.id = F.dep " + \
+                           minfreqsql + \
+                           u"AND F.bfhead = 1 AND F.bfdep = 1 AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
+                           ))
+            selects.append((None, u"(SELECT S1.string as head, S1.pos as headpos, F.rel, S2.string as dep, S2.pos as deppos, S2.stringextra as depextra, F.freq, R.freq as rel_freq, HR.freq as head_rel_freq, DR.freq as dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " + \
+                           u"FROM `" + corpus_table + "_strings` as S1, `" + corpus_table + "_strings` as S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " + \
+                           u"WHERE S2.string = " + lemgram_sql + " COLLATE utf8_bin AND F.dep = S2.id AND S1.id = F.head " + \
+                           minfreqsql + \
+                           u"AND F.bfhead = 1 AND F.bfdep = 1 AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
+                           ))
     else:
-        suffixes = ("_VB", "_NN", "_JJ", "_PP")
+        # TODO: Remove once updated
         words = []
-        for suffix in suffixes:
+        for suffix in REL_SUFFIXES:
             words.append(conn.escape(word + suffix).decode("utf-8"))
-        
         words_list = "(" + ", ".join(words) + " COLLATE utf8_bin)"
+        
+        word_sql = conn.escape(word).decode("utf-8")
         word = word.decode("utf-8")
         
+        # Remove this once all tables are updated
+        for corpus in corpora_old:
+            corpus_table = DBTABLE + "_" + corpus.upper()
+    
+            selects.append((corpus.upper(), u"(SELECT F.head as head, '' as headpos, F.rel, F.dep as dep, '' as deppos, F.depextra as depextra, F.freq, R.freq as rel_freq, HR.freq as head_rel_freq, DR.freq as dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " + \
+                           u"FROM `" + corpus_table + "` as F, `" + corpus_table + "_rel` as R, `" + corpus_table + "_head_rel` as HR, `" + corpus_table + "_dep_rel` as DR " + \
+                           u"WHERE ((F.head IN " + words_list + u" AND NOT F.wf = 2) OR (F.dep IN " + words_list + " AND NOT F.wf = 1)) " + \
+                           minfreqsql + \
+                           u"AND F.rel = R.rel " + \
+                           u"AND F.head = HR.head " + \
+                           u"AND F.rel = HR.rel " + \
+                           u"AND F.dep = DR.dep " + \
+                           u"AND F.depextra = DR.depextra " + \
+                           u"AND F.rel = DR.rel)"))
+
         for corpus in corpora:
             corpus_table = DBTABLE + "_" + corpus.upper()
-            columns1 = ", ".join(["`" + corpus_table + "`." + x for x in columns])
-            columns2 = "`" + corpus_table + "_rel`.freq as rel_freq"
-            columns3 = "`" + corpus_table + "_head_rel`.freq as head_rel_freq"
-            columns4 = "`" + corpus_table + "_dep_rel`.freq as dep_rel_freq"
     
-            selects.append((corpus.upper(), u"(SELECT " + columns1 + ", " + columns2 + ", " + columns3 + ", " + columns4 + u", " + conn.string_literal(corpus.upper()) + u" AS corpus " + \
-                           u"FROM `" + corpus_table + "`, `" + corpus_table + "_rel`, `" + corpus_table + "_head_rel`, `" + corpus_table + "_dep_rel` "
-                           u"WHERE ((`" + corpus_table + "`.head IN " + words_list + u" AND NOT `" + corpus_table + "`.wf = 2) OR (`" + corpus_table + "`.dep IN " + words_list + " AND NOT `" + corpus_table + "`.wf = 1)) " + \
+            selects.append((corpus.upper(), u"(SELECT S1.string as head, S1.pos as headpos, F.rel, S2.string as dep, S2.pos as deppos, S2.stringextra as depextra, F.freq, R.freq as rel_freq, HR.freq as head_rel_freq, DR.freq as dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " + \
+                           u"FROM `" + corpus_table + "_strings` as S1, `" + corpus_table + "_strings` as S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " + \
+                           u"WHERE S1.string = " + word_sql + " AND F.head = S1.id AND F.wfhead = 1 AND S2.id = F.dep " + \
                            minfreqsql + \
-                           u"AND `" + corpus_table + u"`.rel = `" + corpus_table + "_rel`.rel " + \
-                           u"AND `" + corpus_table + u"`.head = `" + corpus_table + "_head_rel`.head " + \
-                           u"AND `" + corpus_table + u"`.rel = `" + corpus_table + "_head_rel`.rel " + \
-                           u"AND `" + corpus_table + u"`.dep = `" + corpus_table + "_dep_rel`.dep " + \
-                           u"AND `" + corpus_table + u"`.depextra = `" + corpus_table + "_dep_rel`.depextra " + \
-                           u"AND `" + corpus_table + u"`.rel = `" + corpus_table + "_dep_rel`.rel)"))
-    
+                           u"AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
+                           ))
+            selects.append((None, u"(SELECT S1.string as head, S1.pos as headpos, F.rel, S2.string as dep, S2.pos as deppos, S2.stringextra as depextra, F.freq, R.freq as rel_freq, HR.freq as head_rel_freq, DR.freq as dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " + \
+                           u"FROM `" + corpus_table + "_strings` as S1, `" + corpus_table + "_strings` as S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " + \
+                           u"WHERE S2.string = " + word_sql + " AND F.dep = S2.id AND F.wfdep = 1 AND S1.id = F.head " + \
+                           minfreqsql + \
+                           u"AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
+                           ))
+
     cursor_result = []
     if incremental:
         print '"progress_corpora": [%s],' % ('"' + '", "'.join(corpora) + '"' if corpora else "")
@@ -1718,8 +1809,9 @@ def relations(form):
         for sql in selects:
             cursor.execute(sql[1])
             cursor_result.extend(list(cursor))
-            print '"progress_%d": {"corpus": "%s"},' % (progress_count, sql[0])
-            progress_count += 1
+            if sql[0]:
+                print '"progress_%d": {"corpus": "%s"},' % (progress_count, sql[0])
+                progress_count += 1
     else:    
         sql = u" UNION ALL ".join(x[1] for x in selects)
         cursor.execute(sql)
@@ -1731,25 +1823,75 @@ def relations(form):
     freq_head_rel = {}
     freq_rel_dep = {}
     
-    # 0     1    2    3         4     5         6              7             8
-    # head, rel, dep, depextra, freq, rel_freq, head_rel_freq, dep_rel_freq, corpus
+    # 0     1        2    3    4       5         6     7         8              9             10      11
+    # head, headpos, rel, dep, deppos, depextra, freq, rel_freq, head_rel_freq, dep_rel_freq, corpus, id
     
     for row in cursor_result:
-        #if (lemgram and (row[0] <> lemgram and row[2] <> lemgram)) or (word and not (row[0].startswith(word) or row[2].startswith(word))):
-        #    continue
-        rels.setdefault((row[0], row[1], row[2], row[3]), {"freq": 0, "corpus": set()})
-        rels[(row[0], row[1], row[2], row[3])]["freq"] += row[4]
-        rels[(row[0], row[1], row[2], row[3])]["corpus"].add(row[8])
+    
+        # TODO: Remove once database upgraded ##################################
+        #
+        saldo_to_suc = {
+            "vb": "VB",
+            "vbm": "VB",
+            "vba": "VB",
+            "nn": "NN",
+            "nnm": "NN",
+            "nna": "NN",
+            "ab": "AB",
+            "abm": "AB",
+            "aba": "AB",
+            "av": "JJ",
+            "avm": "JJ",
+            "ava": "JJ",
+            "pp": "PP",
+            "ppm": "PP",
+            "ppa": "PP",
+            "in": "IN",
+            "inm": "IN",
+            "pm": "PM",
+            "pmm": "PM",
+            "pma": "PM",
+            "pn": "PN",
+            "pnm": "PN",
+            "sn": "SN",
+            "kn": "KN"
+        }
+        head = row[0]
+        headpos = row[1]
+        if not headpos:
+            if head[-3] == "_":
+                headpos = head[-2:]
+                head = head[:-3]
+            else:
+                headpos = saldo_to_suc[head[:-2].rsplit("..")[-1].split(".")[0]]
         
-        freq_rel.setdefault(row[1], {})[(row[8], row[1])] = row[5]
-        freq_head_rel.setdefault((row[0], row[1]), {})[(row[8], row[1])] = row[6]
-        freq_rel_dep.setdefault((row[1], row[2], row[3]), {})[(row[8], row[1])] = row[7]
+        dep = row[3]
+        deppos = row[4]
+        if not deppos and row[3]:
+            if dep[-3] == "_":
+                deppos = dep[-2:]
+                dep = dep[:-3]
+            else:
+                deppos = saldo_to_suc[dep[:-2].rsplit("..")[-1].split(".")[0]]
+        depextra = row[5] if row[5] else None # If-satsen är temporär
+        #
+        ########################################################################
+    
+        head = (head, headpos)
+        dep = (dep, deppos, depextra)
+        rels.setdefault((head, row[2], dep), {"freq": 0, "source": set()})
+        rels[(head, row[2], dep)]["freq"] += row[6]
+        rels[(head, row[2], dep)]["source"].add("%s:%d" % (row[10], row[11]))
+                            #rel         corpus    rel       rel_freq
+        freq_rel.setdefault(row[2], {})[(row[10], row[2])] = row[7]
+        freq_head_rel.setdefault((head, row[2]), {})[(row[10], row[2])] = row[8]
+        freq_rel_dep.setdefault((row[2], dep), {})[(row[10], row[2])] = row[9]
     
     # Calculate MI
     for rel in rels:
         f_rel = sum(freq_rel[rel[1]].values())
         f_head_rel = sum(freq_head_rel[(rel[0], rel[1])].values())
-        f_rel_dep = sum(freq_rel_dep[(rel[1], rel[2], rel[3])].values())
+        f_rel_dep = sum(freq_rel_dep[(rel[1], rel[2])].values())
         rels[rel]["mi"] = rels[rel]["freq"] * math.log((f_rel * rels[rel]["freq"]) / (f_head_rel * f_rel_dep * 1.0), 2)
     
     sortedrels = sorted(rels.items(), key=lambda x: (x[0][1], x[1][sortby]), reverse=True)
@@ -1757,7 +1899,7 @@ def relations(form):
     for rel in sortedrels:
         counter.setdefault((rel[0][1], "h"), 0)
         counter.setdefault((rel[0][1], "d"), 0)
-        if search_type == "lemgram" and rel[0][0] == word:
+        if search_type == "lemgram" and rel[0][0][0] == word:
             counter[(rel[0][1], "h")] += 1
             if maxresults and counter[(rel[0][1], "h")] > maxresults:
                 continue
@@ -1766,20 +1908,22 @@ def relations(form):
             if maxresults and counter[(rel[0][1], "d")] > maxresults:
                 continue
 
-        r = { "head": rel[0][0],
+        r = { "head": rel[0][0][0],
+              "headpos": rel[0][0][1],
               "rel": rel[0][1],
-              "dep": rel[0][2],
-              "depextra": rel[0][3],
+              "dep": rel[0][2][0],
+              "deppos": rel[0][2][1],
+              "depextra": rel[0][2][2],
               "freq": rel[1]["freq"],
               "mi": rel[1]["mi"],
-              "corpus": list(rel[1]["corpus"])
+              "source": list(rel[1]["source"])
             }
         result.setdefault("relations", []).append(r)
     
     cursor.close()
     conn.close()
     
-    if CACHE_DIR:
+    if use_cache and CACHE_DIR:
         with open(os.path.join(CACHE_DIR, "wordpicture_" + checksum), "w") as cachefile:
             cachefile.write(repr(result))
     
@@ -1808,25 +1952,20 @@ def relations_sentences(form):
 
     from copy import deepcopy
     
-    assert_key("corpus", form, IS_IDENT, True)
-    assert_key("head", form, "", True)
-    assert_key("rel", form, "", True)
-    assert_key("dep", form, "", False)
-    assert_key("depextra", form, "", False)
+    assert_key("source", form, "", True)
     assert_key("start", form, IS_NUMBER, False)
     assert_key("end", form, IS_NUMBER, False)
     
-    corpora = form.get("corpus")
-    if isinstance(corpora, basestring):
-        corpora = corpora.split(QUERY_DELIM)
-    corpora = sorted(set(corpora))
+    temp_source = form.get("source")
+    if isinstance(temp_source, basestring):
+        temp_source = temp_source.split(QUERY_DELIM)
+    source = defaultdict(set)
+    for s in temp_source:
+        c, i = s.split(":")
+        source[c].add(i)
     
-    check_authentication(corpora)
+    check_authentication(source.keys())
     
-    head = form.get("head")
-    dep = form.get("dep", "")
-    depextra = form.get("depextra", "")
-    rel = form.get("rel")
     start = int(form.get("start", "0"))
     end = int(form.get("end", "99"))
     shown = form.get("show", "word")
@@ -1846,28 +1985,27 @@ def relations_sentences(form):
     selects = []
     counts = []
     
-    head_sql = conn.escape(head).decode("utf-8")
-    dep_sql = conn.escape(dep).decode("utf-8")
-    depextra_sql = conn.escape(depextra).decode("utf-8")
-    rel_sql = conn.escape(rel).decode("utf-8")
+    # Get available tables
+    cursor.execute("SHOW TABLES LIKE '" + DBTABLE + "_%';")
+    tables = set(x[0] for x in cursor)
+    # Filter out corpora which doesn't exist in database
+    source = sorted(filter(lambda x: DBTABLE + "_" + x[0].upper() in tables, source.iteritems()))
+    if not source: return {}
+    corpora = [x[0] for x in source]
     
-    for corpus in corpora:
-        corpus_table = DBTABLE + "_" + corpus.upper()
+    for s in source:
+        corpus, ids = s
+        ids = [conn.escape(i) for i in ids]
+        ids_list = "(" + ", ".join(ids) + ")"
+        
         corpus_table_sentences = DBTABLE + "_" + corpus.upper() + "_sentences"
         
-        where = u" WHERE `" + corpus_table_sentences + u"`.id = `" + corpus_table + u"`.id AND " + \
-                "`" + corpus_table + (u'`.head=%s AND ' % head_sql) + \
-                "`" + corpus_table + (u'`.rel=%s AND ' % rel_sql) + \
-                "`" + corpus_table + (u'`.dep=%s AND ' % dep_sql) + \
-                "`" + corpus_table + (u'`.depextra=%s ' % depextra_sql)
-        
-        selects.append(u"(SELECT `" + corpus_table_sentences + u"`.sentence, `" + corpus_table_sentences + u"`.start, `" + corpus_table_sentences + u"`.end, " + \
-                       conn.string_literal(corpus.upper()) + u" AS corpus FROM `" + corpus_table_sentences + u"`, `" + corpus_table + "`" + \
-                       where + \
-                       u")"
+        selects.append(u"(SELECT S.sentence, S.start, S.end, " + conn.string_literal(corpus.upper()) + u" AS corpus " + \
+                       u"FROM `" + corpus_table_sentences + u"` as S " + \
+                       u" WHERE S.id IN " + ids_list + u")"
                        )
-        counts.append(u"(SELECT " + conn.string_literal(corpus.upper()) + u" AS corpus, COUNT(*) FROM `" + corpus_table + u"`, `" + corpus_table_sentences + "`" + where + u")")
-    
+        counts.append(u"(SELECT " + conn.string_literal(corpus.upper()) + u" AS corpus, COUNT(*) FROM `" + corpus_table_sentences + "` as S WHERE S.id IN " + ids_list + u")")
+
     sql_count = u" UNION ALL ".join(counts)
     cursor.execute(sql_count)
     
@@ -1875,7 +2013,7 @@ def relations_sentences(form):
     for row in cursor:
         corpus_hits[row[0]] = int(row[1])
     
-    sql = u" UNION ALL ".join(selects) + (u" LIMIT %d, %d" % (start, end-1))
+    sql = u" UNION ALL ".join(selects) + (u" LIMIT %d, %d" % (start, end - 1))
     cursor.execute(sql)
     
     querytime = time.time() - querystarttime
@@ -2012,9 +2150,10 @@ def translate_undef(s):
     return None if s == "__UNDEF__" else s
 
 
-def querydata_checksum(cqp, cqpextra, corpora):
+def querydata_checksum(cqp, cqpextra, corpora, form):
     """The querydata checksum is calucated on: CQP query + cqpextra (within, cut) + corpora selection"""
-    return str(zlib.crc32("".join(make_cqp(c, cqpextra) for c in cqp).encode("utf-8") + "".join(sorted(corpora))))
+    return str(zlib.crc32(("%s;%s;%s;%s" % (";".join(cqp), ";".join((":".join(e) for e in cqpextra.items())), form.get("defaultwithin", ""), ",".join(sorted(corpora)))).encode("UTF-8")))
+
 
 class CQPError(Exception):
     pass
@@ -2098,11 +2237,9 @@ def print_header():
 
 def print_object(obj, form):
     """Prints an object in JSON format.
-    The CGI form can contain optional parameters 'callback' and 'indent'
+    The CGI form can contain optional parameter 'indent'
     which change the output format.
     """
-    callback = form.get("callback")
-    if callback: print callback + "(",
     try:
         indent = int(form.get("indent"))
         out = json.dumps(obj, sort_keys=True, indent=indent)
@@ -2112,7 +2249,6 @@ def print_object(obj, form):
         out = json.dumps(obj, separators=(",",":"))
         out = out[1:-1] if form.get("incremental", "").lower() == "true" else out
         print out,
-    if callback: print ")",
 
 
 def authenticate(_=None):
@@ -2196,4 +2332,5 @@ def anti_timeout_loop(f, args=None, timeout=90):
 
 if __name__ == "__main__":
     main()
+
 
