@@ -72,7 +72,7 @@ CACHE_DIR = ""
 # These variables should probably not need to be changed
 
 # The version of this script
-KORP_VERSION = "2.35"
+KORP_VERSION = "2.5"
 
 # The available CGI commands; for each command there must be a function
 # with the same name, taking one argument (the CGI form)
@@ -971,7 +971,7 @@ def count(form):
                         else:
                             ngram_groups = [ngram]
                         
-                        cross = [[]]
+                        all_ngrams = []
                         
                         for i, ngram in enumerate(ngram_groups):
                             # Split value sets and treat each value as a hit
@@ -990,8 +990,9 @@ def count(form):
                                         ngramtemp, pointer = ngrams[i].rsplit(":", 1)
                                         if pointer.isnumeric():
                                             ngrams[i] = ngramtemp
-
-                            cross = [x + [y] for x in cross for y in ngrams]
+                            all_ngrams.append(ngrams)
+                        
+                        cross = list(itertools.product(*all_ngrams))
                                                         
                         for ngram in cross:
                             ngram = "/".join(ngram)
@@ -1121,21 +1122,32 @@ def count_time(form):
     for total_row in total_rows:
         search_timedata.append(timespan_calculator(total_row, granularity=granularity))
         search_timedata_combined.append(timespan_calculator(total_row, granularity=granularity, combined=True))
-    
+       
     for corpus in corpora:
                 
         corpus_stats = [{"absolute": defaultdict(int),
                         "relative": defaultdict(float),
                         "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
         
+        basedates = dict([(date, None if corpus_timedata[corpus][date] == 0 else 0) for date in corpus_timedata[corpus]])
+        
         for i, s in enumerate(search_timedata):
-            for line in s.get(corpus, {}).iteritems():
-                date, count = line
+        
+            prevdate = None
+            for basedate in sorted(basedates):
+                if not basedates[basedate] == prevdate:
+                    corpus_stats[i]["absolute"][basedate] = basedates[basedate]
+                    corpus_stats[i]["relative"][basedate] = basedates[basedate]
+                prevdate = basedates[basedate]
+
+            for row in s.get(corpus, {}).iteritems():
+                date, count = row
                 corpus_date_size = float(corpus_timedata[corpus][date])
-                corpus_stats[i]["absolute"][date] += count
-                corpus_stats[i]["relative"][date] += (count / corpus_date_size * 1000000) if corpus_date_size else 0
-                corpus_stats[i]["sums"]["absolute"] += count
-                corpus_stats[i]["sums"]["relative"] += (count / corpus_date_size * 1000000) if corpus_date_size else 0
+                if corpus_date_size > 0.0:
+                    corpus_stats[i]["absolute"][date] += count
+                    corpus_stats[i]["relative"][date] += (count / corpus_date_size * 1000000)
+                    corpus_stats[i]["sums"]["absolute"] += count
+                    corpus_stats[i]["sums"]["relative"] += (count / corpus_date_size * 1000000)
             
             if subcqp and i > 0:
                 corpus_stats[i]["cqp"] = subcqp[i - 1]
@@ -1146,14 +1158,25 @@ def count_time(form):
                     "relative": defaultdict(float),
                     "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
 
+    basedates = dict([(date, None if corpus_timedata_combined["combined"][date] == 0 else 0) for date in corpus_timedata_combined["combined"]])
+
     for i, s in enumerate(search_timedata_combined):
+    
+        prevdate = None
+        for basedate in sorted(basedates):
+            if not basedates[basedate] == prevdate:
+                total_stats[i]["absolute"][basedate] = basedates[basedate]
+                total_stats[i]["relative"][basedate] = basedates[basedate]
+            prevdate = basedates[basedate]
+            
         if s:
-            for line in s["combined"].iteritems():
-                date, count = line
+            for row in s["combined"].iteritems():
+                date, count = row
                 combined_date_size = float(corpus_timedata_combined["combined"][date])
-                total_stats[i]["absolute"][date] += count
-                total_stats[i]["relative"][date] += (count / combined_date_size * 1000000) if combined_date_size else 0
-                total_stats[i]["sums"]["absolute"] += count
+                if combined_date_size > 0.0:
+                    total_stats[i]["absolute"][date] += count
+                    total_stats[i]["relative"][date] += (count / combined_date_size * 1000000) if combined_date_size else 0
+                    total_stats[i]["sums"]["absolute"] += count
 
         total_stats[i]["sums"]["relative"] = total_stats[i]["sums"]["absolute"] / float(ns.total_size) * 1000000 if ns.total_size > 0 else 0.0
         if subcqp and i > 0:
@@ -1308,13 +1331,30 @@ def loglike(form):
         result.sort(reverse=True)
         return result
 
-    def compute_ll_stats(ll_list, count):
+    def compute_ll_stats(ll_list, count, sets):
         """ Calculates max, min, average, and truncates word list. """
         tot   = len(ll_list)
-        words = ll_list[0:count] if count else ll_list
+        new_list = []
+        
+        set1count, set2count = 0, 0
+        for ll_w in ll_list:
+            ll, w = ll_w
+            
+            if (sets[0]["freq"][w] / (sets[0]["total"] * 1.0)) > (sets[1]["freq"][w] / (sets[1]["total"] * 1.0)):
+                set1count += 1
+                if set1count <= count or not count:
+                    new_list.append((ll * -1, w))
+            else:
+                set2count += 1
+                if set2count <= count or not count:
+                    new_list.append((ll, w))
+            
+            if count and (set1count >= count and set2count >= count):
+                break
+
         nums  = [ll for (ll, _) in ll_list]
         return (
-            words,
+            new_list,
             round(sum(nums) / float(tot), 2),
             min(nums),
             max(nums)
@@ -1375,16 +1415,14 @@ def loglike(form):
             sets[i]["freq"] = count_result_temp["total"]["absolute"]
     
     ll_list = compute_list(sets[0]["freq"], sets[0]["total"], sets[1]["freq"], sets[1]["total"])
-    (ws, avg, mi, ma) = compute_ll_stats(ll_list, maxresults)
+    (ws, avg, mi, ma) = compute_ll_stats(ll_list, maxresults, sets)
     
     result = {"loglike": {}, "average": avg, "set1": {}, "set2": {}}
 
     for (ll, w) in ws:
-        change = 1 if (sets[0]["freq"][w] / (sets[0]["total"] * 1.0)) < (sets[1]["freq"][w] / (sets[1]["total"] * 1.0)) else -1
-        if ll > 0:
-            result["loglike"][w] = (ll * change)
-            result["set1"][w] = sets[0]["freq"][w]
-            result["set2"][w] = sets[1]["freq"][w]
+        result["loglike"][w] = ll
+        result["set1"][w] = sets[0]["freq"][w]
+        result["set2"][w] = sets[1]["freq"][w]
 
     return result
 
@@ -2332,5 +2370,6 @@ def anti_timeout_loop(f, args=None, timeout=90):
 
 if __name__ == "__main__":
     main()
+
 
 
