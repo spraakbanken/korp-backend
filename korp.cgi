@@ -38,11 +38,11 @@ import korp_config as config
 # Nothing needs to be changed in this file. Use korpconfig.py for configuration.
 
 # The version of this script
-KORP_VERSION = "2.6"
+KORP_VERSION = "2.66"
 
 # The available CGI commands; for each command there must be a function
 # with the same name, taking one argument (the CGI form)
-COMMANDS = "info query count count_all relations relations_sentences lemgram_count timespan authenticate count_time optimize loglike query_sample".split()
+COMMANDS = "info query count count_all relations relations_sentences lemgram_count timespan count_time optimize loglike query_sample authenticate".split()
 
 
 def default_command(form):
@@ -147,6 +147,7 @@ def general_info(form):
     """
     corpora = runCQP("show corpora;", form)
     version = corpora.next()
+    protected = []
     
     if config.PROTECTED_FILE:
         with open(config.PROTECTED_FILE) as infile:
@@ -164,6 +165,23 @@ def corpus_info(form):
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
     corpora = sorted(set(corpora))
+    
+    use_cache = bool(not form.get("cache", "").lower() == "false" and config.CACHE_DIR)
+    
+    # Caching
+    checksum_data = ("".join(sorted(corpora)),)
+    checksum = get_hash(checksum_data)
+    
+    if use_cache:
+        cachefilename = os.path.join(config.CACHE_DIR, "info_" + checksum)
+        if os.path.exists(cachefilename):
+            with open(cachefilename, "r") as cachefile:
+                result = json.load(cachefile)
+                if "debug" in form:
+                    result.setdefault("DEBUG", {})
+                    result["DEBUG"]["cache_read"] = True
+                    result["DEBUG"]["checksum"] = checksum
+                return result
     
     result = {"corpora": {}}
     total_size = 0
@@ -207,8 +225,23 @@ def corpus_info(form):
     result["total_size"] = total_size
     result["total_sentences"] = total_sentences
     
+    if use_cache:
+        cachefilename = os.path.join(config.CACHE_DIR, "info_" + checksum)
+        if not os.path.exists(cachefilename):
+            tmpfile = "%s.%s" % (cachefilename, os.getenv("UNIQUE_ID"))
+
+            with open(tmpfile, "w") as cachefile:
+                json.dump(result, cachefile)
+            os.rename(tmpfile, cachefilename)
+            
+            if "debug" in form:
+                result.setdefault("DEBUG", {})
+                result["DEBUG"]["cache_saved"] = True
+    
     if "debug" in form:
-        result["DEBUG"] = {"cmd": cmd}
+        result.setdefault("DEBUG", {})
+        result["DEBUG"]["cmd"] = cmd
+    
     return result
 
 
@@ -300,6 +333,8 @@ def query(form):
         shown_structs = shown_structs.split(QUERY_DELIM)
     shown_structs = set(shown_structs)
     
+    expand_prequeries = not form.get("expand_prequeries", "").lower() == "false"
+    
     start, end = int(form.get("start")), int(form.get("end"))
 
     if config.MAX_KWIC_ROWS and end - start >= config.MAX_KWIC_ROWS:
@@ -318,10 +353,12 @@ def query(form):
 
     result = {}
 
-    checksum_data = ":".join((";".join(cqp),
-                     ";".join((":".join(e) for e in cqpextra.items())),
-                     form.get("defaultwithin", ""),
-                     ",".join(sorted(corpora)))
+    checksum_data = ":".join(
+                             (";".join(cqp),
+                             ";".join((":".join(e) for e in cqpextra.items())),
+                             form.get("defaultwithin", ""),
+                             ",".join(sorted(corpora)),
+                             str(expand_prequeries))
                      )
 
     # Calculate querydata checksum
@@ -386,7 +423,7 @@ def query(form):
             corpus, hits = corpora_hits.items()[0]
 
             def anti_timeout0(queue):
-                result["kwic"], _ = query_and_parse(form, corpus, cqp, cqpextra, shown, shown_structs, hits[0], hits[1])
+                result["kwic"], _ = query_and_parse(form, corpus, cqp, cqpextra, shown, shown_structs, hits[0], hits[1], expand_prequeries=expand_prequeries)
                 queue.put("DONE")
 
             anti_timeout_loop(anti_timeout0)
@@ -394,7 +431,7 @@ def query(form):
             if incremental:
                 print '"progress_corpora": [%s],' % ('"' + '", "'.join(corpora_hits.keys()) + '"' if corpora_hits.keys() else "")
             with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-                future_query = dict((executor.submit(query_and_parse, form, corpus, cqp, cqpextra, shown, shown_structs, corpora_hits[corpus][0], corpora_hits[corpus][1]), corpus) for corpus in corpora_hits)
+                future_query = dict((executor.submit(query_and_parse, form, corpus, cqp, cqpextra, shown, shown_structs, corpora_hits[corpus][0], corpora_hits[corpus][1], False, expand_prequeries), corpus) for corpus in corpora_hits)
                 
                 def anti_timeout1(queue):
                     for future in futures.as_completed(future_query):
@@ -432,7 +469,7 @@ def query(form):
                     ns.rest_corpora = corpora[i:]
                     break
                             
-                kwic, nr_hits = query_and_parse(form, corpus, cqp, cqpextra, shown, shown_structs, ns.start_local, ns.end_local)
+                kwic, nr_hits = query_and_parse(form, corpus, cqp, cqpextra, shown, shown_structs, ns.start_local, ns.end_local, False, expand_prequeries)
             
                 statistics[corpus] = nr_hits
                 ns.total_hits += nr_hits
@@ -464,7 +501,7 @@ def query(form):
             if incremental:
                 print ",",
             with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-                future_query = dict((executor.submit(query_corpus, form, corpus, cqp, cqpextra, shown, shown_structs, 0, 0, True), corpus) for corpus in ns.rest_corpora)
+                future_query = dict((executor.submit(query_corpus, form, corpus, cqp, cqpextra, shown, shown_structs, 0, 0, True, expand_prequeries), corpus) for corpus in ns.rest_corpora)
                 
                 def anti_timeout3(queue):
                     for future in futures.as_completed(future_query):
@@ -493,17 +530,17 @@ def query(form):
     result["corpus_order"] = corpora
     result["querydata"] = zlib.compress(checksum + ";" + str(ns.total_hits) + ";" + ";".join("%s:%d" % (c, h) for c, h in statistics.iteritems())).encode("base64").replace("+", "-").replace("/", "_")
     
-    if use_cache and not os.path.exists(os.path.join(config.CACHE_DIR, "query_" + checksum)):
-        unique_id = os.getenv("UNIQUE_ID")
+    if use_cache:
         cachefilename = os.path.join(config.CACHE_DIR, "query_" + checksum)
-        tmpfile = "%s.%s" % (cachefilename, unique_id)
+        if not os.path.exists(cachefilename):
+            tmpfile = "%s.%s" % (cachefilename, os.getenv("UNIQUE_ID"))
 
-        with open(tmpfile, "w") as cachefile:
-            cachefile.write(result["querydata"])
-        os.rename(tmpfile, cachefilename)
-        
-        if "debug" in form:
-            debug["cache_saved"] = True
+            with open(tmpfile, "w") as cachefile:
+                cachefile.write(result["querydata"])
+            os.rename(tmpfile, cachefilename)
+            
+            if "debug" in form:
+                debug["cache_saved"] = True
 
     if debug:
         result["DEBUG"] = debug
@@ -526,13 +563,15 @@ def optimize(form):
     return result
 
 
-def query_optimize(cqp, cqpextra, find_match=True):
+def query_optimize(cqp, cqpextra, find_match=True, expand=True):
     """ Optimizes simple queries with multiple words by converting them to an MU query.
         Optimization only works for queries with at least two tokens, or one token preceded
         by one or more wildcards. The query also must use "within".
         """
     q, rest = parse_cqp(cqp)
-    expand = cqpextra.get("within")
+
+    if expand:
+        expand = cqpextra.get("within")
     
     leading_wildcards = False
     trailing_wildcards = False
@@ -686,12 +725,13 @@ def query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
             cqpextra_temp["expand"] = "to " + cqpextra["within"]
         
         if optimize:
-            cmd += query_optimize(c, cqpextra_temp, find_match=(not pre_query))
+            cmd += query_optimize(c, cqpextra_temp, find_match=(not pre_query), expand=not (pre_query and not expand_prequeries))
         else:
             cmd += make_query(make_cqp(c, cqpextra_temp))
         
         if pre_query:
             cmd += ["Last;"]
+    
     # This prints the size of the query (i.e., the number of results):
     cmd += ["size Last;"]
     if not no_results:
@@ -855,8 +895,8 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
     return kwic
 
 
-def query_and_parse(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results=False):
-    lines, nr_hits, attrs = query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results)
+def query_and_parse(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results=False, expand_prequeries=True):
+    lines, nr_hits, attrs = query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results, expand_prequeries)
     kwic = query_parse_lines(corpus, lines, attrs, shown, shown_structs)
     return kwic, nr_hits
     
@@ -925,6 +965,13 @@ def count(form):
         ignore_case = ignore_case.split(QUERY_DELIM)
     ignore_case = set(ignore_case)
     
+    defaultwithin = form.get("defaultwithin", "")
+    within = form.get("within", defaultwithin)
+    if ":" in within:
+        within = dict(x.split(":") for x in within.split(","))
+    else:
+        within = {"": defaultwithin}
+    
     start = int(form.get("start", 0))
     end = int(form.get("end", -1))
     
@@ -944,24 +991,27 @@ def count(form):
     
     expand_prequeries = not form.get("expand_prequeries", "").lower() == "false"
 
-    checksum_data = ("".join(sorted(corpora)),
+    checksum_data = (";".join(sorted(corpora)),
                      cqp,
                      groupby,
-                     "".join(list(ignore_case)),
+                     ";".join(":".join(x) for x in sorted(within.iteritems())),
+                     ";".join(sorted(ignore_case)),
                      split,
                      strippointer,
                      start,
                      end)
     checksum = get_hash(checksum_data)
     
-    if use_cache and os.path.exists(os.path.join(config.CACHE_DIR, "count_" + checksum)):
-        with open(os.path.join(config.CACHE_DIR, "count_" + checksum), "r") as cachefile:
-            result = json.load(cachefile)
-            if "debug" in form:
-                result.setdefault("DEBUG", {})
-                result["DEBUG"]["cache_read"] = True
-                result["DEBUG"]["checksum"] = checksum
-            return result
+    if use_cache:
+        cachefilename = os.path.join(config.CACHE_DIR, "count_" + checksum)
+        if os.path.exists(cachefilename):
+            with open(cachefilename, "r") as cachefile:
+                result = json.load(cachefile)
+                if "debug" in form:
+                    result.setdefault("DEBUG", {})
+                    result["DEBUG"]["cache_read"] = True
+                    result["DEBUG"]["checksum"] = checksum
+                return result
 
     result = {"corpora": {}}
     total_stats = {"absolute": defaultdict(int),
@@ -1189,6 +1239,7 @@ def count_time(form):
                         values = values.strip(" ")
                         if granularity in "hns":
                             datefrom, timefrom, dateto, timeto = values.split("\t")
+                            # Only use the value from the first token
                             timefrom = timefrom.split(" ")[0]
                             timeto = timeto.split(" ")[0]
                         else:
@@ -1383,6 +1434,20 @@ def count_query_worker_simple(corpus, cqp, groupby, ignore_case, form, expand_pr
 
 
 def loglike(form):
+    """Runs a log-likelihood comparison on two queries.
+    
+    The required parameters are
+     - set1_cqp: the first CQP query
+     - set2_cqp: the second CQP query
+     - set1_corpus: the corpora for the first query
+     - set2_corpus: the corpora for the second query
+     - groupby: what positional or structural attribute to use for comparison
+
+    The optional parameters are
+     - ignore_case: ignore case when comparing
+     - max: maxium number of results per set
+       (default: 15)
+    """
 
     import math
 
@@ -1458,7 +1523,7 @@ def loglike(form):
         for ll_w in ll_list:
             ll, w = ll_w
             
-            if (sets[0]["freq"].get(w, 0) / (sets[0]["total"] * 1.0)) > (sets[1]["freq"].get(w, 0) / (sets[1]["total"] * 1.0)):
+            if (sets[0]["freq"].get(w) and not sets[1]["freq"].get(w)) or sets[0]["freq"].get(w) and (sets[0]["freq"].get(w, 0) / (sets[0]["total"] * 1.0)) > (sets[1]["freq"].get(w, 0) / (sets[1]["total"] * 1.0)):
                 set1count += 1
                 if set1count <= count or not count:
                     new_list.append((ll * -1, w))
@@ -1473,9 +1538,9 @@ def loglike(form):
         nums = [ll for (ll, _) in ll_list]
         return (
             new_list,
-            round(sum(nums) / float(tot), 2),
-            min(nums),
-            max(nums)
+            round(sum(nums) / float(tot), 2) if tot else 0.0,
+            min(nums) if nums else 0.0,
+            max(nums) if nums else 0.0
         )
 
     assert_key("set1_cqp", form, r"", True)
@@ -1853,6 +1918,8 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
     result = {}
     if per_corpus:
         result["corpora"] = {}
+    if combined:
+        result["combined"] = {}
     
     for corpus, nodes in corpusnodes.iteritems():
         data = defaultdict(int)
