@@ -35,7 +35,7 @@ import cPickle
 import korp_config as config
 
 ################################################################################
-# Nothing needs to be changed in this file. Use korpconfig.py for configuration.
+# Nothing needs to be changed in this file. Use korp_config.py for configuration.
 
 # The version of this script
 KORP_VERSION = "2.66"
@@ -306,7 +306,7 @@ def query(form):
     assert_key("show_struct", form, IS_IDENT)
     #assert_key("within", form, IS_IDENT)
     assert_key("cut", form, IS_NUMBER)
-    assert_key("sort", form, r"(left|keyword|right|random)")
+    assert_key("sort", form, r"")
     assert_key("incremental", form, r"(true|false)")
 
     ############################################################################
@@ -710,6 +710,9 @@ def query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
     elif sort == "random":
         random_seed = form.get("random_seed", "")
         sortcmd = ["sort randomize %s;" % random_seed]
+    elif sort:
+        # Sort by positional attribute
+        sortcmd = ["sort by %s;" % sort]
     else:
         sortcmd = []
 
