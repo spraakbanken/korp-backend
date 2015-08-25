@@ -161,7 +161,7 @@ def corpus_info(form):
     """
     assert_key("corpus", form, IS_IDENT, True)
     
-    corpora = form.get("corpus")
+    corpora = form.get("corpus").upper()
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
     corpora = sorted(set(corpora))
@@ -252,7 +252,7 @@ def corpus_info(form):
 def query_sample(form):
     import random
     
-    corpora = form.get("corpus")
+    corpora = form.get("corpus").upper()
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
     corpora = list(set(corpora))
@@ -315,7 +315,7 @@ def query(form):
     incremental = form.get("incremental", "").lower() == "true"
     use_cache = bool(not form.get("cache", "").lower() == "false" and config.CACHE_DIR)
     
-    corpora = form.get("corpus")
+    corpora = form.get("corpus").upper()
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
     corpora = sorted(set(corpora))
@@ -743,11 +743,12 @@ def query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
         cmd += ["set LeftKWICDelim '%s '; set RightKWICDelim ' %s';" % (LEFT_DELIM, RIGHT_DELIM)]
         if shown_structs:
             cmd += ["set PrintStructures '%s';" % ", ".join(shown_structs)]
+        cmd += ["set ExternalSort yes;"]
         cmd += sortcmd
         # This prints the result rows:
         cmd += ["cat Last %s %s;" % (start, end)]
     cmd += ["exit;"]
-
+    
     ######################################################################
     # Then we call the CQP binary, and read the results
 
@@ -793,7 +794,13 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
 
         # Handle PrintStructures
         if ls_attrs and not aligned:
-            lineattr, line = line.rsplit(":  ", 1)
+            if ":  " in line:
+                lineattr, line = line.rsplit(":  ", 1)
+            else:
+                # Sometimes, depending on context, CWB uses only one space instead of two as a separator
+                lineattr, line = line.split(">: ", 1)
+                lineattr += ">"
+            
             lineattrs = lineattr[2:-1].split("><")
             
             # Handle "><" in attribute values
@@ -952,7 +959,7 @@ def count(form):
     incremental = form.get("incremental", "").lower() == "true"
     use_cache = bool(not form.get("cache", "").lower() == "false" and config.CACHE_DIR)
     
-    corpora = form.get("corpus")
+    corpora = form.get("corpus").upper()
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
     corpora = set(corpora)
@@ -1180,12 +1187,13 @@ def count_time(form):
     assert_key("corpus", form, IS_IDENT, True)
     assert_key("cut", form, IS_NUMBER)
     assert_key("incremental", form, r"(true|false)")
+    assert_key("granularity", form, r"[ymdhnsYMDHNS]")
     assert_key("from", form, r"^\d{14}$")
     assert_key("to", form, r"^\d{14}$")
     
     incremental = form.get("incremental", "").lower() == "true"
 
-    corpora = form.get("corpus")
+    corpora = form.get("corpus").upper()
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
     corpora = set(corpora)
@@ -1556,11 +1564,11 @@ def loglike(form):
     
     maxresults = int(form.get("max", 15))
     
-    set1 = form.get("set1_corpus")
+    set1 = form.get("set1_corpus").upper()
     if isinstance(set1, basestring):
         set1 = set1.split(QUERY_DELIM)
     set1 = set(set1)
-    set2 = form.get("set2_corpus")
+    set2 = form.get("set2_corpus").upper()
     if isinstance(set2, basestring):
         set2 = set2.split(QUERY_DELIM)
     set2 = set(set2)
@@ -1634,7 +1642,7 @@ def lemgram_count(form):
     assert_key("corpus", form, IS_IDENT)
     assert_key("count", form, r"(lemgram|prefix|suffix)")
     
-    corpora = form.get("corpus")
+    corpora = form.get("corpus").upper()
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
     corpora = set(corpora) if corpora else set()
@@ -1713,7 +1721,7 @@ def timespan(form):
     assert_key("from", form, r"^\d{14}$")
     assert_key("to", form, r"^\d{14}$")
     
-    corpora = form.get("corpus")
+    corpora = form.get("corpus").upper()
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
     corpora = sorted(set(corpora))
@@ -1992,7 +2000,7 @@ def relations(form):
     assert_key("max", form, IS_NUMBER, False)
     assert_key("incremental", form, r"(true|false)")
     
-    corpora = form.get("corpus")
+    corpora = form.get("corpus").upper()
     if isinstance(corpora, basestring):
         corpora = corpora.split(QUERY_DELIM)
     corpora = set(corpora)
@@ -2009,10 +2017,10 @@ def relations(form):
     maxresults = int(form.get("max", 15))
     minfreqsql = " AND freq >= %s" % minfreq if minfreq else ""
     
-    checksum_data = ("".join(sorted(corpora)),
+    checksum_data = (";".join(sorted(corpora)),
                      word,
                      search_type,
-                     minfreqsql,
+                     minfreq,
                      sortby,
                      maxresults)
     checksum = get_hash(checksum_data)
@@ -2053,14 +2061,14 @@ def relations(form):
         for corpus in corpora:
             corpus_table = config.DBTABLE + "_" + corpus.upper()
 
-            selects.append((corpus.upper(), u"(SELECT S1.string as head, S1.pos as headpos, F.rel, S2.string as dep, S2.pos as deppos, S2.stringextra as depextra, F.freq, R.freq as rel_freq, HR.freq as head_rel_freq, DR.freq as dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " +
-                            u"FROM `" + corpus_table + "_strings` as S1, `" + corpus_table + "_strings` as S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
+            selects.append((corpus.upper(), u"(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, DR.freq AS dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " +
+                            u"FROM `" + corpus_table + "_strings` AS S1, `" + corpus_table + "_strings` AS S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
                             u"WHERE S1.string = " + lemgram_sql + " COLLATE utf8_bin AND F.head = S1.id AND S2.id = F.dep " +
                             minfreqsql +
                             u"AND F.bfhead = 1 AND F.bfdep = 1 AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
                             ))
-            selects.append((None, u"(SELECT S1.string as head, S1.pos as headpos, F.rel, S2.string as dep, S2.pos as deppos, S2.stringextra as depextra, F.freq, R.freq as rel_freq, HR.freq as head_rel_freq, DR.freq as dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " +
-                            u"FROM `" + corpus_table + "_strings` as S1, `" + corpus_table + "_strings` as S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
+            selects.append((None, u"(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, DR.freq AS dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " +
+                            u"FROM `" + corpus_table + "_strings` AS S1, `" + corpus_table + "_strings` AS S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
                             u"WHERE S2.string = " + lemgram_sql + " COLLATE utf8_bin AND F.dep = S2.id AND S1.id = F.head " +
                             minfreqsql +
                             u"AND F.bfhead = 1 AND F.bfdep = 1 AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
@@ -2072,14 +2080,14 @@ def relations(form):
         for corpus in corpora:
             corpus_table = config.DBTABLE + "_" + corpus.upper()
     
-            selects.append((corpus.upper(), u"(SELECT S1.string as head, S1.pos as headpos, F.rel, S2.string as dep, S2.pos as deppos, S2.stringextra as depextra, F.freq, R.freq as rel_freq, HR.freq as head_rel_freq, DR.freq as dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " +
-                            u"FROM `" + corpus_table + "_strings` as S1, `" + corpus_table + "_strings` as S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
+            selects.append((corpus.upper(), u"(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, DR.freq AS dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " +
+                            u"FROM `" + corpus_table + "_strings` AS S1, `" + corpus_table + "_strings` AS S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
                             u"WHERE S1.string = " + word_sql + " AND F.head = S1.id AND F.wfhead = 1 AND S2.id = F.dep " +
                             minfreqsql +
                             u"AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
                             ))
-            selects.append((None, u"(SELECT S1.string as head, S1.pos as headpos, F.rel, S2.string as dep, S2.pos as deppos, S2.stringextra as depextra, F.freq, R.freq as rel_freq, HR.freq as head_rel_freq, DR.freq as dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " +
-                            u"FROM `" + corpus_table + "_strings` as S1, `" + corpus_table + "_strings` as S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
+            selects.append((None, u"(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, DR.freq AS dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " +
+                            u"FROM `" + corpus_table + "_strings` AS S1, `" + corpus_table + "_strings` AS S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
                             u"WHERE S2.string = " + word_sql + " AND F.dep = S2.id AND F.wfdep = 1 AND S1.id = F.head " +
                             minfreqsql +
                             u"AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
@@ -2417,13 +2425,15 @@ def runCQP(command, form, executable=config.CQP_EXECUTABLE, registry=config.CWB_
     Yield one result line at the time, disregarding empty lines.
     If there is an error, raise a CQPError exception.
     """
+    env = os.environ.copy()
+    env["LC_COLLATE"] = config.LC_COLLATE
     encoding = form.get("encoding", config.CQP_ENCODING)
     if not isinstance(command, basestring):
         command = "\n".join(command)
     command = "set PrettyPrint off;\n" + command
     command = command.encode(encoding)
     process = Popen([executable, "-c", "-r", registry],
-                    stdin=PIPE, stdout=PIPE, stderr=PIPE)
+                    stdin=PIPE, stdout=PIPE, stderr=PIPE, env=env)
     reply, error = process.communicate(command)
     if error:
         # remove newlines from the error string:
