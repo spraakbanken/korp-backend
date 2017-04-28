@@ -40,8 +40,8 @@ import korp_config as config
 # Nothing needs to be changed in this file. Use korp_config.py for configuration.
 
 # The version of this script
-KORP_VERSION = "2.8"
-KORP_VERSION_DATE = "2015-12-07"
+KORP_VERSION = "6.0.0"
+KORP_VERSION_DATE = "2017-04-28"
 
 # The available CGI commands; for each command there must be a function
 # with the same name, taking one argument (the CGI form)
@@ -252,8 +252,8 @@ def corpus_info(form):
 ################################################################################
 
 def query_sample(form):
-    """Runs a sequencial query in the selected corpora in random order until at least one
-    hit is found, and then aborts the query. Use to get a random sample sentence."""
+    """Run a sequential query in the selected corpora in random order until at least one
+    hit is found, and then abort the query. Use to get a random sample sentence."""
     import random
     
     corpora = form.get("corpus")
@@ -568,7 +568,7 @@ def optimize(form):
 
 
 def query_optimize(cqp, cqpextra, find_match=True, expand=True):
-    """ Optimizes simple queries with multiple words by converting them to an MU query.
+    """ Optimize simple queries with multiple words by converting them to an MU query.
         Optimization only works for queries with at least two tokens, or one token preceded
         by one or more wildcards. The query also must use "within".
         """
@@ -667,7 +667,7 @@ def query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
         if contexts[c]:
             if not ":" in contexts[c]:
                 raise ValueError("Malformed value for key '%s'." % c)
-            contexts[c] = dict(x.split(":") for x in contexts[c].split(","))
+            contexts[c] = dict(x.split(":") for x in contexts[c].split(QUERY_DELIM))
     
     if corpus in contexts["leftcontext"] or corpus in contexts["rightcontext"]:
         context = (contexts["leftcontext"].get(corpus, defaultcontext), contexts["rightcontext"].get(corpus, defaultcontext))
@@ -679,7 +679,7 @@ def query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
     within = form.get("within", defaultwithin)
     if within:
         if ":" in within:
-            within = dict(x.split(":") for x in within.split(","))
+            within = dict(x.split(":") for x in within.split(QUERY_DELIM))
             within = within.get(corpus, defaultwithin)
         cqpextra["within"] = within
     
@@ -844,15 +844,21 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
         n = 0
         structs = defaultdict(list)
         struct = None
+        struct_value = []
 
         for word in words:
         
             if struct:
                 # Structural attrs can be split in the middle (<s_n 123>),
                 # so we need to finish the structure here
-                struct_id, word = word.split(">", 1)
-                structs["open"].append(struct + " " + struct_id)
+                if not ">" in word:
+                    struct_value.append(word)
+                    continue
+                
+                struct_v, word = word.split(">", 1)
+                structs["open"].append(struct + " " + " ".join(struct_value + [struct_v]))
                 struct = None
+                struct_value = []
 
             # We use special delimiters to see when we enter and leave the match region
             if word == LEFT_DELIM:
@@ -999,7 +1005,7 @@ def count(form):
     defaultwithin = form.get("defaultwithin", "")
     within = form.get("within", defaultwithin)
     if ":" in within:
-        within = dict(x.split(":") for x in within.split(","))
+        within = dict(x.split(":") for x in within.split(QUERY_DELIM))
     else:
         within = {"": defaultwithin}
     
@@ -1014,8 +1020,20 @@ def count(form):
     if isinstance(strippointer, basestring):
         strippointer = strippointer.split(QUERY_DELIM)
     
+    top = form.get("top", "")
+    if isinstance(top, basestring):
+        if ":" in top:
+            top = dict((x.split(":")[0], int(x.split(":")[1])) for x in top.split(QUERY_DELIM))
+        else:
+            top = dict((x, 1) for x in top.split(QUERY_DELIM))
+    
     # Sort numbered CQP-queries numerically
     cqp = [form.get(key).decode("utf-8") for key in sorted([k for k in form.keys() if k.startswith("cqp")], key=lambda x: int(x[3:]) if len(x) > 3 else 0)]
+    subcqp = [form.get(key).decode("utf-8") for key in sorted([k for k in form.keys() if k.startswith("subcqp")], key=lambda x: int(x[6:]) if len(x) > 6 else 0)]
+    
+    if subcqp:
+        cqp.append(subcqp)
+    
     simple = form.get("simple", "").lower() == "true"
 
     if cqp == ["[]"]:
@@ -1031,6 +1049,7 @@ def count(form):
                      sorted(ignore_case),
                      sorted(split),
                      sorted(strippointer),
+                     sorted(top.iteritems()),
                      start,
                      end)
     checksum = get_hash(checksum_data)
@@ -1047,16 +1066,13 @@ def count(form):
                 return result
 
     result = {"corpora": {}}
-    total_stats = {"absolute": defaultdict(int),
+
+    total_stats = [{"absolute": defaultdict(int),
                    "relative": defaultdict(float),
-                   "sums": {"absolute": 0, "relative": 0.0}}
+                   "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
     
     ns = Namespace()  # To make variables writable from nested functions
     ns.total_size = 0
-    
-    # TODO: we could use cwb-scan-corpus for counting:
-    #   cwb-scan-corpus -q SUC2 '?word=/^en$/c' 'pos' 'pos+1' | sort -n -r
-    # it's efficient, but more limited (no support for structural attributes)
 
     count_function = count_query_worker if not simple else count_query_worker_simple
 
@@ -1079,11 +1095,15 @@ def count(form):
                     lines, nr_hits, corpus_size = future.result()
 
                     ns.total_size += corpus_size
-                    corpus_stats = {"absolute": defaultdict(int),
+                    corpus_stats = [{"absolute": defaultdict(int),
                                     "relative": defaultdict(float),
-                                    "sums": {"absolute": 0, "relative": 0.0}}
+                                    "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
                     
+                    query_no = 0
                     for line in lines:
+                        if line == END_OF_LINE:
+                            query_no += 1
+                            continue
                         count, ngram = line.lstrip().split(" ", 1)
                         
                         if len(groupby) > 1:
@@ -1096,8 +1116,12 @@ def count(form):
                         for i, ngram in enumerate(ngram_groups):
                             # Split value sets and treat each value as a hit
                             if groupby[i] in split:
-                                tokens = ngram.split(" ")
-                                split_tokens = [[x for x in token.split("|") if x] if not token == "|" else ["|"] for token in tokens]
+                                tokens = [t+"|" for t in ngram.split("| ")]  # We can't split on just space due to spaces in annotations
+                                tokens[-1] = tokens[-1][:-1]
+                                if groupby[i] in top:
+                                    split_tokens = [[x for x in token.split("|") if x][:top[groupby[i]]] if not token == "|" else ["|"] for token in tokens]
+                                else:
+                                    split_tokens = [[x for x in token.split("|") if x] if not token == "|" else ["|"] for token in tokens]
                                 ngrams = itertools.product(*split_tokens)
                                 ngrams = [" ".join(x) for x in ngrams]
                             else:
@@ -1116,16 +1140,19 @@ def count(form):
                                                         
                         for ngram in cross:
                             ngram = "/".join(ngram)
-                            corpus_stats["absolute"][ngram] += int(count)
-                            corpus_stats["relative"][ngram] += int(count) / float(corpus_size) * 1000000
-                            corpus_stats["sums"]["absolute"] += int(count)
-                            corpus_stats["sums"]["relative"] += int(count) / float(corpus_size) * 1000000
-                            total_stats["absolute"][ngram] += int(count)
-                            total_stats["sums"]["absolute"] += int(count)
+                            corpus_stats[query_no]["absolute"][ngram] += int(count)
+                            corpus_stats[query_no]["relative"][ngram] += int(count) / float(corpus_size) * 1000000
+                            corpus_stats[query_no]["sums"]["absolute"] += int(count)
+                            corpus_stats[query_no]["sums"]["relative"] += int(count) / float(corpus_size) * 1000000
+                            total_stats[query_no]["absolute"][ngram] += int(count)
+                            total_stats[query_no]["sums"]["absolute"] += int(count)
+                        
+                        if subcqp and query_no > 0:
+                            corpus_stats[query_no]["cqp"] = subcqp[query_no - 1]
                 
                     result["corpora"][corpus] = corpus_stats
                     
-                    ns.limit_count += len(corpus_stats["absolute"])
+                    ns.limit_count += len(corpus_stats[0]["absolute"])
                     
                     if incremental:
                         queue.put('"progress_%d": "%s",' % (ns.progress_count, corpus))
@@ -1134,30 +1161,43 @@ def count(form):
 
         prevent_timeout(anti_timeout)
 
-    result["count"] = len(total_stats["absolute"])
+    result["count"] = len(total_stats[0]["absolute"])
     
-    if end > -1 and (start > 0 or len(total_stats["absolute"]) > (end - start) + 1):
-        total_absolute = sorted(total_stats["absolute"].iteritems(), key=lambda x: x[1], reverse=True)[start:end+1]
-        new_corpora = {}
-        for ngram, count in total_absolute:
-            total_stats["relative"][ngram] = count / float(ns.total_size) * 1000000
-                    
-            for corpus in corpora:
-                new_corpora.setdefault(corpus, {"absolute": {}, "relative": {}, "sums": result["corpora"][corpus]["sums"]})
-                if ngram in result["corpora"][corpus]["absolute"]:
-                    new_corpora[corpus]["absolute"][ngram] = result["corpora"][corpus]["absolute"][ngram]
-                if ngram in result["corpora"][corpus]["relative"]:
-                    new_corpora[corpus]["relative"][ngram] = result["corpora"][corpus]["relative"][ngram]
+    # Calculate relative numbers for the total
+    for query_no in range(len(subcqp) + 1):
+        if end > -1 and (start > 0 or len(total_stats[0]["absolute"]) > (end - start) + 1):
+            # Only a selected range of results requested
+            total_absolute = sorted(total_stats[query_no]["absolute"].iteritems(), key=lambda x: x[1], reverse=True)[start:end+1]
+            new_corpora = {}
+            for ngram, count in total_absolute:
+                total_stats[query_no]["relative"][ngram] = count / float(ns.total_size) * 1000000
+                        
+                for corpus in corpora:
+                    new_corpus_part = {"absolute": {}, "relative": {}, "sums": result["corpora"][corpus][query_no]["sums"]}
+                    if ngram in result["corpora"][corpus]["absolute"]:
+                        new_corpus_part["absolute"][ngram] = result["corpora"][corpus][query_no]["absolute"][ngram]
+                    if ngram in result["corpora"][corpus]["relative"]:
+                        new_corpus_part["relative"][ngram] = result["corpora"][corpus][query_no]["relative"][ngram]
+            
+                result["corpora"][corpus][query_no] = new_corpus_part
+                
+            total_stats[query_no]["absolute"] = dict(total_absolute)
+        else:
+            # Complete results requested
+            for ngram, count in total_stats[query_no]["absolute"].iteritems():
+                total_stats[query_no]["relative"][ngram] = count / float(ns.total_size) * 1000000
         
-        result["corpora"] = new_corpora
-        total_stats["absolute"] = dict(total_absolute)
-    else:
-        for ngram, count in total_stats["absolute"].iteritems():
-            total_stats["relative"][ngram] = count / float(ns.total_size) * 1000000
-    
-    total_stats["sums"]["relative"] = total_stats["sums"]["absolute"] / float(ns.total_size) * 1000000 if ns.total_size > 0 else 0.0
-    result["total"] = total_stats
-    
+        total_stats[query_no]["sums"]["relative"] = total_stats[query_no]["sums"]["absolute"] / float(ns.total_size) * 1000000 if ns.total_size > 0 else 0.0
+        
+        if subcqp and query_no > 0:
+            total_stats[query_no]["cqp"] = subcqp[query_no - 1]
+        
+    result["total"] = total_stats if len(total_stats) > 1 else total_stats[0]
+
+    if not subcqp:
+        for corpus in corpora:
+            result["corpora"][corpus] = result["corpora"][corpus][0]
+
     if "debug" in form:
         result["DEBUG"] = {"cqp": cqp, "checksum": checksum, "simple": simple}
     
@@ -1177,7 +1217,7 @@ def count(form):
 
 
 def count_all(form):
-    """Returns a count of the given attrs.
+    """Return a count of the given attrs.
 
     The required parameters are
      - corpus: the CWB corpus
@@ -1247,7 +1287,7 @@ def count_time(form):
             raise ValueError("When using 'from' or 'to', both need to be specified.")
 
     # Get date range of selected corpora
-    corpus_info = info({"corpus": ",".join(corpora)})
+    corpus_info = info({"corpus": QUERY_DELIM.join(corpora)})
     corpora_copy = corpora.copy()
 
     if fromdate and todate:
@@ -1312,7 +1352,7 @@ def count_time(form):
     corpora_sizes = {}
     
     ns = Namespace()
-    total_rows = [[] for i in range(len(subcqp))] + [[]]
+    total_rows = [[] for i in range(len(subcqp) + 1)]
     ns.total_size = 0
     
     ns.progress_count = 0
@@ -1456,7 +1496,7 @@ def count_query_worker(corpus, cqp, groupby, ignore_case, form, expand_prequerie
     within = form.get("within", defaultwithin)
     if within:
         if ":" in within:
-            within = dict(x.split(":") for x in within.split(","))
+            within = dict(x.split(":") for x in within.split(QUERY_DELIM))
             within = within.get(corpus, defaultwithin)
         cqpextra["within"] = within
 
@@ -1531,12 +1571,28 @@ def count_query_worker_simple(corpus, cqp, groupby, ignore_case, form, expand_pr
 
     lines = list(run_cwb_scan(corpus, groupby, form))
     nr_hits = 0
+    
+    ic_index = []
+    new_lines = {}
+    if ignore_case:
+        ic_index = [i for i, g in enumerate(groupby) if g in ignore_case]
 
     for i in range(len(lines)):
         c, v = lines[i].split("\t", 1)
-        # Convert result to the same format as the regular CQP count
-        lines[i] = "%s %s" % (c, v)
         nr_hits += int(c)
+        
+        if ic_index:
+            v = "\t".join(vv.lower() if i in ic_index else vv for i, vv in enumerate(v.split("\t")))
+            new_lines[v] = new_lines.get(v, 0) + int(c)
+        else:
+            # Convert result to the same format as the regular CQP count
+            lines[i] = "%s %s" % (c, v)
+
+    if ic_index:
+        lines = []
+        for v, c in new_lines.iteritems():
+            # Convert result to the same format as the regular CQP count
+            lines.append("%s %s" % (c, v))
     
     # Corpus size equals number of hits since we count all tokens
     corpus_size = nr_hits
@@ -1544,7 +1600,7 @@ def count_query_worker_simple(corpus, cqp, groupby, ignore_case, form, expand_pr
 
 
 def loglike(form):
-    """Runs a log-likelihood comparison on two queries.
+    """Run a log-likelihood comparison on two queries.
     
     The required parameters are
      - set1_cqp: the first CQP query
@@ -1566,7 +1622,7 @@ def loglike(form):
         return wordtotal * (float(total) / sumtotal)
 
     def compute_loglike((wf1, tot1), (wf2, tot2)):
-        """ Computes log-likelihood for a single pair. """
+        """ Compute log-likelihood for a single pair. """
         e1 = expected(tot1, wf1 + wf2, tot1 + tot2)
         e2 = expected(tot2, wf1 + wf2, tot1 + tot2)
         (l1, l2) = (0, 0)
@@ -1585,7 +1641,7 @@ def loglike(form):
         return val > 15.13
 
     def select(w, ls):
-        """ Splits annotations on | and returns as list. If annotation is missing, returns the word instead. """
+        """ Split annotations on | and returns as list. If annotation is missing, returns the word instead. """
         #    for c in w:
         #        if not (c.isalpha() or (len(w) > 1 and c in '-:')):
         #            return []
@@ -1615,7 +1671,7 @@ def loglike(form):
         return (d, tot)
 
     def compute_list(d1, tot1, ref, reftot):
-        """ Computes log-likelyhood for lists. """
+        """ Compute log-likelyhood for lists. """
         result = []
         all_w = set(d1.keys()).union(set(ref.keys()))
         for w in all_w:
@@ -1625,7 +1681,7 @@ def loglike(form):
         return result
 
     def compute_ll_stats(ll_list, count, sets):
-        """ Calculates max, min, average, and truncates word list. """
+        """ Calculate max, min, average, and truncates word list. """
         tot = len(ll_list)
         new_list = []
         
@@ -1680,7 +1736,7 @@ def loglike(form):
     # If same CQP for both sets, handle as one query for better performance
     if same_cqp:
         form["cqp"] = form.get("set1_cqp")
-        form["corpus"] = ",".join(corpora)
+        form["corpus"] = QUERY_DELIM.join(corpora)
         count_result = count(form)
         
         sets = [{"total": 0, "freq": defaultdict(int)}, {"total": 0, "freq": defaultdict(int)}]
@@ -1695,9 +1751,9 @@ def loglike(form):
         
     else:
         form1, form2 = form.copy(), form.copy()
-        form1["corpus"] = ",".join(set1)
+        form1["corpus"] = QUERY_DELIM.join(set1)
         form1["cqp"] = form.get("set1_cqp")
-        form2["corpus"] = ",".join(set2)
+        form2["corpus"] = QUERY_DELIM.join(set2)
         form2["cqp"] = form.get("set2_cqp")
         count_result = [count(form1), count(form2)]
     
@@ -1725,7 +1781,7 @@ def loglike(form):
 ################################################################################
 
 def lemgram_count(form):
-    """Returns lemgram statistics per corpus.
+    """Return lemgram statistics per corpus.
 
     The required parameters are
      - lemgram: list of lemgrams
@@ -1793,7 +1849,7 @@ def lemgram_count(form):
 ################################################################################
 
 def timespan(form):
-    """Calculates timespan information for corpora.
+    """Calculate timespan information for corpora.
     The time information is retrieved from the database.
 
     The required parameters are
@@ -1925,13 +1981,13 @@ def timespan(form):
 
 
 def timespan_calculator(timedata, granularity="y", spans=False, combined=True, per_corpus=True, strategy=1):
-    """Calculates timespan information for corpora.
+    """Calculate timespan information for corpora.
 
     The required parameters are
      - timedata: the time data to be processed
 
     The optional parameters are
-     - granularity: granularity of result (y = year, m = month, d = day)
+     - granularity: granularity of result (y = year, m = month, d = day, h = hour, n = minute, s = second)
        (default: year)
      - spans: give results as spans instead of points
        (default: points)
@@ -2123,7 +2179,7 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
 ################################################################################
 
 def relations(form):
-    """Calculates word picture data.
+    """Calculate word picture data.
 
     The required parameters are
      - corpus: the CWB corpus/corpora
@@ -2336,16 +2392,12 @@ def relations(form):
 ################################################################################
 
 def relations_sentences(form):
-    """Executes a CQP query to find sentences with a given relation from a word picture.
+    """Execute a CQP query to find sentences with a given relation from a word picture.
 
     The required parameters are
-     - corpus: the CWB corpus/corpora
-     - head: head of relation
-     - rel: relation
+     - source: source ID
 
     The optional parameters are
-     - dep: dependent of relation
-     - depextra: dependent prefix
      - start, end: which result rows that should be returned
      - show
      - show_struct
@@ -2374,6 +2426,8 @@ def relations_sentences(form):
     if isinstance(shown_structs, basestring):
         shown_structs = shown_structs.split(QUERY_DELIM)
     shown_structs = set(shown_structs)
+    
+    defaultcontext = form.get("defaultcontext", "1 sentence")
     
     querystarttime = time.time()
 
@@ -2441,7 +2495,7 @@ def relations_sentences(form):
              "start": "0",
              "end": str(end - start),
              "show_struct": ["sentence_id"] + list(shown_structs),
-             "defaultcontext": "1 sentence"}
+             "defaultcontext": defaultcontext}
         if shown:
             q["show"] = shown
         result_temp = query(q)
@@ -2451,15 +2505,16 @@ def relations_sentences(form):
             s = result_temp["kwic"][i]
             sid = s["structs"]["sentence_id"]
             r = sids[sid][0]
-            s["match"]["start"] = min(map(int, r)) - 1
-            s["match"]["end"] = max(map(int, r))
+            sentence_start = s["match"]["start"]
+            s["match"]["start"] = sentence_start + min(map(int, r)) - 1
+            s["match"]["end"] = sentence_start + max(map(int, r))
             
             # If the same relation appears more than once in the same sentence,
             # append copies of the sentence as separate results
             for r in sids[sid][1:]:
                 s2 = deepcopy(s)
-                s2["match"]["start"] = min(map(int, r)) - 1
-                s2["match"]["end"] = max(map(int, r))
+                s2["match"]["start"] = sentence_start + min(map(int, r)) - 1
+                s2["match"]["end"] = sentence_start + max(map(int, r))
                 result_temp["kwic"].insert(i + 1, s2)
     
         result.setdefault("kwic", []).extend(result_temp["kwic"])
@@ -2477,7 +2532,7 @@ def relations_sentences(form):
 # Helper functions
 
 def parse_cqp(cqp):
-    """ Tries to parse a CQP query, returning identified tokens and a
+    """ Try to parse a CQP query, returning identified tokens and a
     boolean indicating partial failure if True."""
     
     sections = []
@@ -2591,7 +2646,7 @@ def runCQP(command, form, executable=config.CQP_EXECUTABLE, registry=config.CWB_
         error = re.sub(r"^CQP Error: *", r"", error)
         error = re.sub(r" *(CQP Error:).*$", r"", error)
         # Ignore certain errors: 1) "show +attr" for unknown attr, 2) querying unknown structural attribute, 3) calculating statistics for empty results
-        if not (attr_ignore and "No such attribute:" in error) and not "is not defined for corpus" in error and not "cl->range && cl->size > 0" in error and not "neither a positional/structural attribute" in error:
+        if not (attr_ignore and "No such attribute:" in error) and not "is not defined for corpus" in error and not "cl->range && cl->size > 0" in error and not "neither a positional/structural attribute" in error and not "CL: major error, cannot compose string: invalid UTF8 string passed to cl_string_canonical..." in error:
             raise CQPError(error)
     for line in reply.decode(encoding, errors="ignore").splitlines():
         if line:
@@ -2649,7 +2704,7 @@ def assert_key(key, form, regexp, required=False):
 
 
 def print_header():
-    """Prints the JSON header."""
+    """Print the JSON header."""
     print "Content-Type: application/json"
     print "Access-Control-Allow-Origin: *"
     print "Access-Control-Allow-Methods: GET, POST"
@@ -2658,7 +2713,7 @@ def print_header():
 
 
 def print_object(obj, form):
-    """Prints an object in JSON format.
+    """Print an object in JSON format.
     The CGI form can contain optional parameter 'indent'
     which change the output format.
     """
@@ -2674,7 +2729,7 @@ def print_object(obj, form):
 
 
 def authenticate(_=None):
-    """Authenticates a user against an authentication server.
+    """Authenticate a user against an authentication server.
     """
     
     auth_header = cgi.os.environ.get('HTTP_AUTH_HEADER')
@@ -2700,21 +2755,18 @@ def authenticate(_=None):
         
         if auth_response["authenticated"]:
             permitted_resources = auth_response["permitted_resources"]
+            result = {"corpora": []}
             if "corpora" in permitted_resources:
-                # TODO: Ta bort stöd för gamla formatet
-                return permitted_resources
-            elif "Corpus" in permitted_resources:
-                result = {"corpora": []}
-                for c in permitted_resources["Corpus"]:
-                    if permitted_resources["Corpus"][c]["read"]:
-                        result["corpora"].append(c)
-                return result
+                for c in permitted_resources["corpora"]:
+                    if permitted_resources["corpora"][c]["read"]:
+                        result["corpora"].append(c.upper())
+            return result
 
     return {}
 
 
 def check_authentication(corpora):
-    """Takes a list of corpora, and if any of them are protected, runs authentication.
+    """Take a list of corpora, and if any of them are protected, run authentication.
     Raises an error if authentication fails."""
     
     if config.PROTECTED_FILE:
@@ -2749,7 +2801,7 @@ class CustomTracebackException(Exception):
         self.exception = exception
         
 
-def prevent_timeout(f, args=None, timeout=90):
+def prevent_timeout(f, args=None, timeout=15):
     """ Used in places where the script otherwise might timeout. Keeps the CGI alive by printing
     out whitespace. """
     q = Queue()
@@ -2767,7 +2819,7 @@ def prevent_timeout(f, args=None, timeout=90):
 
     while True:
         try:
-            msg = q.get(True, timeout=timeout)
+            msg = q.get(block=True, timeout=timeout)
             if msg == "DONE":
                 break
             elif isinstance(msg, tuple):
