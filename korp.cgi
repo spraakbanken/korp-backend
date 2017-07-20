@@ -40,12 +40,12 @@ import korp_config as config
 # Nothing needs to be changed in this file. Use korp_config.py for configuration.
 
 # The version of this script
-KORP_VERSION = "6.0.0"
-KORP_VERSION_DATE = "2017-04-28"
+KORP_VERSION = "6.0.2"
+KORP_VERSION_DATE = "2017-07-20"
 
 # The available CGI commands; for each command there must be a function
 # with the same name, taking one argument (the CGI form)
-COMMANDS = "info query count count_all relations relations_sentences lemgram_count timespan count_time optimize loglike query_sample authenticate".split()
+COMMANDS = "info query count count_all relations relations_sentences lemgram_count timespan count_time optimize loglike query_sample struct_values authenticate".split()
 
 
 def default_command(form):
@@ -846,69 +846,73 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
         struct = None
         struct_value = []
 
-        for word in words:
-        
-            if struct:
-                # Structural attrs can be split in the middle (<s_n 123>),
-                # so we need to finish the structure here
-                if not ">" in word:
-                    struct_value.append(word)
+        try:
+            for word in words:
+                if struct:
+                    # Structural attrs can be split in the middle (<s_n 123>),
+                    # so we need to finish the structure here
+                    if not ">" in word:
+                        struct_value.append(word)
+                        continue
+                    
+                    struct_v, word = word.split(">", 1)
+                    structs["open"].append(struct + " " + " ".join(struct_value + [struct_v]))
+                    struct = None
+                    struct_value = []
+
+                # We use special delimiters to see when we enter and leave the match region
+                if word == LEFT_DELIM:
+                    match["start"] = n
                     continue
-                
-                struct_v, word = word.split(">", 1)
-                structs["open"].append(struct + " " + " ".join(struct_value + [struct_v]))
-                struct = None
-                struct_value = []
+                elif word == RIGHT_DELIM:
+                    match["end"] = n
+                    continue
 
-            # We use special delimiters to see when we enter and leave the match region
-            if word == LEFT_DELIM:
-                match["start"] = n
-                continue
-            elif word == RIGHT_DELIM:
-                match["end"] = n
-                continue
+                # We read all structural attributes that are opening (from the left)
+                while word[0] == "<":
+                    if word[1:] in s_attrs:
+                        # We have found a structural attribute with a value (<s_n 123>).
+                        # We continue to the next word to get the value
+                        struct = word[1:]
+                        break
+                    elif ">" in word and word[1:word.find(">")] in s_attrs:
+                        # We have found a structural attribute without a value (<s>)
+                        struct, word = word[1:].split(">", 1)
+                        structs["open"].append(struct)
+                        struct = None
+                    else:
+                        # What we've found is not a structural attribute
+                        break
 
-            # We read all structural attributes that are opening (from the left)
-            while word[0] == "<":
-                if word[1:] in s_attrs:
+                if struct:
                     # If we stopped in the middle of a struct (<s_n 123>),
                     # we need to continue with the next word
-                    struct = word[1:]
-                    break
-                elif ">" in word and word[1:word.find(">")] in s_attrs:
-                    # This is for s-attrs that have no arguments (<s>)
-                    struct, word = word[1:].split(">", 1)
-                    structs["open"].append(struct)
-                    struct = None
-                else:
-                    # What we've found is not a structural attribute
-                    break
+                    continue
 
-            if struct:
-                # If we stopped in the middle of a struct (<s_n 123>),
-                # we need to continue with the next word
-                continue
+                # Now we read all s-attrs that are closing (from the right)
+                while word[-1] == ">" and "</" in word:
+                    tempword, struct = word[:-1].rsplit("</", 1)
+                    if not tempword or struct not in s_attrs:
+                        struct = None
+                        break
+                    elif struct in s_attrs:
+                        word = tempword
+                        structs["close"].insert(0, struct)
+                        struct = None
 
-            # Now we read all s-attrs that are closing (from the right)
-            while word[-1] == ">" and "</" in word:
-                tempword, struct = word[:-1].rsplit("</", 1)
-                if not tempword or struct not in s_attrs:
-                    struct = None
-                    break
-                elif struct in s_attrs:
-                    word = tempword
-                    structs["close"].insert(0, struct)
-                    struct = None
+                # What's left is the word with its p-attrs
+                values = word.rsplit("/", nr_splits)
+                token = dict((attr, translate_undef(val)) for (attr, val) in zip(p_attrs, values))
+                if structs:
+                    token["structs"] = structs
+                    structs = defaultdict(list)
+                tokens.append(token)
 
-            # What's left is the word with its p-attrs
-            values = word.rsplit("/", nr_splits)
-            token = dict((attr, translate_undef(val)) for (attr, val) in zip(p_attrs, values))
-            if structs:
-                token["structs"] = structs
-                structs = defaultdict(list)
-            tokens.append(token)
-
-            n += 1
+                n += 1
+        except IndexError:
+            # Attributes containing ">" or "<" can make some lines unparseable. We skip them
+            # until we come up with better a solution.
+            continue
 
         if aligned:
             # If this was an aligned row, we add it to the previous kwic row
@@ -949,6 +953,145 @@ def which_hits(corpora, stats, start, end):
             break
     
     return corpus_hits
+
+
+def struct_values(form):
+    assert_key("corpus", form, IS_IDENT, True)
+    assert_key("struct", form, "", True)
+    assert_key("incremental", form, r"(true|false)")
+    
+    incremental = form.get("incremental", "").lower() == "true"
+    stats = form.get("count", "").lower() == "true"
+    use_cache = bool(not form.get("cache", "").lower() == "false" and config.CACHE_DIR)
+    
+    corpora = form.get("corpus")
+    if isinstance(corpora, basestring):
+        corpora = corpora.upper().split(QUERY_DELIM)
+    corpora = set(corpora)
+    
+    check_authentication(corpora)
+    
+    structs = form.get("struct")
+    if isinstance(structs, basestring):
+        structs = structs.split(QUERY_DELIM)
+
+    ns = Namespace()  # To make variables writable from nested functions
+
+    result = {"corpora": defaultdict(dict)}
+    total_stats = defaultdict(set)
+    
+    from_cache = set()  # Keep track of what has been read from cache
+
+    if use_cache:
+        all_cache = True
+        for corpus in corpora:
+            for struct in structs:
+                checksum_data = (corpus, struct, stats)
+                checksum = get_hash(checksum_data)
+                
+                cachefilename = os.path.join(config.CACHE_DIR, "values_%s_%s" % (corpus, checksum))
+                if os.path.exists(cachefilename):
+                    with open(cachefilename, "r") as cachefile:
+                        result["corpora"].setdefault(corpus, {})
+                        data = json.load(cachefile)
+                        if data:
+                            result["corpora"][corpus][struct] = data
+                            # total_stats[struct] = total_stats[struct].union(set(data))
+                        if "debug" in form:
+                            result.setdefault("DEBUG", {"caches_read": []})
+                            result["DEBUG"]["caches_read"].append("%s:%s" % (corpus, struct))
+                    from_cache.add((corpus, struct))
+                else:
+                    all_cache = False
+        
+        if all_cache:
+            result["combined"] = {} #dict((x[0], sorted(x[1])) for x in total_stats.iteritems())
+            return result
+
+    ns.progress_count = 0
+    if incremental:
+        print '"progress_corpora": [%s],' % ('"' + '", "'.join(corpora) + '"' if corpora else "")
+
+    with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
+        future_query = dict((executor.submit(count_query_worker_simple, corpus, None, struct.split(">"), False, form, False), (corpus, struct)) for corpus in corpora for struct in structs if not (corpus, struct) in from_cache)
+        
+        def anti_timeout(queue):
+
+            for future in futures.as_completed(future_query):
+                corpus, struct = future_query[future]
+                if future.exception() is not None:
+                    raise CQPError(future.exception())
+                else:
+                    lines, nr_hits, corpus_size = future.result()
+
+                    corpus_stats = {} if stats else []
+                    vals_dict = {}
+                    
+                    for line in lines:
+                        count, ngram = line.lstrip().split(" ", 1)
+                        
+                        if ">" in struct:
+                            #struct_parts = struct.split(">")
+                            ngram = ngram.split("\t")
+                            #prev = None
+                            #for i in range(len(ngram), 0, -1):
+                            #    prev = {struct_parts[i-1]: {ngram[i-1]: prev}}
+                            #ngram = prev
+                            prev = vals_dict
+                            for i, n in enumerate(ngram):
+                                if stats and i == len(ngram)-1:
+                                    prev[n] = int(count)
+                                    break
+                                elif not stats and i == len(ngram)-2:
+                                    prev.setdefault(n, [])
+                                    prev[n].append(ngram[i+1])
+                                    break
+                                else:
+                                    prev.setdefault(n, {})
+                                prev = prev[n]
+                        else:
+                            if stats:
+                                corpus_stats[ngram] = int(count)
+                            else:
+                                corpus_stats.append(ngram)
+                        #total_stats[struct].add(ngram)
+    
+                    if ">" in struct:
+                        result["corpora"][corpus][struct] = vals_dict
+                    elif corpus_stats:
+                        result["corpora"][corpus][struct] = corpus_stats if stats else sorted(corpus_stats)
+                    
+                    if incremental:
+                        queue.put('"progress_%d": "%s",' % (ns.progress_count, corpus))
+                        ns.progress_count += 1
+            queue.put("DONE")
+
+        prevent_timeout(anti_timeout)
+
+    result["combined"] = {} #dict((x[0], sorted(x[1])) for x in total_stats.iteritems())
+
+    if use_cache:
+        unique_id = os.getenv("UNIQUE_ID")
+        
+        for corpus in corpora:
+            for struct in structs:
+                if (corpus, struct) in from_cache:
+                    continue
+                checksum_data = (corpus, struct, stats)
+                checksum = get_hash(checksum_data)      
+                cachefilename = os.path.join(config.CACHE_DIR, "values_%s_%s" % (corpus, checksum))
+                tmpfile = "%s.%s" % (cachefilename, unique_id)
+
+                with open(tmpfile, "w") as cachefile:
+                    json.dump(result["corpora"][corpus].get(struct, []), cachefile)
+                os.rename(tmpfile, cachefilename)
+                
+                if "debug" in form:
+                    result.setdefault("DEBUG", {})
+                    result["DEBUG"].setdefault("caches_saved", [])
+                    result["DEBUG"]["caches_saved"].append("%s:%s" % (corpus, struct))
+    
+    return result
 
 
 ################################################################################
@@ -2648,7 +2791,7 @@ def runCQP(command, form, executable=config.CQP_EXECUTABLE, registry=config.CWB_
         # Ignore certain errors: 1) "show +attr" for unknown attr, 2) querying unknown structural attribute, 3) calculating statistics for empty results
         if not (attr_ignore and "No such attribute:" in error) and not "is not defined for corpus" in error and not "cl->range && cl->size > 0" in error and not "neither a positional/structural attribute" in error and not "CL: major error, cannot compose string: invalid UTF8 string passed to cl_string_canonical..." in error:
             raise CQPError(error)
-    for line in reply.decode(encoding, errors="ignore").splitlines():
+    for line in reply.decode(encoding, errors="ignore").split("\n"):  # We don't use splitlines() since it might split on special characters in the data
         if line:
             yield line
 
@@ -2667,7 +2810,7 @@ def run_cwb_scan(corpus, attrs, form, executable=config.CWB_SCAN_EXECUTABLE, reg
         error = re.sub(r"\s+", r" ", error)
         # Ignore certain errors: 1) "show +attr" for unknown attr, 2) querying unknown structural attribute, 3) calculating statistics for empty results
         raise CQPError(error)
-    for line in reply.decode(encoding, errors="ignore").splitlines():
+    for line in reply.decode(encoding, errors="ignore").split("\n"):  # We don't use splitlines() since it might split on special characters in the data
         if line and len(line) < 65536:
             yield line
 
@@ -2736,6 +2879,8 @@ def authenticate(_=None):
 
     if auth_header and auth_header.startswith("Basic "):
         user, pw = base64.b64decode(auth_header[6:]).split(":")
+        user = user.decode("raw_unicode_escape").encode("utf-8")
+        pw = pw.decode("raw_unicode_escape").encode("utf-8")
 
         postdata = {
             "username": user,
