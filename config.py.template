@@ -1,7 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-This is the configuration file, used by the main korp.cgi script.
+Configuration file used by the main korp.py script.
+
+Copy this file to config.py and change the settings below.
 """
+
+# Host and port for the WSGI server
+WSGI_HOST = "0.0.0.0"
+WSGI_PORT = 1234
 
 # The absolute path to the CQP binaries
 CQP_EXECUTABLE = ""
@@ -23,15 +29,23 @@ MAX_KWIC_ROWS = 0
 # Number of threads to use during parallel processing
 PARALLEL_THREADS = 3
 
-# The name of the MySQL database and table prefix
+# Database host and port
+DBHOST = "0.0.0.0"
+DBPORT = 3306
+
+# Database name
 DBNAME = ""
-DBTABLE = ""
+
+# Word Picture table prefix
+DBWPTABLE = "relations"
+
 # Username and password for database access
 DBUSER = ""
 DBPASSWORD = ""
 
 # URL to authentication server
 AUTH_SERVER = ""
+
 # Secret string used when communicating with authentication server
 AUTH_SECRET = ""
 

@@ -1,63 +1,89 @@
-#!/usr/bin/python
 # -*- coding: utf-8 -*-
 """
-korp.cgi is a CGI interface for querying the corpora that are available on the server.
+korp.py is a WSGI application for querying corpora available on the server.
 Currently it acts as a wrapper for the CQP querying language of Corpus Workbench.
 
-Configuration is done by editing korp_config.py.
+Configuration is done by editing config.py.
 
-http://spraakbanken.gu.se/korp/
+https://spraakbanken.gu.se/korp/
+
+Dependencies (install with 'pip install ...'):
+* flask
+* flask_cors
+* flask-mysqldb (also installs mysqlclient)
+* waitress or gevent
+* python-dateutil
+
 """
+
+# gevent
+from gevent.pywsgi import WSGIServer
+from gevent import monkey
+monkey.patch_all()  # Patching needs to be done as early as possible, before other imports
+
+# Waitress
+# from waitress import serve
 
 from subprocess import Popen, PIPE
 from collections import defaultdict
 from concurrent import futures
-
+import uuid
+import binascii
 import sys
 import os
-import random
 import time
-import cgi
 import re
 import json
-import MySQLdb
 import zlib
-import urllib
-import urllib2
+import urllib.request
+import urllib.parse
+import urllib.error
 import base64
-import md5
-from Queue import Queue, Empty
+import hashlib
+from queue import Queue, Empty
 import threading
-import ast
 import itertools
-import MySQLdb.cursors
-import cPickle
+from flask_mysqldb import MySQL
+import pickle
 import traceback
 import functools
-import korp_config as config
+import math
+import random
+import config
+import flask
+from flask import Flask, request, Response, stream_with_context
+from flask_cors import CORS
 
 ################################################################################
-# Nothing needs to be changed in this file. Use korp_config.py for configuration.
+# Nothing needs to be changed in this file. Use config.py for configuration.
 
 # The version of this script
-KORP_VERSION = "6.0.2"
-KORP_VERSION_DATE = "2017-07-20"
+KORP_VERSION = "6.1.0"
+KORP_VERSION_DATE = "2017-09-06"
 
-# The available CGI commands; for each command there must be a function
-# with the same name, taking one argument (the CGI form)
-COMMANDS = "info query count count_all relations relations_sentences lemgram_count timespan count_time optimize loglike query_sample struct_values authenticate".split()
-
-
-def default_command(form):
-    return "query" if "cqp" in form else "info"
-
+# The available commands. For each command there must be a function with the
+# same name, taking one argument (a dictionary with form or query string data).
+COMMANDS = ["authenticate",
+            "count",
+            "count_all",
+            "count_time",
+            "info",
+            "lemgram_count",
+            "loglike",
+            "optimize",
+            "query",
+            "query_sample",
+            "relations",
+            "relations_sentences",
+            "struct_values",
+            "timespan"]
 
 # Special symbols used by this script; they must NOT be in the corpus
 END_OF_LINE = "-::-EOL-::-"
 LEFT_DELIM = "---:::"
 RIGHT_DELIM = ":::---"
 
-# Regular expressions for parsing CGI parameters
+# Regular expressions for parsing parameters
 IS_NUMBER = re.compile(r"^\d+$")
 IS_IDENT = re.compile(r"^[\w\-,|]+$")
 
@@ -65,124 +91,208 @@ QUERY_DELIM = ","
 
 
 ################################################################################
-# And now the functions corresponding to the CGI commands
 
-def main():
-    """The main CGI handler; reads the 'command' parameter and calls
-    the same-named function with the CGI form as argument.
 
-    Global CGI parameter are
-     - command: (default: 'info' or 'query' depending on the 'cqp' parameter)
+app = Flask(__name__)
+CORS(app)
+
+# Configure database connection
+app.config["MYSQL_HOST"] = config.DBHOST
+app.config["MYSQL_USER"] = config.DBUSER
+app.config["MYSQL_PASSWORD"] = config.DBPASSWORD
+app.config["MYSQL_DB"] = config.DBNAME
+app.config["MYSQL_PORT"] = config.DBPORT
+app.config["MYSQL_USE_UNICODE"] = True
+app.config["MYSQL_CURSORCLASS"] = "DictCursor"
+mysql = MySQL(app)
+
+# Create cache dir if needed
+if config.CACHE_DIR and not os.path.exists(config.CACHE_DIR):
+    os.makedirs(config.CACHE_DIR)
+
+
+def main_handler(generator):
+    """Decorator wrapping all WSGI endpoints, handling errors and formatting.
+    
+    Global parameters are
      - callback: an identifier that the result should be wrapped in
      - encoding: the encoding for interacting with the corpus (default: UTF-8)
-     - indent: pretty-print the result with a specific indentation (for debugging)
+     - indent: pretty-print the result with a specific indentation
      - debug: if set, return some extra information (for debugging)
     """
-    starttime = time.time()
-    sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)  # Open unbuffered stdout
-    print_header()
+    
+    @functools.wraps(generator)  # Copy original function's information, needed by Flask
+    def decorated(args=None):
+    
+        flask.g.cache = bool(not request.values.get("cache", "").lower() == "false" and config.CACHE_DIR)
+    
+        def error_handler():
+            """Format exception info for output to user."""
+            exc = sys.exc_info()
+            if isinstance(exc[1], CustomTracebackException):
+                exc = exc[1].exception
+            error = {"ERROR": {"type": exc[0].__name__,
+                               "value": str(exc[1])
+                               }}
+            if "debug" in request.values:
+                error["ERROR"]["traceback"] = "".join(traceback.format_exception(*exc)).splitlines()
+            return error
 
-    if config.CACHE_DIR and not os.path.exists(config.CACHE_DIR):
-        os.makedirs(config.CACHE_DIR)
-    
-    # Convert form fields to regular dictionary
-    form_raw = cgi.FieldStorage()
-    form = dict((field, form_raw.getvalue(field)) for field in form_raw.keys())
-    
-    incremental = form.get("incremental", "").lower() == "true"
-    callback = form.get("callback")
-    if callback:
-        print callback + "(",
-    
-    if incremental:
-        print "{"
+        def incremental_json(ff):
+            """Incrementally yield result as JSON."""
+            if callback:
+                yield callback + "("
+            yield "{\n"
             
-    command = form.get("command")
+            try:
+                for response in ff:
+                    if not response:
+                        yield " \n"
+                    else:
+                        yield json.dumps(response)[1:-1] + ",\n"
+            except:
+                error = error_handler()
+                yield json.dumps(error)[1:-1] + ",\n"
+            
+            yield json.dumps({"time": time.time() - starttime})[1:] + "\n"
+            if callback:
+                yield ")"
+
+        if args is not None:
+            # Function is internally used
+            return generator(args)
+        else:
+            # Function is externally called
+            starttime = time.time()
+            incremental = request.values.get("incremental", "").lower() == "true"
+            callback = request.values.get("callback")
+            indent = request.values.get("indent", None, type=int)
+            
+            if incremental:
+                # Streaming response
+                return Response(stream_with_context(incremental_json(generator())), mimetype="application/json")
+            else:
+                # Regular non-streaming response
+                try:
+                    result = generator_to_dict(generator())
+                except:
+                    result = error_handler()
+                result["time"] = time.time() - starttime
+                
+                if callback:
+                    result = callback + "(" + json.dumps(result, indent=indent) + ")"
+                else:
+                    result = json.dumps(result, indent=indent)
+                return Response(result, mimetype="application/json")
+
+    return decorated
+
+
+@app.route("/", methods=["GET", "POST"])
+def main():
+    """Handle legacy calls using /?command=<command> instead of /<command>,
+    by calling the same-named function."""
+    command = request.values.get("command")
     if not command:
-        command = default_command(form)
-    try:
-        if command not in COMMANDS:
-            raise ValueError("'%s' is not a permitted command, try these instead: '%s'" % (command, "', '".join(COMMANDS)))
-        assert_key("callback", form, IS_IDENT)
-        assert_key("encoding", form, IS_IDENT)
-        assert_key("indent", form, IS_NUMBER)
-
-        # Here we call the command function:
-        result = globals()[command](form)
-        result["time"] = time.time() - starttime
-        print_object(result, form)
-    except:
-        import traceback
-        exc = sys.exc_info()
-        if isinstance(exc[1], CustomTracebackException):
-            exc = exc[1].exception
-        error = {"ERROR": {"type": exc[0].__name__,
-                           "value": str(exc[1])
-                           },
-                 "time": time.time() - starttime}
-        if "debug" in form:
-            error["ERROR"]["traceback"] = "".join(traceback.format_exception(*exc)).splitlines()
-        print_object(error, form)
-    
-    if incremental:
-        print "}"
-
-    if callback:
-        print ")",
+        command = "info"
+    if command not in COMMANDS:
+        raise ValueError("'%s' is not a permitted command, try these instead: '%s'" % (command, "', '".join(COMMANDS)))
+    return globals()[command]()
 
 
 ################################################################################
 # INFO
 ################################################################################
 
-def info(form):
+@app.route("/sleep", methods=["GET", "POST"])
+@main_handler
+def sleep(args=None):
+    if args is None:
+        args = request.values
+    t = int(args.get("t", 5))
+    for x in range(t):
+        time.sleep(1)
+        yield {"t": x}
+
+
+@app.route("/info", methods=["GET", "POST"])
+@main_handler
+def info(args=None):
     """Return information, either about a specific corpus
     or general information about the available corpora.
     """
-    if "corpus" in form:
-        return corpus_info(form)
+    if request.values.get("corpus"):
+        yield corpus_info()
     else:
-        return general_info(form)
+        yield general_info()
 
 
-def general_info(form):
+def general_info(args=None):
     """Return information about the available corpora.
     """
-    corpora = runCQP("show corpora;", form)
-    version = corpora.next()
+    if args is None:
+        args = request.values
+        
+    if flask.g.cache:
+        cachefilename = os.path.join(config.CACHE_DIR, "info")
+        if os.path.isfile(cachefilename):
+            with open(cachefilename, "r") as cachefile:
+                result = json.load(cachefile)
+                if "debug" in args:
+                    result.setdefault("DEBUG", {})
+                    result["DEBUG"]["cache_read"] = True
+                return result
+    
+    corpora = run_cqp("show corpora;")
+    version = next(corpora)
     protected = []
     
     if config.PROTECTED_FILE:
         with open(config.PROTECTED_FILE) as infile:
             protected = [x.strip() for x in infile.readlines()]
     
-    return {"cqp-version": version, "corpora": list(corpora), "protected_corpora": protected}
+    result = {"version": KORP_VERSION, "cqp-version": version, "corpora": list(corpora), "protected_corpora": protected}
+    
+    if flask.g.cache:
+        if not os.path.exists(cachefilename):
+            tmpfile = "%s.%s" % (cachefilename, str(uuid.uuid4()))
+
+            with open(tmpfile, "w") as cachefile:
+                json.dump(result, cachefile)
+            os.rename(tmpfile, cachefilename)
+            
+            if "debug" in args:
+                result.setdefault("DEBUG", {})
+                result["DEBUG"]["cache_saved"] = True
+    
+    return result
 
 
-def corpus_info(form):
+def corpus_info(args=None):
     """Return information about a specific corpus or corpora.
     """
-    assert_key("corpus", form, IS_IDENT, True)
+    if args is None:
+        args = request.values
+
+    assert_key("corpus", args, IS_IDENT, True)
     
-    corpora = form.get("corpus")
-    if isinstance(corpora, basestring):
+    corpora = args.get("corpus")
+    if isinstance(corpora, str):
         corpora = corpora.upper().split(QUERY_DELIM)
     corpora = sorted(set(corpora))
-    
-    use_cache = bool(not form.get("cache", "").lower() == "false" and config.CACHE_DIR)
-    
-    # Caching
-    checksum = get_hash((sorted(corpora),))
-    
-    if use_cache:
-        cachefilename = os.path.join(config.CACHE_DIR, "info_" + checksum)
+
+    # Check if whole query is cached
+    if flask.g.cache:
+        checksum_combined = get_hash((sorted(corpora),))
+        checksums = {}
+        cachefilename = os.path.join(config.CACHE_DIR, "info_" + checksum_combined)
         if os.path.exists(cachefilename):
             with open(cachefilename, "r") as cachefile:
                 result = json.load(cachefile)
-                if "debug" in form:
+                if "debug" in args:
                     result.setdefault("DEBUG", {})
                     result["DEBUG"]["cache_read"] = True
-                    result["DEBUG"]["checksum"] = checksum
+                    result["DEBUG"]["checksum"] = checksum_combined
                 return result
     
     result = {"corpora": {}}
@@ -192,23 +302,39 @@ def corpus_info(form):
     cmd = []
 
     for corpus in corpora:
-        cmd += ["%s;" % corpus]
-        cmd += show_attributes()
-        cmd += ["info; .EOL.;"]
+        # Check if corpus is cached
+        if flask.g.cache:
+            checksum = get_hash((corpus,))
+            checksums[corpus] = [checksum, False]
+            cachefilename = os.path.join(config.CACHE_DIR, "info_" + checksum)
+            if os.path.exists(cachefilename):
+                checksums[corpus][1] = True
+                with open(cachefilename, "r") as cachefile:
+                    result["corpora"][corpus] = json.load(cachefile)
+        if corpus not in result["corpora"]:
+            cmd += ["%s;" % corpus]
+            cmd += show_attributes()
+            cmd += ["info; .EOL.;"]
 
-    cmd += ["exit;"]
+    if cmd:
+        cmd += ["exit;"]
 
-    # call the CQP binary
-    lines = runCQP(cmd, form)
+        # Call the CQP binary
+        lines = run_cqp(cmd)
 
-    # skip CQP version 
-    lines.next()
+        # Skip CQP version 
+        next(lines)
     
     for corpus in corpora:
-        # read attributes
+        if corpus in result["corpora"]:
+            total_size += int(result["corpora"][corpus]["info"]["Size"])
+            total_sentences += int(result["corpora"][corpus]["info"]["Sentences"])
+            continue
+        
+        # Read attributes
         attrs = read_attributes(lines)
 
-        # corpus information
+        # Corpus information
         info = {}
         
         for line in lines:
@@ -223,24 +349,32 @@ def corpus_info(form):
                     total_sentences += int(infoval)
 
         result["corpora"][corpus] = {"attrs": attrs, "info": info}
+        if flask.g.cache:
+            if not checksums[corpus][1]:
+                cachefilename = os.path.join(config.CACHE_DIR, "info_" + checksums[corpus][0])
+                tmpfile = "%s.%s" % (cachefilename, str(uuid.uuid4()))
+                with open(tmpfile, "w") as cachefile:
+                    json.dump(result["corpora"][corpus], cachefile)
+                os.rename(tmpfile, cachefilename)
     
     result["total_size"] = total_size
     result["total_sentences"] = total_sentences
     
-    if use_cache:
-        cachefilename = os.path.join(config.CACHE_DIR, "info_" + checksum)
+    if flask.g.cache:
+        # Cache whole query
+        cachefilename = os.path.join(config.CACHE_DIR, "info_" + checksum_combined)
         if not os.path.exists(cachefilename):
-            tmpfile = "%s.%s" % (cachefilename, os.getenv("UNIQUE_ID"))
+            tmpfile = "%s.%s" % (cachefilename, str(uuid.uuid4()))
 
             with open(tmpfile, "w") as cachefile:
                 json.dump(result, cachefile)
             os.rename(tmpfile, cachefilename)
             
-            if "debug" in form:
+            if "debug" in args:
                 result.setdefault("DEBUG", {})
                 result["DEBUG"]["cache_saved"] = True
     
-    if "debug" in form:
+    if "debug" in args:
         result.setdefault("DEBUG", {})
         result["DEBUG"]["cmd"] = cmd
     
@@ -251,13 +385,18 @@ def corpus_info(form):
 # QUERY
 ################################################################################
 
-def query_sample(form):
+@app.route("/query_sample", methods=["GET", "POST"])
+@main_handler
+def query_sample(args=None):
     """Run a sequential query in the selected corpora in random order until at least one
     hit is found, and then abort the query. Use to get a random sample sentence."""
-    import random
     
-    corpora = form.get("corpus")
-    if isinstance(corpora, basestring):
+    if args is None:
+        # Get a mutable dict to be able to modify arguments
+        args = request.values.to_dict()
+    
+    corpora = args.get("corpus")
+    if isinstance(corpora, str):
         corpora = corpora.upper().split(QUERY_DELIM)
     corpora = list(set(corpora))
     # Randomize corpus order
@@ -267,17 +406,19 @@ def query_sample(form):
         corpus = corpora[i]
         check_authentication([corpus])
         
-        form["corpus"] = corpus
-        form["sort"] = "random"
+        args["corpus"] = corpus
+        args["sort"] = "random"
         
-        result = query(form)
+        result = generator_to_dict(query(args))
         if result["hits"] > 0:
-            return result
+            yield result
         
-    return result
+    yield result
 
 
-def query(form):
+@app.route("/query", methods=["GET", "POST"])
+@main_handler
+def query(args=None):
     """Perform a CQP query and return a number of matches.
 
     Each match contains position information and a list of the words and attributes in the match.
@@ -301,45 +442,48 @@ def query(form):
        (default: no sorting)
      - incremental: returns the result incrementally instead of all at once
     """
-    assert_key("cqp", form, r"", True)
-    assert_key("corpus", form, IS_IDENT, True)
-    assert_key("start", form, IS_NUMBER, True)
-    assert_key("end", form, IS_NUMBER, True)
-    #assert_key("context", form, r"^\d+ [\w-]+$")
-    assert_key("show", form, IS_IDENT)
-    assert_key("show_struct", form, IS_IDENT)
-    #assert_key("within", form, IS_IDENT)
-    assert_key("cut", form, IS_NUMBER)
-    assert_key("sort", form, r"")
-    assert_key("incremental", form, r"(true|false)")
+    
+    if args is None:
+        args = request.values
+    
+    assert_key("cqp", args, r"", True)
+    assert_key("corpus", args, IS_IDENT, True)
+    assert_key("start", args, IS_NUMBER, True)
+    assert_key("end", args, IS_NUMBER, True)
+    # assert_key("context", args, r"^\d+ [\w-]+$")
+    assert_key("show", args, IS_IDENT)
+    assert_key("show_struct", args, IS_IDENT)
+    # assert_key("within", args, IS_IDENT)
+    assert_key("cut", args, IS_NUMBER)
+    assert_key("sort", args, r"")
+    assert_key("incremental", request.values, r"(true|false)")
 
     ############################################################################
-    # First we read all CGI parameters and translate them to CQP
+    # First we read all parameters and translate them to CQP
     
-    incremental = form.get("incremental", "").lower() == "true"
-    use_cache = bool(not form.get("cache", "").lower() == "false" and config.CACHE_DIR)
+    incremental = args.get("incremental", "").lower() == "true"
     
-    corpora = form.get("corpus")
-    if isinstance(corpora, basestring):
+    corpora = args.get("corpus")
+    if isinstance(corpora, str):
         corpora = corpora.upper().split(QUERY_DELIM)
     corpora = sorted(set(corpora))
     
     check_authentication(corpora)
 
-    shown = form.get("show", [])
-    if isinstance(shown, basestring):
+    shown = args.get("show") or []  # We don't use .get("show", []) since "show" might be the empty string.
+    if isinstance(shown, str):
         shown = shown.split(QUERY_DELIM)
     shown = set(shown)
     shown.add("word")
 
-    shown_structs = form.get("show_struct", [])
-    if isinstance(shown_structs, basestring):
+    shown_structs = args.get("show_struct") or []
+    if isinstance(shown_structs, str):
         shown_structs = shown_structs.split(QUERY_DELIM)
     shown_structs = set(shown_structs)
     
-    expand_prequeries = not form.get("expand_prequeries", "").lower() == "false"
+    expand_prequeries = not args.get("expand_prequeries", "").lower() == "false"
     
-    start, end = int(form.get("start")), int(form.get("end"))
+    start, end = int(args.get("start")), int(args.get("end"))
 
     if config.MAX_KWIC_ROWS and end - start >= config.MAX_KWIC_ROWS:
         raise ValueError("At most %d KWIC rows can be returned per call." % config.MAX_KWIC_ROWS)
@@ -347,13 +491,13 @@ def query(form):
     # Arguments to be added at the end of every CQP query
     cqpextra = {}
 
-    if "within" in form:
-        cqpextra["within"] = form.get("within")
-    if "cut" in form:
-        cqpextra["cut"] = form.get("cut")
+    if args.get("within"):
+        cqpextra["within"] = args.get("within")
+    if args.get("cut"):
+        cqpextra["cut"] = args.get("cut")
 
     # Sort numbered CQP-queries numerically
-    cqp = [form.get(key).decode("utf-8") for key in sorted([k for k in form.keys() if k.startswith("cqp")], key=lambda x: int(x[3:]) if len(x) > 3 else 0)]
+    cqp = [args.get(key) for key in sorted([k for k in args.keys() if k.startswith("cqp")], key=lambda x: int(x[3:]) if len(x) > 3 else 0)]
 
     result = {}
 
@@ -361,7 +505,7 @@ def query(form):
                      sorted(corpora),
                      cqp,
                      sorted(cqpextra.items()),
-                     form.get("defaultwithin", ""),
+                     args.get("defaultwithin", ""),
                      expand_prequeries
                     )
 
@@ -369,7 +513,7 @@ def query(form):
     checksum = get_hash(checksum_data)
     
     debug = {}
-    if "debug" in form:
+    if "debug" in args:
         debug["checksum"] = checksum
 
     ns = Namespace()
@@ -378,29 +522,32 @@ def query(form):
     
     saved_statistics = {}
     saved_total_hits = 0
-    saved_hits = form.get("querydata", "")
+    saved_hits = args.get("querydata", "")
     
-    if saved_hits or (use_cache and os.path.exists(os.path.join(config.CACHE_DIR, "query_" + checksum))):
+    if saved_hits or (flask.g.cache and os.path.exists(os.path.join(config.CACHE_DIR, "query_" + checksum))):
         if not saved_hits:
             with open(os.path.join(config.CACHE_DIR, "query_" + checksum), "r") as cachefile:
                 saved_hits = cachefile.read()
-            if "debug" in form:
+            if "debug" in args:
                 debug["cache_read"] = True
-        
         try:
-            saved_hits = zlib.decompress(saved_hits.replace("\\n", "\n").replace("-", "+").replace("_", "/").decode("base64"))
+            saved_hits = zlib.decompress(base64.b64decode(saved_hits.replace("\\n", "\n").replace("-", "+").replace("_", "/"))).decode("UTF-8")
         except:
             saved_hits = ""
+            if "debug" in args:
+                debug["unparseable_querydata"] = True
         
         if saved_hits:
-            if "debug" in form and not "using_cache" in result:
+            if "debug" in args and "using_cache" not in result:
                 debug["using_querydata"] = True
-            saved_crc32, saved_total_hits, stats_temp = saved_hits.split(";", 2)
-            if saved_crc32 == checksum:
+            saved_checksum, saved_total_hits, stats_temp = saved_hits.split(";", 2)
+            if saved_checksum == checksum:
                 saved_total_hits = int(saved_total_hits)
                 for pair in stats_temp.split(";"):
                     c, h = pair.split(":")
                     saved_statistics[c] = int(h)
+            elif "debug" in args:
+                debug["wrong_querydata"] = True
         
     ns.start_local = start
     ns.end_local = end
@@ -424,18 +571,19 @@ def query(form):
             result["kwic"] = []
         elif len(corpora_hits) == 1:
             # If only hits in one corpus, it is faster to not use threads
-            corpus, hits = corpora_hits.items()[0]
+            corpus, hits = list(corpora_hits.items())[0]
 
             def _query_single_corpus(queue):
-                result["kwic"], _ = query_and_parse(form, corpus, cqp, cqpextra, shown, shown_structs, hits[0], hits[1], expand_prequeries=expand_prequeries)
+                result["kwic"], _ = query_and_parse(args, corpus, cqp, cqpextra, shown, shown_structs, hits[0], hits[1], expand_prequeries=expand_prequeries)
                 queue.put("DONE")
 
-            prevent_timeout(_query_single_corpus)
+            for msg in prevent_timeout(_query_single_corpus):
+                yield msg
         else:
             if incremental:
-                print '"progress_corpora": [%s],' % ('"' + '", "'.join(corpora_hits.keys()) + '"' if corpora_hits.keys() else "")
+                yield {"progress_corpora": list(corpora_hits.keys())}
             with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-                future_query = dict((executor.submit(query_and_parse, form, corpus, cqp, cqpextra, shown, shown_structs, corpora_hits[corpus][0], corpora_hits[corpus][1], False, expand_prequeries), corpus) for corpus in corpora_hits)
+                future_query = dict((executor.submit(query_and_parse, args, corpus, cqp, cqpextra, shown, shown_structs, corpora_hits[corpus][0], corpora_hits[corpus][1], False, expand_prequeries), corpus) for corpus in corpora_hits)
                 
                 def _query_corpora_in_parallel(queue):
                     for future in futures.as_completed(future_query):
@@ -446,11 +594,12 @@ def query(form):
                             kwic, _ = future.result()
                             corpora_kwics[corpus] = kwic
                             if incremental:
-                                queue.put('"progress_%d": {"corpus": "%s", "hits": %d},' % (ns.progress_count, corpus, corpora_hits[corpus][1] - corpora_hits[corpus][0] + 1))
+                                queue.put({"progress_%d" % ns.progress_count: {"corpus": corpus, "hits": corpora_hits[corpus][1] - corpora_hits[corpus][0] + 1}})
                                 ns.progress_count += 1
                     queue.put("DONE")
 
-                prevent_timeout(_query_corpora_in_parallel)
+                for msg in prevent_timeout(_query_corpora_in_parallel):
+                    yield msg
 
                 for corpus in corpora:
                     if corpus in corpora_hits.keys():
@@ -460,8 +609,7 @@ def query(form):
                             result["kwic"] = corpora_kwics[corpus]
     else:
         if incremental:
-            print '"progress_corpora": [%s],' % ('"' + '", "'.join(corpora) + '"' if corpora else "")
-        
+            yield {"progress_corpora": corpora}
         ns.progress_count = 0
         ns.rest_corpora = []
         
@@ -472,9 +620,9 @@ def query(form):
                 if ns.end_local < 0:
                     ns.rest_corpora = corpora[i:]
                     break
-                
-                kwic, nr_hits = query_and_parse(form, corpus, cqp, cqpextra, shown, shown_structs, ns.start_local, ns.end_local, False, expand_prequeries)
-            
+
+                kwic, nr_hits = query_and_parse(args, corpus, cqp, cqpextra, shown, shown_structs, ns.start_local, ns.end_local, False, expand_prequeries)
+
                 statistics[corpus] = nr_hits
                 ns.total_hits += nr_hits
                 
@@ -490,22 +638,22 @@ def query(form):
                     result["kwic"] = kwic
                 
                 if incremental:
-                    queue.put('"progress_%d": {"corpus": "%s", "hits": %d},' % (ns.progress_count, corpus, nr_hits))
+                    queue.put({"progress_%d" % ns.progress_count: {"corpus": corpus, "hits": nr_hits}})
                     ns.progress_count += 1
+
             queue.put("DONE")
-                
-        prevent_timeout(_query_corpora_in_serial)
+        
+        for msg in prevent_timeout(_query_corpora_in_serial):
+            yield msg
         
         if incremental:
-            print_object(result, form)
+            yield result
             result = {}
-        
+
         if ns.rest_corpora:
 
-            if incremental:
-                print ",",
             with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-                future_query = dict((executor.submit(query_corpus, form, corpus, cqp, cqpextra, shown, shown_structs, 0, 0, True, expand_prequeries), corpus) for corpus in ns.rest_corpora)
+                future_query = dict((executor.submit(query_corpus, args, corpus, cqp, cqpextra, shown, shown_structs, 0, 0, True, expand_prequeries), corpus) for corpus in ns.rest_corpora)
                 
                 def _get_total_in_parallel(queue):
                     for future in futures.as_completed(future_query):
@@ -517,54 +665,57 @@ def query(form):
                             statistics[corpus] = nr_hits
                             ns.total_hits += nr_hits
                             if incremental:
-                                print '"progress_%d": {"corpus": "%s", "hits": %d},' % (ns.progress_count, corpus, nr_hits)
+                                queue.put({"progress_%d" % ns.progress_count: {"corpus": corpus, "hits": nr_hits}})
                                 ns.progress_count += 1
                     queue.put("DONE")
 
-                prevent_timeout(_get_total_in_parallel)
+                for msg in prevent_timeout(_get_total_in_parallel):
+                    yield msg
 
-        elif incremental:
-            print ",",
-
-    if "debug" in form:
+    if "debug" in args:
         debug["cqp"] = cqp
 
     result["hits"] = ns.total_hits
     result["corpus_hits"] = statistics
     result["corpus_order"] = corpora
-    result["querydata"] = zlib.compress(checksum + ";" + str(ns.total_hits) + ";" + ";".join("%s:%d" % (c, h) for c, h in statistics.iteritems())).encode("base64").replace("+", "-").replace("/", "_")
+    result["querydata"] = binascii.b2a_base64(zlib.compress(bytes(checksum + ";" + str(ns.total_hits) + ";" + ";".join("%s:%d" % (c, h) for c, h in statistics.items()), "utf-8"))).decode("utf-8").replace("+", "-").replace("/", "_")
     
-    if use_cache:
+    if flask.g.cache:
         cachefilename = os.path.join(config.CACHE_DIR, "query_" + checksum)
         if not os.path.exists(cachefilename):
-            tmpfile = "%s.%s" % (cachefilename, os.getenv("UNIQUE_ID"))
+            tmpfile = "%s.%s" % (cachefilename, str(uuid.uuid4()))
 
             with open(tmpfile, "w") as cachefile:
                 cachefile.write(result["querydata"])
             os.rename(tmpfile, cachefilename)
             
-            if "debug" in form:
+            if "debug" in args:
                 debug["cache_saved"] = True
 
     if debug:
         result["DEBUG"] = debug
 
-    return result
+    yield result
 
 
-def optimize(form):
-    assert_key("cqp", form, r"", True)
+@app.route("/optimize", methods=["GET", "POST"])
+@main_handler
+def optimize(args=None):
+    if args is None:
+        args = request.values
+        
+    assert_key("cqp", args, r"", True)
     
     cqpextra = {}
 
-    if "within" in form:
-        cqpextra["within"] = form["within"]
-    if "cut" in form:
-        cqpextra["cut"] = form["cut"]
+    if args.get("within"):
+        cqpextra["within"] = args["within"]
+    if args.get("cut"):
+        cqpextra["cut"] = args["cut"]
     
-    cqp = form["cqp"]  # cqp = [form.get(key).decode("utf-8") for key in sorted([k for k in form.keys() if k.startswith("cqp")], key=lambda x: int(x[3:]) if len(x) > 3 else 0)]
+    cqp = args["cqp"]
     result = {"cqp": query_optimize(cqp, cqpextra)}
-    return result
+    yield result
 
 
 def query_optimize(cqp, cqpextra, find_match=True, expand=True):
@@ -573,7 +724,7 @@ def query_optimize(cqp, cqpextra, find_match=True, expand=True):
         by one or more wildcards. The query also must use "within".
         """
     q, rest = parse_cqp(cqp)
-
+    
     if expand:
         expand = cqpextra.get("within")
     
@@ -605,7 +756,7 @@ def query_optimize(cqp, cqpextra, find_match=True, expand=True):
                 n2 = int(n[1]) if n[1] else 9999
             elif re.search(r"{\s*(\d*)\s*}$", q[i]):
                 n1 = n2 = int(re.search(r"{\s*(\d*)\s*}$", q[i]).groups()[0])
-            if not n1 is None:
+            if n1 is not None:
                 wildcards[i] = (n1, n2)
             continue
         elif re.search(r"{.*?}$", q[i]):
@@ -635,7 +786,7 @@ def query_optimize(cqp, cqpextra, find_match=True, expand=True):
             cmd[0] += " 1 1)"
 
     if find_match:
-        # MU searches only highlights the first keyword of each hit. To highlight all keywords we need to
+        # MU searches only highlight the first keyword of each hit. To highlight all keywords we need to
         # do a new non-optimized search within the results, and to be able to do that we first need to expand the rows.
         # Most of the times we only need to expand to the right, except for when leading wildcards are used.
         if leading_wildcards:
@@ -650,22 +801,41 @@ def query_optimize(cqp, cqpextra, find_match=True, expand=True):
     return cmd
 
 
-def query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results=False, expand_prequeries=True):
+def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results=False, expand_prequeries=True):
 
+    # Calculate checksum
+    # Needs to contains any arguments that may influence the results
+    checksum_data = (
+                     corpus,
+                     cqp,
+                     sorted(cqpextra.items()),
+                     args.get("defaultwithin", ""),
+                     expand_prequeries
+                    )
+    
+    checksum = get_hash(checksum_data)
+    unique_id = str(uuid.uuid4())
+    tempcachefilename = os.path.join(config.CACHE_DIR, "query_positions_%s_%s.gz" % (checksum, unique_id))
+    cachefilename = os.path.join(config.CACHE_DIR, "query_positions_%s.gz" % checksum)
+    tempcachehitsfilename = os.path.join(config.CACHE_DIR, "query_size_%s_%s.gz" % (checksum, unique_id))
+    cachehitsfilename = os.path.join(config.CACHE_DIR, "query_size_%s.gz" % checksum)
+    is_cached = os.path.isfile(cachefilename)
+    cached_no_hits = is_cached and os.path.getsize(cachefilename) == 0
+    
     # Optimization
     optimize = True
     
     shown = shown.copy()  # To not edit the original
     
     # Context
-    contexts = {"leftcontext": form.get("leftcontext", {}),
-                "rightcontext": form.get("rightcontext", {}),
-                "context": form.get("context", {})}
-    defaultcontext = form.get("defaultcontext", "10 words")
+    contexts = {"leftcontext": args.get("leftcontext") or {},
+                "rightcontext": args.get("rightcontext") or {},
+                "context": args.get("context") or {}}
+    defaultcontext = args.get("defaultcontext") or "10 words"
     
     for c in contexts: 
         if contexts[c]:
-            if not ":" in contexts[c]:
+            if ":" not in contexts[c]:
                 raise ValueError("Malformed value for key '%s'." % c)
             contexts[c] = dict(x.split(":") for x in contexts[c].split(QUERY_DELIM))
     
@@ -675,8 +845,8 @@ def query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
         context = (contexts["context"].get(corpus, defaultcontext),)
     
     # Within
-    defaultwithin = form.get("defaultwithin", "")
-    within = form.get("within", defaultwithin)
+    defaultwithin = args.get("defaultwithin", "")
+    within = args.get("within") or defaultwithin
     if within:
         if ":" in within:
             within = dict(x.split(":") for x in within.split(QUERY_DELIM))
@@ -710,9 +880,9 @@ def query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
         cqp = cqpnew
         corpus = linked[0]
         shown.add(linked[1].lower())
-
+    
     # Sorting
-    sort = form.get("sort")
+    sort = args.get("sort")
     if sort == "left":
         sortcmd = ["sort by word on match[-1] .. match[-3];"]
     elif sort == "keyword":
@@ -720,37 +890,52 @@ def query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
     elif sort == "right":
         sortcmd = ["sort by word on matchend[1] .. matchend[3];"]
     elif sort == "random":
-        random_seed = form.get("random_seed", "")
+        random_seed = args.get("random_seed", "")
         sortcmd = ["sort randomize %s;" % random_seed]
     elif sort:
         # Sort by positional attribute
         sortcmd = ["sort by %s;" % sort]
     else:
         sortcmd = []
-
+    
     # Build the CQP query
     cmd = ["%s;" % corpus]
     # This prints the attributes and their relative order:
     cmd += show_attributes()
-    for i, c in enumerate(cqp):
-        cqpextra_temp = cqpextra_internal.copy()
-        pre_query = i+1 < len(cqp)
-        
-        if pre_query and expand_prequeries:
-            cqpextra_temp["expand"] = "to " + cqpextra["within"]
-        
-        # If expand_prequeries is False, we can't use optimization
-        if optimize and expand_prequeries:
-            cmd += query_optimize(c, cqpextra_temp, find_match=(not pre_query), expand=not (pre_query and not expand_prequeries))
-        else:
-            cmd += make_query(make_cqp(c, cqpextra_temp))
-        
-        if pre_query:
-            cmd += ["Last;"]
+
+    if is_cached:
+        # This exact query has been done before. Read corpus positions from cache.
+        if not cached_no_hits:
+            cmd += ['undump Last with target keyword < "cat %s && gzip -cd %s |";' % (cachehitsfilename, cachefilename)]
+            # cmd += ['undump Last with target keyword < "%s";' % cachefilename]  # If we don't need compression
+    else:
+        for i, c in enumerate(cqp):
+            cqpextra_temp = cqpextra_internal.copy()
+            pre_query = i+1 < len(cqp)
+            
+            if pre_query and expand_prequeries:
+                cqpextra_temp["expand"] = "to " + cqpextra["within"]
+            
+            # If expand_prequeries is False, we can't use optimization
+            if optimize and expand_prequeries:
+                cmd += query_optimize(c, cqpextra_temp, find_match=(not pre_query), expand=not (pre_query and not expand_prequeries))
+            else:
+                cmd += make_query(make_cqp(c, cqpextra_temp))
+            
+            if pre_query:
+                cmd += ["Last;"]
     
-    # This prints the size of the query (i.e., the number of results):
-    cmd += ["size Last;"]
-    if not no_results:
+    if cached_no_hits:
+        # Print EOL if no hits
+        cmd += [".EOL.;"]
+    else:
+        # This prints the size of the query (i.e., the number of results):
+        cmd += ["size Last;"]
+    
+    if not is_cached:
+        cmd += ['dump Last > "| gzip > %s";' % tempcachefilename]
+        # cmd += ['dump Last > "%s";' % tempcachefilename]  # If we don't need compression
+    if not no_results and not cached_no_hits:
         cmd += ["show +%s;" % " +".join(shown)]
         if len(context) == 1:
             cmd += ["set Context %s;" % context[0]]
@@ -768,32 +953,40 @@ def query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
     
     ######################################################################
     # Then we call the CQP binary, and read the results
-
-    lines = runCQP(cmd, form, attr_ignore=True)
-
-    # Skip the CQP version
-    lines.next()
     
+    lines = run_cqp(cmd, args, attr_ignore=True)
+    
+    # Skip the CQP version
+    next(lines)
+
     # Read the attributes and their relative order 
     attrs = read_attributes(lines)
     
     # Read the size of the query, i.e., the number of results
-    nr_hits = int(lines.next())
+    nr_hits = next(lines)
+    nr_hits = 0 if nr_hits == END_OF_LINE else int(nr_hits)
     
-    return (lines, nr_hits, attrs)
+    if not is_cached:
+        with open(tempcachehitsfilename, "w") as f:
+            f.write("%d\n" % nr_hits)
+    
+        os.rename(tempcachehitsfilename, cachehitsfilename)
+        os.rename(tempcachefilename, cachefilename)
+    
+    return lines, nr_hits, attrs
 
 
 def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
     ######################################################################
     # Now we create the concordance (kwic = keywords in context)
     # from the remaining lines
-
+    
     # Filter out unavailable attributes
     p_attrs = [attr for attr in attrs["p"] if attr in shown]
     nr_splits = len(p_attrs) - 1
     s_attrs = set(attr for attr in attrs["s"] if attr in shown)
     ls_attrs = set(attr for attr in attrs["s"] if attr in shown_structs)
-    #a_attrs = set(attr for attr in attrs["a"] if attr in shown)
+    # a_attrs = set(attr for attr in attrs["a"] if attr in shown)
 
     kwic = []
     for line in lines:
@@ -851,7 +1044,7 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
                 if struct:
                     # Structural attrs can be split in the middle (<s_n 123>),
                     # so we need to finish the structure here
-                    if not ">" in word:
+                    if ">" not in word:
                         struct_value.append(word)
                         continue
                     
@@ -919,7 +1112,7 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
             if words != ["(no", "alignment", "found)"]:
                 kwic[-1].setdefault("aligned", {})[aligned] = tokens
         else:
-            if not "start" in match:
+            if "start" not in match:
                 # TODO: CQP bug - CQP can't handle too long sentences, skipping
                 continue
             # Otherwise we add a new kwic row
@@ -932,8 +1125,8 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
     return kwic
 
 
-def query_and_parse(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results=False, expand_prequeries=True):
-    lines, nr_hits, attrs = query_corpus(form, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results, expand_prequeries)
+def query_and_parse(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results=False, expand_prequeries=True):
+    lines, nr_hits, attrs = query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results, expand_prequeries)
     kwic = query_parse_lines(corpus, lines, attrs, shown, shown_structs)
     return kwic, nr_hits
     
@@ -955,24 +1148,28 @@ def which_hits(corpora, stats, start, end):
     return corpus_hits
 
 
-def struct_values(form):
-    assert_key("corpus", form, IS_IDENT, True)
-    assert_key("struct", form, "", True)
-    assert_key("incremental", form, r"(true|false)")
+@app.route("/struct_values", methods=["GET", "POST"])
+@main_handler
+def struct_values(args=None):
+    if args is None:
+        args = request.values
+    assert_key("corpus", args, IS_IDENT, True)
+    assert_key("struct", args, IS_IDENT, True)
+    assert_key("incremental", request.values, r"(true|false)")
     
-    incremental = form.get("incremental", "").lower() == "true"
-    stats = form.get("count", "").lower() == "true"
-    use_cache = bool(not form.get("cache", "").lower() == "false" and config.CACHE_DIR)
+    incremental = args.get("incremental", "").lower() == "true"
     
-    corpora = form.get("corpus")
-    if isinstance(corpora, basestring):
+    stats = args.get("count", "").lower() == "true"
+    
+    corpora = args.get("corpus")
+    if isinstance(corpora, str):
         corpora = corpora.upper().split(QUERY_DELIM)
     corpora = set(corpora)
     
     check_authentication(corpora)
     
-    structs = form.get("struct")
-    if isinstance(structs, basestring):
+    structs = args.get("struct")
+    if isinstance(structs, str):
         structs = structs.split(QUERY_DELIM)
 
     ns = Namespace()  # To make variables writable from nested functions
@@ -982,7 +1179,7 @@ def struct_values(form):
     
     from_cache = set()  # Keep track of what has been read from cache
 
-    if use_cache:
+    if flask.g.cache:
         all_cache = True
         for corpus in corpora:
             for struct in structs:
@@ -996,8 +1193,7 @@ def struct_values(form):
                         data = json.load(cachefile)
                         if data:
                             result["corpora"][corpus][struct] = data
-                            # total_stats[struct] = total_stats[struct].union(set(data))
-                        if "debug" in form:
+                        if "debug" in args:
                             result.setdefault("DEBUG", {"caches_read": []})
                             result["DEBUG"]["caches_read"].append("%s:%s" % (corpus, struct))
                     from_cache.add((corpus, struct))
@@ -1005,15 +1201,15 @@ def struct_values(form):
                     all_cache = False
         
         if all_cache:
-            result["combined"] = {} #dict((x[0], sorted(x[1])) for x in total_stats.iteritems())
-            return result
+            result["combined"] = {}
+            yield result
 
     ns.progress_count = 0
     if incremental:
-        print '"progress_corpora": [%s],' % ('"' + '", "'.join(corpora) + '"' if corpora else "")
-
+        yield({"progress_corpora": list(corpora)})
+    
     with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-        future_query = dict((executor.submit(count_query_worker_simple, corpus, None, struct.split(">"), False, form, False), (corpus, struct)) for corpus in corpora for struct in structs if not (corpus, struct) in from_cache)
+        future_query = dict((executor.submit(count_query_worker_simple, corpus, None, struct.split(">"), False, args, False), (corpus, struct)) for corpus in corpora for struct in structs if not (corpus, struct) in from_cache)
         
         def anti_timeout(queue):
 
@@ -1031,12 +1227,7 @@ def struct_values(form):
                         count, ngram = line.lstrip().split(" ", 1)
                         
                         if ">" in struct:
-                            #struct_parts = struct.split(">")
                             ngram = ngram.split("\t")
-                            #prev = None
-                            #for i in range(len(ngram), 0, -1):
-                            #    prev = {struct_parts[i-1]: {ngram[i-1]: prev}}
-                            #ngram = prev
                             prev = vals_dict
                             for i, n in enumerate(ngram):
                                 if stats and i == len(ngram)-1:
@@ -1054,7 +1245,6 @@ def struct_values(form):
                                 corpus_stats[ngram] = int(count)
                             else:
                                 corpus_stats.append(ngram)
-                        #total_stats[struct].add(ngram)
     
                     if ">" in struct:
                         result["corpora"][corpus][struct] = vals_dict
@@ -1062,23 +1252,24 @@ def struct_values(form):
                         result["corpora"][corpus][struct] = corpus_stats if stats else sorted(corpus_stats)
                     
                     if incremental:
-                        queue.put('"progress_%d": "%s",' % (ns.progress_count, corpus))
+                        queue.put({"progress_%d" % ns.progress_count: corpus})
                         ns.progress_count += 1
             queue.put("DONE")
 
-        prevent_timeout(anti_timeout)
+        for msg in prevent_timeout(anti_timeout):
+            yield msg
 
-    result["combined"] = {} #dict((x[0], sorted(x[1])) for x in total_stats.iteritems())
+    result["combined"] = {}
 
-    if use_cache:
-        unique_id = os.getenv("UNIQUE_ID")
+    if flask.g.cache:
+        unique_id = str(uuid.uuid4())
         
         for corpus in corpora:
             for struct in structs:
                 if (corpus, struct) in from_cache:
                     continue
                 checksum_data = (corpus, struct, stats)
-                checksum = get_hash(checksum_data)      
+                checksum = get_hash(checksum_data)
                 cachefilename = os.path.join(config.CACHE_DIR, "values_%s_%s" % (corpus, checksum))
                 tmpfile = "%s.%s" % (cachefilename, unique_id)
 
@@ -1086,19 +1277,21 @@ def struct_values(form):
                     json.dump(result["corpora"][corpus].get(struct, []), cachefile)
                 os.rename(tmpfile, cachefilename)
                 
-                if "debug" in form:
+                if "debug" in args:
                     result.setdefault("DEBUG", {})
                     result["DEBUG"].setdefault("caches_saved", [])
                     result["DEBUG"]["caches_saved"].append("%s:%s" % (corpus, struct))
     
-    return result
+    yield result
 
 
 ################################################################################
 # COUNT
 ################################################################################
 
-def count(form):
+@app.route("/count", methods=["GET", "POST"])
+@main_handler
+def count(args=None):
     """Perform a CQP query and return a count of the given words/attrs.
 
     The required parameters are
@@ -1119,100 +1312,102 @@ def count(form):
        defined by 'within') from the previous query, or just the matches.
        (default: true)
     """
-    assert_key("cqp", form, r"", True)
-    assert_key("corpus", form, IS_IDENT, True)
-    assert_key("groupby", form, IS_IDENT, True)
-    assert_key("cut", form, IS_NUMBER)
-    assert_key("ignore_case", form, IS_IDENT)
-    assert_key("incremental", form, r"(true|false)")
+    if args is None:
+        args = request.values
     
-    incremental = form.get("incremental", "").lower() == "true"
-    use_cache = bool(not form.get("cache", "").lower() == "false" and config.CACHE_DIR)
+    assert_key("cqp", args, r"", True)
+    assert_key("corpus", args, IS_IDENT, True)
+    assert_key("groupby", args, IS_IDENT, True)
+    assert_key("cut", args, IS_NUMBER)
+    assert_key("ignore_case", args, IS_IDENT)
+    assert_key("incremental", args, r"(true|false)")
     
-    corpora = form.get("corpus")
-    if isinstance(corpora, basestring):
+    incremental = args.get("incremental", "").lower() == "true"
+    
+    corpora = args.get("corpus")
+    if isinstance(corpora, str):
         corpora = corpora.upper().split(QUERY_DELIM)
     corpora = set(corpora)
     
     check_authentication(corpora)
     
-    groupby = form.get("groupby")
-    if isinstance(groupby, basestring):
+    groupby = args.get("groupby")
+    if isinstance(groupby, str):
         groupby = groupby.split(QUERY_DELIM)
     
-    ignore_case = form.get("ignore_case", [])
-    if isinstance(ignore_case, basestring):
+    ignore_case = args.get("ignore_case") or []
+    if isinstance(ignore_case, str):
         ignore_case = ignore_case.split(QUERY_DELIM)
     ignore_case = set(ignore_case)
     
-    defaultwithin = form.get("defaultwithin", "")
-    within = form.get("within", defaultwithin)
+    defaultwithin = args.get("defaultwithin", "")
+    within = args.get("within") or defaultwithin
     if ":" in within:
         within = dict(x.split(":") for x in within.split(QUERY_DELIM))
     else:
         within = {"": defaultwithin}
     
-    start = int(form.get("start", 0))
-    end = int(form.get("end", -1))
+    start = int(args.get("start") or 0)
+    end = int(args.get("end") or -1)
     
-    split = form.get("split", "")
-    if isinstance(split, basestring):
+    split = args.get("split", "")
+    if isinstance(split, str):
         split = split.split(QUERY_DELIM)
     
-    strippointer = form.get("strippointer", "")
-    if isinstance(strippointer, basestring):
+    strippointer = args.get("strippointer", "")
+    if isinstance(strippointer, str):
         strippointer = strippointer.split(QUERY_DELIM)
     
-    top = form.get("top", "")
-    if isinstance(top, basestring):
+    top = args.get("top", "")
+    if isinstance(top, str):
         if ":" in top:
             top = dict((x.split(":")[0], int(x.split(":")[1])) for x in top.split(QUERY_DELIM))
         else:
             top = dict((x, 1) for x in top.split(QUERY_DELIM))
     
     # Sort numbered CQP-queries numerically
-    cqp = [form.get(key).decode("utf-8") for key in sorted([k for k in form.keys() if k.startswith("cqp")], key=lambda x: int(x[3:]) if len(x) > 3 else 0)]
-    subcqp = [form.get(key).decode("utf-8") for key in sorted([k for k in form.keys() if k.startswith("subcqp")], key=lambda x: int(x[6:]) if len(x) > 6 else 0)]
+    cqp = [args.get(key) for key in sorted([k for k in args.keys() if k.startswith("cqp")], key=lambda x: int(x[3:]) if len(x) > 3 else 0)]
+    subcqp = [args.get(key) for key in sorted([k for k in args.keys() if k.startswith("subcqp")], key=lambda x: int(x[6:]) if len(x) > 6 else 0)]
     
     if subcqp:
         cqp.append(subcqp)
     
-    simple = form.get("simple", "").lower() == "true"
+    simple = args.get("simple", "").lower() == "true"
 
     if cqp == ["[]"]:
         simple = True
     
-    expand_prequeries = not form.get("expand_prequeries", "").lower() == "false"
+    expand_prequeries = not args.get("expand_prequeries", "").lower() == "false"
 
     checksum_data = (sorted(corpora),
                      cqp,
                      groupby,
-                     sorted(within.iteritems()),
+                     sorted(within.items()),
                      defaultwithin,
                      sorted(ignore_case),
                      sorted(split),
                      sorted(strippointer),
-                     sorted(top.iteritems()),
+                     sorted(top.items()),
                      start,
                      end)
     checksum = get_hash(checksum_data)
     
-    if use_cache:
+    if flask.g.cache:
         cachefilename = os.path.join(config.CACHE_DIR, "count_" + checksum)
         if os.path.exists(cachefilename):
             with open(cachefilename, "r") as cachefile:
                 result = json.load(cachefile)
-                if "debug" in form:
+                if "debug" in args:
                     result.setdefault("DEBUG", {})
                     result["DEBUG"]["cache_read"] = True
                     result["DEBUG"]["checksum"] = checksum
-                return result
+                yield result
 
     result = {"corpora": {}}
 
     total_stats = [{"absolute": defaultdict(int),
-                   "relative": defaultdict(float),
-                   "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
+                    "relative": defaultdict(float),
+                    "sums": {"absolute": 0, "relative": 0.0}}] * (len(subcqp) + 1)
     
     ns = Namespace()  # To make variables writable from nested functions
     ns.total_size = 0
@@ -1222,10 +1417,10 @@ def count(form):
     ns.limit_count = 0
     ns.progress_count = 0
     if incremental:
-        print '"progress_corpora": [%s],' % ('"' + '", "'.join(corpora) + '"' if corpora else "")
+        yield {"progress_corpora": list(corpora)}
 
     with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-        future_query = dict((executor.submit(count_function, corpus, cqp, groupby, ignore_case, form, expand_prequeries), corpus) for corpus in corpora)
+        future_query = dict((executor.submit(count_function, corpus, cqp, groupby, ignore_case, args, expand_prequeries), corpus) for corpus in corpora)
         
         @reraise_with_stack
         def anti_timeout(queue):
@@ -1239,15 +1434,15 @@ def count(form):
 
                     ns.total_size += corpus_size
                     corpus_stats = [{"absolute": defaultdict(int),
-                                    "relative": defaultdict(float),
-                                    "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
+                                     "relative": defaultdict(float),
+                                     "sums": {"absolute": 0, "relative": 0.0}}] * (len(subcqp) + 1)
                     
                     query_no = 0
                     for line in lines:
                         if line == END_OF_LINE:
                             query_no += 1
                             continue
-                        count, ngram = line.lstrip().split(" ", 1)
+                        freq, ngram = line.lstrip().split(" ", 1)
                         
                         if len(groupby) > 1:
                             ngram_groups = ngram.split("\t")
@@ -1272,23 +1467,23 @@ def count(form):
                             
                             # Remove multi word pointers
                             if groupby[i] in strippointer:
-                                for i in range(len(ngrams)):
-                                    if ":" in ngrams[i]:
-                                        ngramtemp, pointer = ngrams[i].rsplit(":", 1)
+                                for j in range(len(ngrams)):
+                                    if ":" in ngrams[j]:
+                                        ngramtemp, pointer = ngrams[j].rsplit(":", 1)
                                         if pointer.isnumeric():
-                                            ngrams[i] = ngramtemp
+                                            ngrams[j] = ngramtemp
                             all_ngrams.append(ngrams)
                         
                         cross = list(itertools.product(*all_ngrams))
-                                                        
+                        
                         for ngram in cross:
                             ngram = "/".join(ngram)
-                            corpus_stats[query_no]["absolute"][ngram] += int(count)
-                            corpus_stats[query_no]["relative"][ngram] += int(count) / float(corpus_size) * 1000000
-                            corpus_stats[query_no]["sums"]["absolute"] += int(count)
-                            corpus_stats[query_no]["sums"]["relative"] += int(count) / float(corpus_size) * 1000000
-                            total_stats[query_no]["absolute"][ngram] += int(count)
-                            total_stats[query_no]["sums"]["absolute"] += int(count)
+                            corpus_stats[query_no]["absolute"][ngram] += int(freq)
+                            corpus_stats[query_no]["relative"][ngram] += int(freq) / float(corpus_size) * 1000000
+                            corpus_stats[query_no]["sums"]["absolute"] += int(freq)
+                            corpus_stats[query_no]["sums"]["relative"] += int(freq) / float(corpus_size) * 1000000
+                            total_stats[query_no]["absolute"][ngram] += int(freq)
+                            total_stats[query_no]["sums"]["absolute"] += int(freq)
                         
                         if subcqp and query_no > 0:
                             corpus_stats[query_no]["cqp"] = subcqp[query_no - 1]
@@ -1298,11 +1493,12 @@ def count(form):
                     ns.limit_count += len(corpus_stats[0]["absolute"])
                     
                     if incremental:
-                        queue.put('"progress_%d": "%s",' % (ns.progress_count, corpus))
+                        queue.put({"progress_%d" % ns.progress_count: corpus})
                         ns.progress_count += 1
             queue.put("DONE")
 
-        prevent_timeout(anti_timeout)
+        for msg in prevent_timeout(anti_timeout):
+            yield msg
 
     result["count"] = len(total_stats[0]["absolute"])
     
@@ -1310,10 +1506,10 @@ def count(form):
     for query_no in range(len(subcqp) + 1):
         if end > -1 and (start > 0 or len(total_stats[0]["absolute"]) > (end - start) + 1):
             # Only a selected range of results requested
-            total_absolute = sorted(total_stats[query_no]["absolute"].iteritems(), key=lambda x: x[1], reverse=True)[start:end+1]
+            total_absolute = sorted(total_stats[query_no]["absolute"].items(), key=lambda x: x[1], reverse=True)[start:end+1]
             new_corpora = {}
-            for ngram, count in total_absolute:
-                total_stats[query_no]["relative"][ngram] = count / float(ns.total_size) * 1000000
+            for ngram, freq in total_absolute:
+                total_stats[query_no]["relative"][ngram] = freq / float(ns.total_size) * 1000000
                         
                 for corpus in corpora:
                     new_corpus_part = {"absolute": {}, "relative": {}, "sums": result["corpora"][corpus][query_no]["sums"]}
@@ -1327,8 +1523,8 @@ def count(form):
             total_stats[query_no]["absolute"] = dict(total_absolute)
         else:
             # Complete results requested
-            for ngram, count in total_stats[query_no]["absolute"].iteritems():
-                total_stats[query_no]["relative"][ngram] = count / float(ns.total_size) * 1000000
+            for ngram, freq in total_stats[query_no]["absolute"].items():
+                total_stats[query_no]["relative"][ngram] = freq / float(ns.total_size) * 1000000
         
         total_stats[query_no]["sums"]["relative"] = total_stats[query_no]["sums"]["absolute"] / float(ns.total_size) * 1000000 if ns.total_size > 0 else 0.0
         
@@ -1341,11 +1537,11 @@ def count(form):
         for corpus in corpora:
             result["corpora"][corpus] = result["corpora"][corpus][0]
 
-    if "debug" in form:
+    if "debug" in args:
         result["DEBUG"] = {"cqp": cqp, "checksum": checksum, "simple": simple}
     
-    if use_cache and ns.limit_count <= config.CACHE_MAX_STATS:
-        unique_id = os.getenv("UNIQUE_ID")
+    if flask.g.cache and ns.limit_count <= config.CACHE_MAX_STATS:
+        unique_id = str(uuid.uuid4())
         cachefilename = os.path.join(config.CACHE_DIR, "count_" + checksum)
         tmpfile = "%s.%s" % (cachefilename, unique_id)
 
@@ -1353,13 +1549,15 @@ def count(form):
             json.dump(result, cachefile)
         os.rename(tmpfile, cachefilename)
         
-        if "debug" in form:
+        if "debug" in args:
             result["DEBUG"]["cache_saved"] = True
     
-    return result
+    yield result
 
 
-def count_all(form):
+@app.route("/count_all", methods=["GET", "POST"])
+@main_handler
+def count_all(args=None):
     """Return a count of the given attrs.
 
     The required parameters are
@@ -1375,51 +1573,64 @@ def count_all(form):
      - incremental: incrementally report the progress while executing
        (default: false)
     """
-    assert_key("corpus", form, IS_IDENT, True)
-    assert_key("groupby", form, IS_IDENT, True)
-    assert_key("cut", form, IS_NUMBER)
-    assert_key("ignore_case", form, IS_IDENT)
-    assert_key("incremental", form, r"(true|false)")
     
-    form["cqp"] = "[]"  # Dummy value, not used
-    form["simple"] = "true"
+    if args is None:
+        args = request.values.copy()
+    
+    assert_key("corpus", args, IS_IDENT, True)
+    assert_key("groupby", args, IS_IDENT, True)
+    assert_key("cut", args, IS_NUMBER)
+    assert_key("ignore_case", args, IS_IDENT)
+    assert_key("incremental", args, r"(true|false)")
+    
+    args["cqp"] = "[]"  # Dummy value, not used
+    args["simple"] = "true"
 
-    return count(form)
+    yield generator_to_dict(count(args))
 
 
-def count_time(form):
+def remap_keys(mapping):
+    return [{'key': k, 'value': v} for k, v in mapping.items()]
+
+
+@app.route("/count_time", methods=["GET", "POST"])
+@main_handler
+def count_time(args=None):
     """
     """
     import datetime
     from dateutil.relativedelta import relativedelta
     
-    assert_key("cqp", form, r"", True)
-    assert_key("corpus", form, IS_IDENT, True)
-    assert_key("cut", form, IS_NUMBER)
-    assert_key("incremental", form, r"(true|false)")
-    assert_key("granularity", form, r"[ymdhnsYMDHNS]")
-    assert_key("from", form, r"^\d{14}$")
-    assert_key("to", form, r"^\d{14}$")
-    assert_key("strategy", form, r"^[123]$")
+    if args is None:
+        args = request.values
     
-    incremental = form.get("incremental", "").lower() == "true"
+    assert_key("cqp", args, r"", True)
+    assert_key("corpus", args, IS_IDENT, True)
+    assert_key("cut", args, IS_NUMBER)
+    assert_key("incremental", args, r"(true|false)")
+    assert_key("granularity", args, r"[ymdhnsYMDHNS]")
+    assert_key("from", args, r"^\d{14}$")
+    assert_key("to", args, r"^\d{14}$")
+    assert_key("strategy", args, r"^[123]$")
+    
+    incremental = args.get("incremental", "").lower() == "true"
 
-    corpora = form.get("corpus")
-    if isinstance(corpora, basestring):
+    corpora = args.get("corpus")
+    if isinstance(corpora, str):
         corpora = corpora.upper().split(QUERY_DELIM)
     corpora = set(corpora)
     
     check_authentication(corpora)
     
     # Sort numbered CQP-queries numerically
-    cqp = [form.get(key).decode("utf-8") for key in sorted([k for k in form.keys() if k.startswith("cqp")], key=lambda x: int(x[3:]) if len(x) > 3 else 0)]
-    subcqp = [form.get(key).decode("utf-8") for key in sorted([k for k in form.keys() if k.startswith("subcqp")], key=lambda x: int(x[6:]) if len(x) > 6 else 0)]
+    cqp = [args.get(key) for key in sorted([k for k in args.keys() if k.startswith("cqp")], key=lambda x: int(x[3:]) if len(x) > 3 else 0)]
+    subcqp = [args.get(key) for key in sorted([k for k in args.keys() if k.startswith("subcqp")], key=lambda x: int(x[6:]) if len(x) > 6 else 0)]
 
     if subcqp:
         cqp.append(subcqp)
-    granularity = form.get("granularity", "y").lower()
-    fromdate = form.get("from", "")
-    todate = form.get("to", "")
+    granularity = (args.get("granularity") or "y").lower()
+    fromdate = args.get("from", "")
+    todate = args.get("to", "")
     
     # Check that we have a suitable date range for the selected granularity
     df = None
@@ -1430,7 +1641,7 @@ def count_time(form):
             raise ValueError("When using 'from' or 'to', both need to be specified.")
 
     # Get date range of selected corpora
-    corpus_info = info({"corpus": QUERY_DELIM.join(corpora)})
+    corpus_info = generator_to_dict(info({"corpus": QUERY_DELIM.join(corpora)}))
     corpora_copy = corpora.copy()
 
     if fromdate and todate:
@@ -1480,11 +1691,8 @@ def count_time(form):
         
         if dt > (df + add):
             raise ValueError("The date range is too large for the selected granularity. Use 'to' and 'from' to limit the range.")
-    
-    
-    strategy = int(form.get("strategy", "1"))
-    
-    use_cache = bool(not form.get("cache", "").lower() == "false" and config.CACHE_DIR)
+
+    strategy = int(args.get("strategy") or "1")
     
     if granularity in "hns":
         groupby = ["text_datefrom", "text_timefrom", "text_dateto", "text_timeto"]
@@ -1495,21 +1703,21 @@ def count_time(form):
     corpora_sizes = {}
     
     ns = Namespace()
-    total_rows = [[] for i in range(len(subcqp) + 1)]
+    total_rows = [[]] * (len(subcqp) + 1)
     ns.total_size = 0
     
     ns.progress_count = 0
     if incremental:
-        print '"progress_corpora": [%s],' % ('"' + '", "'.join(corpora) + '"' if corpora else "")
+        yield {"progress_corpora": list(corpora)}
 
     with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-        future_query = dict((executor.submit(count_query_worker, corpus, cqp, groupby, [], form), corpus) for corpus in corpora)
+        future_query = dict((executor.submit(count_query_worker, corpus, cqp, groupby, [], args), corpus) for corpus in corpora)
         
         def anti_timeout(queue):
             for future in futures.as_completed(future_query):
                 corpus = future_query[future]
                 if future.exception() is not None:
-                    if not "Can't find attribute ``text_datefrom''" in future.exception().message:
+                    if "Can't find attribute ``text_datefrom''" not in future.exception().message:
                         raise CQPError(future.exception())
                 else:
                     lines, _, corpus_size = future.result()
@@ -1538,16 +1746,17 @@ def count_time(form):
                         datefrom = datefrom.split(" ")[0]
                         dateto = dateto.split(" ")[0]
                         
-                        total_rows[query_no].append((corpus, datefrom + timefrom, dateto + timeto, int(count)))
+                        total_rows[query_no].append({"corpus": corpus, "df": datefrom + timefrom, "dt": dateto + timeto, "sum": int(count)})
                     
                     if incremental:
-                        queue.put('"progress_%d": "%s",' % (ns.progress_count, corpus))
+                        queue.put({"progress_%d" % ns.progress_count: corpus})
                         ns.progress_count += 1
             queue.put("DONE")
         
-        prevent_timeout(anti_timeout)
+        for msg in prevent_timeout(anti_timeout):
+            yield msg
 
-    corpus_timedata = timespan({"corpus": list(corpora), "granularity": granularity, "from": fromdate, "to": todate, "cache": str(use_cache), "strategy": str(strategy)})
+    corpus_timedata = generator_to_dict(timespan({"corpus": list(corpora), "granularity": granularity, "from": fromdate, "to": todate, "strategy": str(strategy)}))
     search_timedata = []
     search_timedata_combined = []
     for total_row in total_rows:
@@ -1556,10 +1765,9 @@ def count_time(form):
         search_timedata_combined.append(temp["combined"])
        
     for corpus in corpora:
-                
         corpus_stats = [{"absolute": defaultdict(int),
-                        "relative": defaultdict(float),
-                        "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
+                         "relative": defaultdict(float),
+                         "sums": {"absolute": 0, "relative": 0.0}}] * (len(subcqp) + 1)
         
         basedates = dict([(date, None if corpus_timedata["corpora"][corpus][date] == 0 else 0) for date in corpus_timedata["corpora"].get(corpus, {})])
         
@@ -1572,7 +1780,7 @@ def count_time(form):
                     corpus_stats[i]["relative"][basedate] = basedates[basedate]
                 prevdate = basedates[basedate]
 
-            for row in s.get(corpus, {}).iteritems():
+            for row in s.get(corpus, {}).items():
                 date, count = row
                 corpus_date_size = float(corpus_timedata["corpora"].get(corpus, {}).get(date, 0))
                 if corpus_date_size > 0.0:
@@ -1588,7 +1796,7 @@ def count_time(form):
 
     total_stats = [{"absolute": defaultdict(int),
                     "relative": defaultdict(float),
-                    "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
+                    "sums": {"absolute": 0, "relative": 0.0}}] * (len(subcqp) + 1)
 
     basedates = dict([(date, None if corpus_timedata["combined"][date] == 0 else 0) for date in corpus_timedata.get("combined", {})])
 
@@ -1602,7 +1810,7 @@ def count_time(form):
             prevdate = basedates[basedate]
             
         if s:
-            for row in s.iteritems():
+            for row in s.items():
                 date, count = row
                 combined_date_size = float(corpus_timedata["combined"].get(date, 0))
                 if combined_date_size > 0.0:
@@ -1620,10 +1828,10 @@ def count_time(form):
     for corpus in corpora_copy.difference(corpora):
         result["corpora"][corpus] = {"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
     
-    if "debug" in form:
+    if "debug" in args:
         result["DEBUG"] = {"cqp": cqp}
         
-    return result
+    yield result
 
 
 def count_query_worker(corpus, cqp, groupby, ignore_case, form, expand_prequeries=True):
@@ -1631,12 +1839,12 @@ def count_query_worker(corpus, cqp, groupby, ignore_case, form, expand_prequerie
     optimize = True
     cqpextra = {}
     
-    if "cut" in form:
+    if form.get("cut"):
         cqpextra["cut"] = form.get("cut")
 
     # Within
     defaultwithin = form.get("defaultwithin", "")
-    within = form.get("within", defaultwithin)
+    within = form.get("within") or defaultwithin
     if within:
         if ":" in within:
             within = dict(x.split(":") for x in within.split(QUERY_DELIM))
@@ -1685,17 +1893,15 @@ def count_query_worker(corpus, cqp, groupby, ignore_case, form, expand_prequerie
             cmd += query_optimize(c, cqpextra_temp, find_match=True)
             cmd += ["""tabulate Last %s > "| sort | uniq -c | sort -nr";""" % ", ".join("match .. matchend %s" % g for g in groupby)]
 
-    #else:
-        
     cmd += ["exit;"]
     
-    lines = runCQP(cmd, form)
+    lines = run_cqp(cmd, form)
 
-    # skip CQP version
-    lines.next()
+    # Skip CQP version
+    next(lines)
 
-    # size of the query result
-    nr_hits = int(lines.next())
+    # Size of the query result
+    nr_hits = int(next(lines))
 
     # Get corpus size
     for line in lines:
@@ -1711,7 +1917,7 @@ def count_query_worker(corpus, cqp, groupby, ignore_case, form, expand_prequerie
 def count_query_worker_simple(corpus, cqp, groupby, ignore_case, form, expand_prequeries=True):
     """Worker for simple statistics queries which can be run using cwb-scan-corpus.
     Currently only used for searches on [] (any word)."""
-
+    
     lines = list(run_cwb_scan(corpus, groupby, form))
     nr_hits = 0
     
@@ -1733,7 +1939,7 @@ def count_query_worker_simple(corpus, cqp, groupby, ignore_case, form, expand_pr
 
     if ic_index:
         lines = []
-        for v, c in new_lines.iteritems():
+        for v, c in new_lines.items():
             # Convert result to the same format as the regular CQP count
             lines.append("%s %s" % (c, v))
     
@@ -1742,7 +1948,9 @@ def count_query_worker_simple(corpus, cqp, groupby, ignore_case, form, expand_pr
     return lines, nr_hits, corpus_size
 
 
-def loglike(form):
+@app.route("/loglike", methods=["GET", "POST"])
+@main_handler
+def loglike(args=None):
     """Run a log-likelihood comparison on two queries.
     
     The required parameters are
@@ -1758,14 +1966,18 @@ def loglike(form):
        (default: 15)
     """
 
-    import math
+    if args is None:
+        # Get a mutable dict to be able to modify arguments
+        args = request.values.to_dict()
 
     def expected(total, wordtotal, sumtotal):
         """ The expected is that the words are uniformely distributed over the corpora. """
         return wordtotal * (float(total) / sumtotal)
 
-    def compute_loglike((wf1, tot1), (wf2, tot2)):
+    def compute_loglike(wf1_tot1, wf2_tot2):
         """ Compute log-likelihood for a single pair. """
+        wf1, tot1 = wf1_tot1
+        wf2, tot2 = wf2_tot2
         e1 = expected(tot1, wf1 + wf2, tot1 + tot2)
         e2 = expected(tot2, wf1 + wf2, tot1 + tot2)
         (l1, l2) = (0, 0)
@@ -1794,8 +2006,8 @@ def loglike(form):
     def wf_frequencies(texts):
         freqs = []
         for (name, text) in texts:
-            d = defaultdict(int)  # Lemgram-frekvens
-            tc = 0  # Totalt antal token
+            d = defaultdict(int)  # Lemgram frequency
+            tc = 0  # Total number of tokens
             for w in [r for s in text for (w, a) in s for r in select(w, a['lex'])]:
                 tc += 1
                 d[w] += 1
@@ -1805,13 +2017,13 @@ def loglike(form):
     def reference_material(filename):
         d = defaultdict(int)
         tot = 0
-        with codecs.open(filename, encoding='utf8') as f:
+        with open(filename, encoding='utf8') as f:
             for l in f:
                 (wf, msd, lemgram, comp, af, rf) = l[:-1].split('\t')
-                for l in select(wf, lemgram):
-                    tot += int(af)  # Totalt antal token
-                    d[l] += int(af)  # Lemgram-frekvens
-        return (d, tot)
+                for ll in select(wf, lemgram):
+                    tot += int(af)  # Total number of tokens
+                    d[ll] += int(af)  # Lemgram frequency
+        return d, tot
 
     def compute_list(d1, tot1, ref, reftot):
         """ Compute log-likelyhood for lists. """
@@ -1852,35 +2064,35 @@ def loglike(form):
             max(nums) if nums else 0.0
         )
 
-    assert_key("set1_cqp", form, r"", True)
-    assert_key("set2_cqp", form, r"", True)
-    assert_key("set1_corpus", form, r"", True)
-    assert_key("set2_corpus", form, r"", True)
-    assert_key("groupby", form, IS_IDENT, True)
-    assert_key("ignore_case", form, IS_IDENT)
-    assert_key("max", form, IS_NUMBER, False)
+    assert_key("set1_cqp", args, r"", True)
+    assert_key("set2_cqp", args, r"", True)
+    assert_key("set1_corpus", args, r"", True)
+    assert_key("set2_corpus", args, r"", True)
+    assert_key("groupby", args, IS_IDENT, True)
+    assert_key("ignore_case", args, IS_IDENT)
+    assert_key("max", args, IS_NUMBER, False)
     
-    maxresults = int(form.get("max", 15))
+    maxresults = int(args.get("max") or 15)
     
-    set1 = form.get("set1_corpus").upper()
-    if isinstance(set1, basestring):
+    set1 = args.get("set1_corpus").upper()
+    if isinstance(set1, str):
         set1 = set1.split(QUERY_DELIM)
     set1 = set(set1)
-    set2 = form.get("set2_corpus").upper()
-    if isinstance(set2, basestring):
+    set2 = args.get("set2_corpus").upper()
+    if isinstance(set2, str):
         set2 = set2.split(QUERY_DELIM)
     set2 = set(set2)
     
     corpora = set1.union(set2)
     check_authentication(corpora)
     
-    same_cqp = form.get("set1_cqp") == form.get("set2_cqp")
+    same_cqp = args.get("set1_cqp") == args.get("set2_cqp")
     
     # If same CQP for both sets, handle as one query for better performance
     if same_cqp:
-        form["cqp"] = form.get("set1_cqp")
-        form["corpus"] = QUERY_DELIM.join(corpora)
-        count_result = count(form)
+        args["cqp"] = args.get("set1_cqp")
+        args["corpus"] = QUERY_DELIM.join(corpora)
+        count_result = generator_to_dict(count(args))
         
         sets = [{"total": 0, "freq": defaultdict(int)}, {"total": 0, "freq": defaultdict(int)}]
         for i, cset in enumerate((set1, set2)):
@@ -1889,16 +2101,16 @@ def loglike(form):
                 if len(cset) == 1:
                     sets[i]["freq"] = count_result["corpora"][corpus]["absolute"]
                 else:
-                    for w, f in count_result["corpora"][corpus]["absolute"].iteritems():
+                    for w, f in count_result["corpora"][corpus]["absolute"].items():
                         sets[i]["freq"][w] += f
         
     else:
-        form1, form2 = form.copy(), form.copy()
-        form1["corpus"] = QUERY_DELIM.join(set1)
-        form1["cqp"] = form.get("set1_cqp")
-        form2["corpus"] = QUERY_DELIM.join(set2)
-        form2["cqp"] = form.get("set2_cqp")
-        count_result = [count(form1), count(form2)]
+        args1, args2 = args.copy(), args.copy()
+        args1["corpus"] = QUERY_DELIM.join(set1)
+        args1["cqp"] = args.get("set1_cqp")
+        args2["corpus"] = QUERY_DELIM.join(set2)
+        args2["cqp"] = args.get("set2_cqp")
+        count_result = [generator_to_dict(count(args1)), generator_to_dict(count(args2))]
     
         sets = [{}, {}]
         for i, cset in enumerate((set1, set2)):
@@ -1916,14 +2128,16 @@ def loglike(form):
         result["set1"][w] = sets[0]["freq"].get(w, 0)
         result["set2"][w] = sets[1]["freq"].get(w, 0)
 
-    return result
+    yield result
 
 
 ################################################################################
 # LEMGRAM_COUNT
 ################################################################################
 
-def lemgram_count(form):
+@app.route("/lemgram_count", methods=["GET", "POST"])
+@main_handler
+def lemgram_count(args=None):
     """Return lemgram statistics per corpus.
 
     The required parameters are
@@ -1935,25 +2149,27 @@ def lemgram_count(form):
      - count: what to count (lemgram/prefix/suffix)
        (default: lemgram)
     """
-
-    assert_key("lemgram", form, r"", True)
-    assert_key("corpus", form, IS_IDENT)
-    assert_key("count", form, r"(lemgram|prefix|suffix)")
+    if args is None:
+        args = request.values
+        
+    assert_key("lemgram", args, r"", True)
+    assert_key("corpus", args, IS_IDENT)
+    assert_key("count", args, r"(lemgram|prefix|suffix)")
     
-    corpora = form.get("corpus")
-    if isinstance(corpora, basestring):
+    corpora = args.get("corpus")
+    if isinstance(corpora, str):
         corpora = corpora.upper().split(QUERY_DELIM)
     corpora = set(corpora) if corpora else set()
     
     check_authentication(corpora)
     
-    lemgram = form.get("lemgram")
-    if isinstance(lemgram, basestring):
+    lemgram = args.get("lemgram")
+    if isinstance(lemgram, str):
         lemgram = lemgram.split(QUERY_DELIM)
     lemgram = set(lemgram)
     
-    count = form.get("count", "lemgram")
-    if isinstance(count, basestring):
+    count = args.get("count") or "lemgram"
+    if isinstance(count, str):
         count = count.split(QUERY_DELIM)
     count = set(count)
        
@@ -1963,35 +2179,35 @@ def lemgram_count(form):
     
     sums = " + ".join("SUM(%s)" % counts[c] for c in count)
     
-    conn = MySQLdb.connect(host="localhost",
-                           user=config.DBUSER,
-                           passwd=config.DBPASSWORD,
-                           db=config.DBNAME,
-                           use_unicode=True,
-                           charset="utf8")
-    cursor = conn.cursor()
+    lemgram_sql = " lemgram IN (%s)" % ", ".join("'%s'" % sql_escape(l) for l in lemgram)
+    corpora_sql = " AND corpus IN (%s)" % ", ".join("'%s'" % sql_escape(c) for c in corpora) if corpora else ""
     
-    lemgram_sql = " lemgram IN (%s)" % "%s" % ", ".join(conn.escape(l).decode("utf-8") for l in lemgram)
-    corpora_sql = " AND corpus IN (%s)" % ", ".join("%s" % conn.escape(c) for c in corpora) if corpora else ""
-    
-    sql = "SELECT lemgram, " + sums + " FROM lemgram_index WHERE" + lemgram_sql + corpora_sql + " GROUP BY lemgram COLLATE utf8_bin;"
+    sql = "SELECT lemgram, " + sums + " AS freq FROM lemgram_index WHERE" + lemgram_sql + corpora_sql + " GROUP BY lemgram COLLATE utf8_bin;"
     
     result = {}
+    cursor = mysql.connection.cursor()
     cursor.execute(sql)
 
     for row in cursor:
         # We need this check here, since a search for "hår" also returns "här" and "har".
-        if row[0].encode("utf-8") in lemgram and int(row[1]) > 0:
-            result[row[0]] = int(row[1])
+        if row["lemgram"] in lemgram and int(row["freq"]) > 0:
+            result[row["lemgram"]] = int(row["freq"])
     
-    return result
+    yield result
+
+
+def sql_escape(s):
+    with app.app_context():
+        return mysql.connection.escape_string(s).decode("utf-8") if isinstance(s, str) else s
 
 
 ################################################################################
 # TIMESPAN
 ################################################################################
 
-def timespan(form):
+@app.route("/timespan", methods=["GET", "POST"])
+@main_handler
+def timespan(args=None):
     """Calculate timespan information for corpora.
     The time information is retrieved from the database.
 
@@ -2011,31 +2227,32 @@ def timespan(form):
      - to: to this date and time (optional)
     """
     
-    assert_key("corpus", form, IS_IDENT, True)
-    assert_key("granularity", form, r"[ymdhnsYMDHNS]")
-    assert_key("spans", form, r"(true|false)")
-    assert_key("combined", form, r"(true|false)")
-    assert_key("per_corpus", form, r"(true|false)")
-    assert_key("strategy", form, r"^[123]$")
-    assert_key("from", form, r"^(\d{8}\d{6}?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$")
-    assert_key("to", form, r"^(\d{8}\d{6}?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$")
+    if args is None:
+        args = request.values
     
-    corpora = form.get("corpus")
-    if isinstance(corpora, basestring):
+    assert_key("corpus", args, IS_IDENT, True)
+    assert_key("granularity", args, r"[ymdhnsYMDHNS]")
+    assert_key("spans", args, r"(true|false)")
+    assert_key("combined", args, r"(true|false)")
+    assert_key("per_corpus", args, r"(true|false)")
+    assert_key("strategy", args, r"^[123]$")
+    assert_key("from", args, r"^(\d{8}\d{6}?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$")
+    assert_key("to", args, r"^(\d{8}\d{6}?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$")
+    
+    corpora = args.get("corpus")
+    if isinstance(corpora, str):
         corpora = corpora.upper().split(QUERY_DELIM)
     corpora = sorted(set(corpora))
     
-    use_cache = bool(not form.get("cache", "").lower() == "false" and config.CACHE_DIR)
-    
-    #check_authentication(corpora)
+    # check_authentication(corpora)
 
-    granularity = form.get("granularity", "y").lower()
-    spans = (form.get("spans", "").lower() == "true")
-    combined = (not form.get("combined", "").lower() == "false")
-    per_corpus = (not form.get("per_corpus", "").lower() == "false")
-    strategy = int(form.get("strategy", "1"))
-    fromdate = form.get("from")
-    todate = form.get("to")
+    granularity = (args.get("granularity") or "y").lower()
+    spans = (args.get("spans", "").lower() == "true")
+    combined = (not args.get("combined", "").lower() == "false")
+    per_corpus = (not args.get("per_corpus", "").lower() == "false")
+    strategy = int(args.get("strategy") or "1")
+    fromdate = args.get("from")
+    todate = args.get("to")
     
     if fromdate or todate:
         if not fromdate or not todate:
@@ -2043,9 +2260,9 @@ def timespan(form):
     
     shorten = {"y": 4, "m": 7, "d": 10, "h": 13, "n": 16, "s": 19}
 
-    unique_id = os.getenv("UNIQUE_ID")
+    unique_id = str(uuid.uuid4())
     
-    if use_cache:
+    if flask.g.cache:
         cachedata = (granularity,
                      spans,
                      combined,
@@ -2057,70 +2274,66 @@ def timespan(form):
         
         if os.path.exists(cachefile):
             with open(cachefile, "rb") as f:
-                result = cPickle.load(f)
-                if "debug" in form:
+                result = pickle.load(f)
+                if "debug" in args:
                     result.setdefault("DEBUG", {})
                     result["DEBUG"]["cache_read"] = True
-                return result
-
-    conn = MySQLdb.connect(host="localhost",
-                           user=config.DBUSER,
-                           passwd=config.DBPASSWORD,
-                           db=config.DBNAME,
-                           use_unicode=True,
-                           charset="utf8",
-                           cursorclass=MySQLdb.cursors.SSCursor)
-    cursor = conn.cursor()
+                yield result
 
     ns = {}
+    use_cache = flask.g.cache
     
     def anti_timeout_fun(queue):
-        corpora_sql = "(%s)" % ", ".join("%s" % conn.escape(c) for c in corpora)
+        with app.app_context():
+            corpora_sql = "(%s)" % ", ".join("'%s'" % sql_escape(c) for c in corpora)
 
-        fromto = ""
-    
-        if strategy == 1:
-            if fromdate and todate:
-                fromto = " AND ((datefrom >= %s AND dateto <= %s) OR (datefrom <= %s AND dateto >= %s))" % (conn.escape(fromdate), conn.escape(todate), conn.escape(fromdate), conn.escape(todate))
-        elif strategy == 2:
-            if todate:
-                fromto += " AND datefrom <= %s" % conn.escape(todate)
-            if fromdate:
-                fromto = " AND dateto >= %s" % conn.escape(fromdate)
-        elif strategy == 3:
-            if fromdate:
-                fromto = " AND datefrom >= %s" % conn.escape(fromdate)
-            if todate:
-                fromto += " AND dateto <= %s" % conn.escape(todate)
-
-        # TODO: Skip grouping on corpus when we only are after the combined results.
-        # We do the granularity truncation and summation in the DB query if we can (depending on strategy), since it's much faster than doing it afterwards
+            fromto = ""
         
-        timedata_corpus = "timedata_date" if granularity in ("y", "m", "d") else "timedata"
-        if strategy == 1:
-            # We need the full dates for this strategy, so no truncating of the results
-            sql = "SELECT corpus, datefrom AS df, dateto AS dt, SUM(tokens) FROM " + timedata_corpus + " WHERE corpus IN " + corpora_sql + fromto + " GROUP BY corpus, df, dt ORDER BY NULL;"
-        else:
-            sql = "SELECT corpus, LEFT(datefrom, " + str(shorten[granularity]) + ") AS df, LEFT(dateto, " + str(shorten[granularity]) + ") AS dt, SUM(tokens) FROM " + timedata_corpus + " WHERE corpus IN " + corpora_sql + fromto + " GROUP BY corpus, df, dt ORDER BY NULL;"
-        cursor.execute(sql)
-        
-        ns["result"] = timespan_calculator(cursor, granularity=granularity, spans=spans, combined=combined, per_corpus=per_corpus, strategy=strategy)
+            if strategy == 1:
+                if fromdate and todate:
+                    fromto = " AND ((datefrom >= %s AND dateto <= %s) OR (datefrom <= %s AND dateto >= %s))" % (sql_escape(fromdate), sql_escape(todate), sql_escape(fromdate), sql_escape(todate))
+            elif strategy == 2:
+                if todate:
+                    fromto += " AND datefrom <= '%s'" % sql_escape(todate)
+                if fromdate:
+                    fromto = " AND dateto >= '%s'" % sql_escape(fromdate)
+            elif strategy == 3:
+                if fromdate:
+                    fromto = " AND datefrom >= '%s'" % sql_escape(fromdate)
+                if todate:
+                    fromto += " AND dateto <= '%s'" % sql_escape(todate)
 
-        if use_cache:
-            tmpfile = "%s.%s" % (cachefile, unique_id)
-            with open(tmpfile, "w") as f:
-                cPickle.dump(ns["result"], f, protocol=-1)
-            os.rename(tmpfile, cachefile)
-        
-        if "debug" in form:
-            ns["result"].setdefault("DEBUG", {})
-            ns["result"]["DEBUG"]["cache_saved"] = True
+            # TODO: Skip grouping on corpus when we only are after the combined results.
+            # We do the granularity truncation and summation in the DB query if we can (depending on strategy), since it's much faster than doing it afterwards
+            
+            timedata_corpus = "timedata_date" if granularity in ("y", "m", "d") else "timedata"
+            if strategy == 1:
+                # We need the full dates for this strategy, so no truncating of the results
+                sql = "SELECT corpus, datefrom AS df, dateto AS dt, SUM(tokens) AS sum FROM " + timedata_corpus + " WHERE corpus IN " + corpora_sql + fromto + " GROUP BY corpus, df, dt ORDER BY NULL;"
+            else:
+                sql = "SELECT corpus, LEFT(datefrom, " + str(shorten[granularity]) + ") AS df, LEFT(dateto, " + str(shorten[granularity]) + ") AS dt, SUM(tokens) AS sum FROM " + timedata_corpus + " WHERE corpus IN " + corpora_sql + fromto + " GROUP BY corpus, df, dt ORDER BY NULL;"
+            
+            cursor = mysql.connection.cursor()
+            cursor.execute(sql)
+            
+            ns["result"] = timespan_calculator(cursor, granularity=granularity, spans=spans, combined=combined, per_corpus=per_corpus, strategy=strategy)
 
-        queue.put("DONE")
+            if use_cache:
+                tmpfile = "%s.%s" % (cachefile, unique_id)
+                with open(tmpfile, "wb") as f:
+                    pickle.dump(ns["result"], f, protocol=-1)
+                os.rename(tmpfile, cachefile)
+            
+            if "debug" in args:
+                ns["result"].setdefault("DEBUG", {})
+                ns["result"]["DEBUG"]["cache_saved"] = True
 
-    prevent_timeout(anti_timeout_fun)
+            queue.put("DONE")
 
-    return ns["result"]
+    for msg in prevent_timeout(anti_timeout_fun):
+        yield msg
+
+    yield ns["result"]
 
 
 def timespan_calculator(timedata, granularity="y", spans=False, combined=True, per_corpus=True, strategy=1):
@@ -2151,7 +2364,7 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
         TEMPYEAR = 9996  # We need to use a leap year to support feb 29th
 
         if dt.year < 1900:
-            # create a copy of this datetime, just in case, then set the year to
+            # Create a copy of this datetime, just in case, then set the year to
             # something acceptable, then replace that year in the resulting string
             tmp_dt = datetime.datetime(TEMPYEAR, dt.month, dt.day,
                                        dt.hour, dt.minute,
@@ -2167,7 +2380,7 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
             result = tmp_dt.strftime(tmp_fmt)
             
             if '%c' in fmt:
-                # local datetime format - uses full year but hard for us to guess where.
+                # Local datetime format - uses full year but hard for us to guess where.
                 result = result.replace(str(TEMPYEAR), str(dt.year))
             
             result = result.replace('\x11\x11', str(dt.year)[-2:])
@@ -2190,7 +2403,6 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
         return int(strftime(d, df))
 
     def shorten(date, g):
-        date = str(date)
         alt = 1 if len(date) % 2 else 0  # Handle years with three digits
         return int(date[:gs[g]-alt])
         
@@ -2222,12 +2434,11 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
     datemax = "99991231" if granularity in ("y", "m", "d") else "99991231235959"
 
     for row in timedata:
-        # corpus, datefrom, dateto, tokens
-        corpus = row[0]
-        datefrom = filter(lambda x: x.isdigit(), str(row[1])) if row[1] else ""
+        corpus = row["corpus"]
+        datefrom = "".join(x for x in str(row["df"]) if x.isdigit()) if row["df"] else ""
         if datefrom == "0" * len(datefrom):
             datefrom = ""
-        dateto = filter(lambda x: x.isdigit(), str(row[2])) if row[2] else ""
+        dateto = "".join(x for x in str(row["dt"]) if x.isdigit()) if row["dt"] else ""
         if dateto == "0" * len(dateto):
             dateto = ""
         datefrom_short = shorten(datefrom, granularity) if datefrom else ""
@@ -2258,9 +2469,8 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
             
             if not datefrom_short == dateto_short:
                 continue
-
                 
-        tokens = int(row[3])
+        tokens = int(row["sum"])
 
         r = {"datefrom": datefrom_short, "dateto": dateto_short, "corpus": corpus, "tokens": tokens}
         if combined:
@@ -2272,7 +2482,7 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
             nodes[corpus].add(("f", datefrom_short))
             nodes[corpus].add(("t", dateto_short))
     
-    corpusnodes = dict((k, sorted(v, key=lambda x: (x[1], x[0]))) for k, v in nodes.iteritems())
+    corpusnodes = dict((k, sorted(v, key=lambda x: (x[1], x[0]))) for k, v in nodes.items())
 
     result = {}
     if per_corpus:
@@ -2280,7 +2490,7 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
     if combined:
         result["combined"] = {}
     
-    for corpus, nodes in corpusnodes.iteritems():
+    for corpus, nodes in corpusnodes.items():
         data = defaultdict(int)
     
         for i in range(0, len(nodes) - 1):
@@ -2321,7 +2531,9 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
 # RELATIONS
 ################################################################################
 
-def relations(form):
+@app.route("/relations", methods=["GET", "POST"])
+@main_handler
+def relations(args=None):
     """Calculate word picture data.
 
     The required parameters are
@@ -2339,30 +2551,32 @@ def relations(form):
        (default: false)
     """
     
+    if args is None:
+        args = request.values
+    
     import math
 
-    assert_key("corpus", form, IS_IDENT, True)
-    assert_key("word", form, "", True)
-    assert_key("type", form, r"(word|lemgram)", False)
-    assert_key("min", form, IS_NUMBER, False)
-    assert_key("max", form, IS_NUMBER, False)
-    assert_key("incremental", form, r"(true|false)")
+    assert_key("corpus", args, IS_IDENT, True)
+    assert_key("word", args, "", True)
+    assert_key("type", args, r"(word|lemgram)", False)
+    assert_key("min", args, IS_NUMBER, False)
+    assert_key("max", args, IS_NUMBER, False)
+    assert_key("incremental", args, r"(true|false)")
     
-    corpora = form.get("corpus")
-    if isinstance(corpora, basestring):
+    corpora = args.get("corpus")
+    if isinstance(corpora, str):
         corpora = corpora.upper().split(QUERY_DELIM)
     corpora = set(corpora)
     
     check_authentication(corpora)
     
-    incremental = form.get("incremental", "").lower() == "true"
+    incremental = args.get("incremental", "").lower() == "true"
     
-    use_cache = bool(not form.get("cache", "").lower() == "false" and config.CACHE_DIR)
-    word = form.get("word")
-    search_type = form.get("type", "")
-    minfreq = form.get("min")
-    sortby = form.get("sortby", "mi")
-    maxresults = int(form.get("max", 15))
+    word = args.get("word")
+    search_type = args.get("type", "")
+    minfreq = args.get("min")
+    sortby = args.get("sortby") or "mi"
+    maxresults = int(args.get("max") or 15)
     minfreqsql = " AND freq >= %s" % minfreq if minfreq else ""
     
     checksum_data = (sorted(corpora),
@@ -2373,86 +2587,81 @@ def relations(form):
                      maxresults)
     checksum = get_hash(checksum_data)
     
-    if use_cache and os.path.exists(os.path.join(config.CACHE_DIR, "wordpicture_" + checksum)):
+    if flask.g.cache and os.path.exists(os.path.join(config.CACHE_DIR, "wordpicture_" + checksum)):
         with open(os.path.join(config.CACHE_DIR, "wordpicture_" + checksum), "r") as cachefile:
             result = json.load(cachefile)
-            if "debug" in form:
+            if "debug" in args:
                 result.setdefault("DEBUG", {})
                 result["DEBUG"]["cache_read"] = True
-            return result
+            yield result
     
     result = {}
 
-    conn = MySQLdb.connect(host="localhost",
-                           user=config.DBUSER,
-                           passwd=config.DBPASSWORD,
-                           db=config.DBNAME,
-                           use_unicode=True,
-                           charset="utf8")
-    cursor = conn.cursor()
+    cursor = mysql.connection.cursor()
     cursor.execute("SET @@session.long_query_time = 1000;")
     
     # Get available tables
-    cursor.execute("SHOW TABLES LIKE '" + config.DBTABLE + "_%';")
-    tables = set(x[0] for x in cursor)
-    # Filter out corpora which doesn't exist in database
-    corpora = filter(lambda x: config.DBTABLE + "_" + x.upper() in tables, corpora)
+    cursor.execute("SHOW TABLES LIKE '" + config.DBWPTABLE + "_%';")
+    tables = set(list(x.values())[0] for x in cursor)
+    # Filter out corpora which don't exist in database
+    corpora = [x for x in corpora if config.DBWPTABLE + "_" + x.upper() in tables]
     if not corpora:
-        return {}
+        yield {}
     
     selects = []
     
-    # TODO: Remove all wfhead/wfdep references once frontend upgraded
     if search_type == "lemgram":
-        lemgram_sql = conn.escape(word).decode("utf-8")
+        lemgram_sql = "'%s'" % sql_escape(word)
         
         for corpus in corpora:
-            corpus_table = config.DBTABLE + "_" + corpus.upper()
+            corpus_sql = "'%s'" % sql_escape(corpus).upper()
+            corpus_table = config.DBWPTABLE + "_" + corpus.upper()
 
-            selects.append((corpus.upper(), u"(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, DR.freq AS dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " +
-                            u"FROM `" + corpus_table + "_strings` AS S1, `" + corpus_table + "_strings` AS S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
-                            u"WHERE S1.string = " + lemgram_sql + " COLLATE utf8_bin AND F.head = S1.id AND S2.id = F.dep " +
+            selects.append((corpus.upper(), "(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, DR.freq AS dep_rel_freq, " + corpus_sql + " AS corpus, F.id " +
+                            "FROM `" + corpus_table + "_strings` AS S1, `" + corpus_table + "_strings` AS S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
+                            "WHERE S1.string = " + lemgram_sql + " COLLATE utf8_bin AND F.head = S1.id AND S2.id = F.dep " +
                             minfreqsql +
-                            u"AND F.bfhead = 1 AND F.bfdep = 1 AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
+                            "AND F.bfhead = 1 AND F.bfdep = 1 AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
                             ))
-            selects.append((None, u"(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, DR.freq AS dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " +
-                            u"FROM `" + corpus_table + "_strings` AS S1, `" + corpus_table + "_strings` AS S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
-                            u"WHERE S2.string = " + lemgram_sql + " COLLATE utf8_bin AND F.dep = S2.id AND S1.id = F.head " +
+            selects.append((None, "(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, DR.freq AS dep_rel_freq, " + corpus_sql + " AS corpus, F.id " +
+                            "FROM `" + corpus_table + "_strings` AS S1, `" + corpus_table + "_strings` AS S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
+                            "WHERE S2.string = " + lemgram_sql + " COLLATE utf8_bin AND F.dep = S2.id AND S1.id = F.head " +
                             minfreqsql +
-                            u"AND F.bfhead = 1 AND F.bfdep = 1 AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
+                            "AND F.bfhead = 1 AND F.bfdep = 1 AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
                             ))
     else:
-        word_sql = conn.escape(word).decode("utf-8")
-        word = word.decode("utf-8")
+        word_sql = "'%s'" % sql_escape(word)
+        word = word
         
         for corpus in corpora:
-            corpus_table = config.DBTABLE + "_" + corpus.upper()
+            corpus_sql = "'%s'" % sql_escape(corpus).upper()
+            corpus_table = config.DBWPTABLE + "_" + corpus.upper()
     
-            selects.append((corpus.upper(), u"(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, DR.freq AS dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " +
-                            u"FROM `" + corpus_table + "_strings` AS S1, `" + corpus_table + "_strings` AS S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
-                            u"WHERE S1.string = " + word_sql + " AND F.head = S1.id AND F.wfhead = 1 AND S2.id = F.dep " +
+            selects.append((corpus.upper(), "(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, DR.freq AS dep_rel_freq, " + corpus_sql + " AS corpus, F.id " +
+                            "FROM `" + corpus_table + "_strings` AS S1, `" + corpus_table + "_strings` AS S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
+                            "WHERE S1.string = " + word_sql + " AND F.head = S1.id AND F.wfhead = 1 AND S2.id = F.dep " +
                             minfreqsql +
-                            u"AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
+                            "AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
                             ))
-            selects.append((None, u"(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, DR.freq AS dep_rel_freq, " + conn.string_literal(corpus.upper()) + u" AS corpus, F.id " +
-                            u"FROM `" + corpus_table + "_strings` AS S1, `" + corpus_table + "_strings` AS S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
-                            u"WHERE S2.string = " + word_sql + " AND F.dep = S2.id AND F.wfdep = 1 AND S1.id = F.head " +
+            selects.append((None, "(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, DR.freq AS dep_rel_freq, " + corpus_sql + " AS corpus, F.id " +
+                            "FROM `" + corpus_table + "_strings` AS S1, `" + corpus_table + "_strings` AS S2, `" + corpus_table + "` AS F, `" + corpus_table + "_rel` AS R, `" + corpus_table + "_head_rel` AS HR, `" + corpus_table + "_dep_rel` AS DR " +
+                            "WHERE S2.string = " + word_sql + " AND F.dep = S2.id AND F.wfdep = 1 AND S1.id = F.head " +
                             minfreqsql +
-                            u"AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
+                            "AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep AND F.rel = DR.rel)"
                             ))
 
     cursor_result = []
     if incremental:
-        print '"progress_corpora": [%s],' % ('"' + '", "'.join(corpora) + '"' if corpora else "")
+        yield {"progress_corpora": list(corpora)}
         progress_count = 0
         for sql in selects:
             cursor.execute(sql[1])
             cursor_result.extend(list(cursor))
             if sql[0]:
-                print '"progress_%d": {"corpus": "%s"},' % (progress_count, sql[0])
+                yield {"progress_%d" % progress_count: {"corpus": sql[0]}}
                 progress_count += 1
     else:    
-        sql = u" UNION ALL ".join(x[1] for x in selects)
+        sql = " UNION ALL ".join(x[1] for x in selects)
         cursor.execute(sql)
         cursor_result = cursor
     
@@ -2462,21 +2671,17 @@ def relations(form):
     freq_head_rel = {}
     freq_rel_dep = {}
     
-    # 0     1        2    3    4       5         6     7         8              9             10      11
-    # head, headpos, rel, dep, deppos, depextra, freq, rel_freq, head_rel_freq, dep_rel_freq, corpus, id
-    
     for row in cursor_result:
-        #       head    headpos
-        head = (row[0], row[1])
-        #      dep     deppos  depextra
-        dep = (row[3], row[4], row[5])
-        rels.setdefault((head, row[2], dep), {"freq": 0, "source": set()})
-        rels[(head, row[2], dep)]["freq"] += row[6]
-        rels[(head, row[2], dep)]["source"].add("%s:%d" % (row[10], row[11]))
-        #                   rel          corpus   rel        rel_freq
-        freq_rel.setdefault(row[2], {})[(row[10], row[2])] = row[7]
-        freq_head_rel.setdefault((head, row[2]), {})[(row[10], row[2])] = row[8]
-        freq_rel_dep.setdefault((row[2], dep), {})[(row[10], row[2])] = row[9]
+        head = (row["head"], row["headpos"])
+        dep = (row["dep"], row["deppos"], row["depextra"])
+        rels.setdefault((head, row["rel"], dep), {"freq": 0, "source": set()})
+        rels[(head, row["rel"], dep)]["freq"] += row["freq"]
+        rels[(head, row["rel"], dep)]["source"].add("%s:%d" % (row["corpus"], row["id"]))
+        freq_rel.setdefault(row["rel"], {})[(row["corpus"], row["rel"])] = row["rel_freq"]
+        freq_head_rel.setdefault((head, row["rel"]), {})[(row["corpus"], row["rel"])] = row["head_rel_freq"]
+        freq_rel_dep.setdefault((row["rel"], dep), {})[(row["corpus"], row["rel"])] = row["dep_rel_freq"]
+    
+    cursor.close()
     
     # Calculate MI
     for rel in rels:
@@ -2511,11 +2716,8 @@ def relations(form):
              }
         result.setdefault("relations", []).append(r)
     
-    cursor.close()
-    conn.close()
-    
-    if use_cache:
-        unique_id = os.getenv("UNIQUE_ID")
+    if flask.g.cache:
+        unique_id = str(uuid.uuid4())
         cachefilename = os.path.join(config.CACHE_DIR, "wordpicture_" + checksum)
         tmpfile = "%s.%s" % (cachefilename, unique_id)
     
@@ -2523,18 +2725,20 @@ def relations(form):
             json.dump(result, cachefile)
         os.rename(tmpfile, cachefilename)
         
-        if "debug" in form:
+        if "debug" in args:
             result.setdefault("DEBUG", {})
             result["DEBUG"]["cache_saved"] = True
     
-    return result
+    yield result
 
 
 ################################################################################
 # RELATIONS_SENTENCES
 ################################################################################
 
-def relations_sentences(form):
+@app.route("/relations_sentences", methods=["GET", "POST"])
+@main_handler
+def relations_sentences(args=None):
     """Execute a CQP query to find sentences with a given relation from a word picture.
 
     The required parameters are
@@ -2545,15 +2749,18 @@ def relations_sentences(form):
      - show
      - show_struct
     """
+    
+    if args is None:
+        args = request.values
 
     from copy import deepcopy
     
-    assert_key("source", form, "", True)
-    assert_key("start", form, IS_NUMBER, False)
-    assert_key("end", form, IS_NUMBER, False)
+    assert_key("source", args, "", True)
+    assert_key("start", args, IS_NUMBER, False)
+    assert_key("end", args, IS_NUMBER, False)
     
-    temp_source = form.get("source")
-    if isinstance(temp_source, basestring):
+    temp_source = args.get("source")
+    if isinstance(temp_source, str):
         temp_source = temp_source.split(QUERY_DELIM)
     source = defaultdict(set)
     for s in temp_source:
@@ -2562,71 +2769,66 @@ def relations_sentences(form):
     
     check_authentication(source.keys())
     
-    start = int(form.get("start", "0"))
-    end = int(form.get("end", "99"))
-    shown = form.get("show", "word")
-    shown_structs = form.get("show_struct", [])
-    if isinstance(shown_structs, basestring):
+    start = int(args.get("start") or "0")
+    end = int(args.get("end") or "99")
+    shown = args.get("show") or "word"
+    shown_structs = args.get("show_struct") or []
+    if isinstance(shown_structs, str):
         shown_structs = shown_structs.split(QUERY_DELIM)
     shown_structs = set(shown_structs)
     
-    defaultcontext = form.get("defaultcontext", "1 sentence")
+    defaultcontext = args.get("defaultcontext") or "1 sentence"
     
     querystarttime = time.time()
 
-    conn = MySQLdb.connect(host="localhost",
-                           user=config.DBUSER,
-                           passwd=config.DBPASSWORD,
-                           db=config.DBNAME)
-    cursor = conn.cursor()
+    cursor = mysql.connection.cursor()
     cursor.execute("SET @@session.long_query_time = 1000;")
     selects = []
     counts = []
     
     # Get available tables
-    cursor.execute("SHOW TABLES LIKE '" + config.DBTABLE + "_%';")
-    tables = set(x[0] for x in cursor)
+    cursor.execute("SHOW TABLES LIKE '" + config.DBWPTABLE + "_%';")
+    tables = set(list(x.values())[0] for x in cursor)
     # Filter out corpora which doesn't exist in database
-    source = sorted(filter(lambda x: config.DBTABLE + "_" + x[0].upper() in tables, source.iteritems()))
+    source = sorted([x for x in iter(source.items()) if config.DBWPTABLE + "_" + x[0].upper() in tables])
     if not source:
-        return {}
+        yield {}
     corpora = [x[0] for x in source]
     
     for s in source:
         corpus, ids = s
-        ids = [conn.escape(i) for i in ids]
-        ids_list = "(" + ", ".join(ids) + ")"
+        ids = [int(i) for i in ids]
+        ids_list = "(" + ", ".join("%d" % i for i in ids) + ")"
         
-        corpus_table_sentences = config.DBTABLE + "_" + corpus.upper() + "_sentences"
+        corpus_table_sentences = config.DBWPTABLE + "_" + corpus.upper() + "_sentences"
         
-        selects.append(u"(SELECT S.sentence, S.start, S.end, " + conn.string_literal(corpus.upper()) + u" AS corpus " +
-                       u"FROM `" + corpus_table_sentences + u"` as S " +
-                       u" WHERE S.id IN " + ids_list + u")"
+        selects.append("(SELECT S.sentence, S.start, S.end, '" + sql_escape(corpus.upper()) + "' AS corpus " +
+                       "FROM `" + corpus_table_sentences + "` as S " +
+                       " WHERE S.id IN " + ids_list + ")"
                        )
-        counts.append(u"(SELECT " + conn.string_literal(corpus.upper()) + u" AS corpus, COUNT(*) FROM `" + corpus_table_sentences + "` as S WHERE S.id IN " + ids_list + u")")
+        counts.append("(SELECT '" + sql_escape(corpus.upper()) + "' AS corpus, COUNT(*) AS freq FROM `" + corpus_table_sentences + "` as S WHERE S.id IN " + ids_list + ")")
 
-    sql_count = u" UNION ALL ".join(counts)
+    sql_count = " UNION ALL ".join(counts)
     cursor.execute(sql_count)
     
     corpus_hits = {}
     for row in cursor:
-        corpus_hits[row[0]] = int(row[1])
+        corpus_hits[row["corpus"]] = int(row["freq"])
     
-    sql = u" UNION ALL ".join(selects) + (u" LIMIT %d, %d" % (start, end - 1))
+    sql = " UNION ALL ".join(selects) + (" LIMIT %d, %d" % (start, end - 1))
     cursor.execute(sql)
     
     querytime = time.time() - querystarttime
     corpora_dict = {}
     for row in cursor:
-        # 0 sentence, 1 start, 2 end, 3 corpus
-        corpora_dict.setdefault(row[3], {}).setdefault(row[0], []).append((row[1], row[2]))
+        corpora_dict.setdefault(row["corpus"], {}).setdefault(row["sentence"], []).append((row["start"], row["end"]))
 
     cursor.close()
-    
+
     total_hits = sum(corpus_hits.values())
 
     if not corpora_dict:
-        return {"hits": 0}
+        yield {"hits": 0}
     
     cqpstarttime = time.time()
     result = {}
@@ -2641,7 +2843,7 @@ def relations_sentences(form):
              "defaultcontext": defaultcontext}
         if shown:
             q["show"] = shown
-        result_temp = query(q)
+        result_temp = generator_to_dict(query(q))
 
         # Loop backwards since we might be adding new items
         for i in range(len(result_temp["kwic"]) - 1, -1, -1):
@@ -2668,7 +2870,7 @@ def relations_sentences(form):
     result["querytime"] = querytime
     result["cqptime"] = time.time() - cqpstarttime
     
-    return result
+    yield result
 
 
 ################################################################################
@@ -2702,6 +2904,9 @@ def parse_cqp(cqp):
             if not in_bracket and not in_quote:
                 last_start = i
                 in_bracket = True
+                if len(cqp) > i + 1 and cqp[i + 1] == ":":
+                    # Zero-width assertion encountered, which can not be handled by MU query
+                    return [], True
         elif c == "]":
             if in_bracket and not in_quote:
                 sections.append([last_start, i])
@@ -2725,7 +2930,7 @@ def parse_cqp(cqp):
         if cqp[section[0]:section[1]+1]:
             tokens.append(cqp[section[0]:section[1]+1])
     
-    return (tokens, rest)
+    return tokens, rest
 
 
 def make_cqp(cqp, cqpextra):
@@ -2752,7 +2957,7 @@ def translate_undef(s):
 
 def get_hash(values):
     """Get a hash for a list of values."""
-    return str(zlib.crc32(";".join(x.encode("UTF-8") if isinstance(x, unicode) else str(x) for x in values)))
+    return hashlib.sha256(bytes(";".join(v if isinstance(v, str) else str(v) for v in values), "UTF-8")).hexdigest()
 
 
 class CQPError(Exception):
@@ -2767,15 +2972,17 @@ class Namespace:
     pass
 
 
-def runCQP(command, form, executable=config.CQP_EXECUTABLE, registry=config.CWB_REGISTRY, attr_ignore=False):
-    """Call the CQP binary with the given command, and the CGI form.
+def run_cqp(command, args=None, executable=config.CQP_EXECUTABLE, registry=config.CWB_REGISTRY, attr_ignore=False):
+    """Call the CQP binary with the given command, and the request data.
     Yield one result line at the time, disregarding empty lines.
     If there is an error, raise a CQPError exception.
     """
+    if not args:
+        args = request.values
     env = os.environ.copy()
     env["LC_COLLATE"] = config.LC_COLLATE
-    encoding = form.get("encoding", config.CQP_ENCODING)
-    if not isinstance(command, basestring):
+    encoding = args.get("encoding") or config.CQP_ENCODING
+    if not isinstance(command, str):
         command = "\n".join(command)
     command = "set PrettyPrint off;\n" + command
     command = command.encode(encoding)
@@ -2783,13 +2990,14 @@ def runCQP(command, form, executable=config.CQP_EXECUTABLE, registry=config.CWB_
                     stdin=PIPE, stdout=PIPE, stderr=PIPE, env=env)
     reply, error = process.communicate(command)
     if error:
-        # remove newlines from the error string:
+        error = error.decode(encoding)
+        # Remove newlines from the error string:
         error = re.sub(r"\s+", r" ", error)
-        # keep only the first CQP error (the rest are consequences):
+        # Keep only the first CQP error (the rest are consequences):
         error = re.sub(r"^CQP Error: *", r"", error)
         error = re.sub(r" *(CQP Error:).*$", r"", error)
         # Ignore certain errors: 1) "show +attr" for unknown attr, 2) querying unknown structural attribute, 3) calculating statistics for empty results
-        if not (attr_ignore and "No such attribute:" in error) and not "is not defined for corpus" in error and not "cl->range && cl->size > 0" in error and not "neither a positional/structural attribute" in error and not "CL: major error, cannot compose string: invalid UTF8 string passed to cl_string_canonical..." in error:
+        if not (attr_ignore and "No such attribute:" in error) and "is not defined for corpus" not in error and "cl->range && cl->size > 0" not in error and "neither a positional/structural attribute" not in error and "CL: major error, cannot compose string: invalid UTF8 string passed to cl_string_canonical..." not in error:
             raise CQPError(error)
     for line in reply.decode(encoding, errors="ignore").split("\n"):  # We don't use splitlines() since it might split on special characters in the data
         if line:
@@ -2806,7 +3014,7 @@ def run_cwb_scan(corpus, attrs, form, executable=config.CWB_SCAN_EXECUTABLE, reg
                     stdout=PIPE, stderr=PIPE)
     reply, error = process.communicate()
     if error:
-        # remove newlines from the error string:
+        # Remove newlines from the error string:
         error = re.sub(r"\s+", r" ", error)
         # Ignore certain errors: 1) "show +attr" for unknown attr, 2) querying unknown structural attribute, 3) calculating statistics for empty results
         raise CQPError(error)
@@ -2832,7 +3040,7 @@ def read_attributes(lines):
 
 
 def assert_key(key, form, regexp, required=False):
-    """Check that the value of the attribute 'key' in the CGI form
+    """Check that the value of the attribute 'key' in the request data
     matches the specification 'regexp'. If 'required' is True, then
     the key has to be in the form.
     """
@@ -2846,52 +3054,25 @@ def assert_key(key, form, regexp, required=False):
         raise ValueError("Value(s) for key %s do(es) not match /%s/: %s" % (key, pattern, value))
 
 
-def print_header():
-    """Print the JSON header."""
-    print "Content-Type: application/json"
-    print "Access-Control-Allow-Origin: *"
-    print "Access-Control-Allow-Methods: GET, POST"
-    print "Access-Control-Allow-Headers: Authorization, Content-Type"
-    print
-
-
-def print_object(obj, form):
-    """Print an object in JSON format.
-    The CGI form can contain optional parameter 'indent'
-    which change the output format.
-    """
-    try:
-        indent = int(form.get("indent"))
-        out = json.dumps(obj, sort_keys=True, indent=indent)
-        out = out[1:-1] if form.get("incremental", "").lower() == "true" else out
-        print out,
-    except:
-        out = json.dumps(obj, separators=(",", ":"))
-        out = out[1:-1] if form.get("incremental", "").lower() == "true" else out
-        print out,
-
-
+@app.route("/authenticate", methods=["GET", "POST"])
+@main_handler
 def authenticate(_=None):
     """Authenticate a user against an authentication server.
     """
     
-    auth_header = cgi.os.environ.get('HTTP_AUTH_HEADER')
+    auth_data = request.authorization
 
-    if auth_header and auth_header.startswith("Basic "):
-        user, pw = base64.b64decode(auth_header[6:]).split(":")
-        user = user.decode("raw_unicode_escape").encode("utf-8")
-        pw = pw.decode("raw_unicode_escape").encode("utf-8")
-
+    if auth_data:
         postdata = {
-            "username": user,
-            "password": pw,
-            "checksum": md5.new(user + pw + config.AUTH_SECRET).hexdigest()
+            "username": auth_data["username"],
+            "password": auth_data["password"],
+            "checksum": hashlib.md5(bytes(auth_data["username"] + auth_data["password"] + config.AUTH_SECRET, "utf-8")).hexdigest()
         }
 
         try:
-            contents = urllib2.urlopen(config.AUTH_SERVER, urllib.urlencode(postdata)).read()
+            contents = urllib.request.urlopen(config.AUTH_SERVER, urllib.parse.urlencode(postdata).encode("utf-8")).read().decode("utf-8")
             auth_response = json.loads(contents)
-        except urllib2.HTTPError:
+        except urllib.error.HTTPError:
             raise KorpAuthenticationError("Could not contact authentication server.")
         except ValueError:
             raise KorpAuthenticationError("Invalid response from authentication server.")
@@ -2905,9 +3086,9 @@ def authenticate(_=None):
                 for c in permitted_resources["corpora"]:
                     if permitted_resources["corpora"][c]["read"]:
                         result["corpora"].append(c.upper())
-            return result
+            yield result
 
-    return {}
+    yield {}
 
 
 def check_authentication(corpora):
@@ -2919,12 +3100,19 @@ def check_authentication(corpora):
         corpora = [cc for c in corpora for cc in c.split("|")]
         with open(config.PROTECTED_FILE) as infile:
             protected = [x.strip() for x in infile.readlines()]
-        c = filter(lambda x: x.upper() in protected, corpora)
+        c = [c for c in corpora if c.upper() in protected]
         if c:
-            auth = authenticate()
-            unauthorized = filter(lambda x: x.upper() not in auth.get("corpora", []), c)
+            auth = generator_to_dict(authenticate({}))
+            unauthorized = [x for x in c if x.upper() not in auth.get("corpora", [])]
             if not auth or unauthorized:
                 raise KorpAuthenticationError("You do not have access to the following corpora: %s" % ", ".join(unauthorized))
+
+
+def generator_to_dict(generator):
+    d = next(generator)
+    for v in generator:
+        d.update(v)
+    return d
 
 
 def reraise_with_stack(func):
@@ -2949,12 +3137,13 @@ class CustomTracebackException(Exception):
 def prevent_timeout(f, args=None, timeout=15):
     """ Used in places where the script otherwise might timeout. Keeps the CGI alive by printing
     out whitespace. """
+    
     q = Queue()
     
     def error_catcher(g, *args, **kwargs):
         try:
             g(*args, **kwargs)
-        except Exception, e:
+        except Exception as e:
             q.put(sys.exc_info())
     
     args = args or []
@@ -2970,11 +3159,19 @@ def prevent_timeout(f, args=None, timeout=15):
             elif isinstance(msg, tuple):
                 raise CustomTracebackException(msg)
             else:
-                print msg
+                yield msg
         except Empty:
-            print " ",
+            yield {}
+
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) == 2 and sys.argv[1] == "dev":
+        app.run(debug=True, host=config.WSGI_HOST, port=config.WSGI_PORT)  # Run using Flask (use only for development!)
+    else:
+        # serve(app, host=config.WSGI_HOST, port=config.WSGI_PORT)  # Run using Waitress (does not support streaming/incremental response)
 
+        # Run using gevent (recommended)
+        print("Serving using gevent")
+        http = WSGIServer((config.WSGI_HOST, config.WSGI_PORT), app.wsgi_app)
+        http.serve_forever()
 
