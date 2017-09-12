@@ -1205,6 +1205,7 @@ def struct_values(args=None):
         if all_cache:
             result["combined"] = {}
             yield result
+            return
 
     ns.progress_count = 0
     if incremental:
@@ -1404,6 +1405,7 @@ def count(args=None):
                     result["DEBUG"]["cache_read"] = True
                     result["DEBUG"]["checksum"] = checksum
                 yield result
+                return
 
     result = {"corpora": {}}
 
@@ -2281,6 +2283,7 @@ def timespan(args=None):
                     result.setdefault("DEBUG", {})
                     result["DEBUG"]["cache_read"] = True
                 yield result
+                return
 
     ns = {}
     use_cache = flask.g.cache
@@ -2596,6 +2599,7 @@ def relations(args=None):
                 result.setdefault("DEBUG", {})
                 result["DEBUG"]["cache_read"] = True
             yield result
+            return
     
     result = {}
 
