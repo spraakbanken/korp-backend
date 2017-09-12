@@ -150,6 +150,8 @@ def main_handler(generator):
                         yield " \n"
                     else:
                         yield json.dumps(response)[1:-1] + ",\n"
+            except GeneratorExit:
+                raise
             except:
                 error = error_handler()
                 yield json.dumps(error)[1:-1] + ",\n"
