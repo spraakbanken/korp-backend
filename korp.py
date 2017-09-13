@@ -414,6 +414,7 @@ def query_sample(args=None):
         result = generator_to_dict(query(args))
         if result["hits"] > 0:
             yield result
+            return
         
     yield result
 
@@ -2613,6 +2614,7 @@ def relations(args=None):
     corpora = [x for x in corpora if config.DBWPTABLE + "_" + x.upper() in tables]
     if not corpora:
         yield {}
+        return
     
     selects = []
     
@@ -2799,6 +2801,7 @@ def relations_sentences(args=None):
     source = sorted([x for x in iter(source.items()) if config.DBWPTABLE + "_" + x[0].upper() in tables])
     if not source:
         yield {}
+        return
     corpora = [x[0] for x in source]
     
     for s in source:
@@ -2835,6 +2838,7 @@ def relations_sentences(args=None):
 
     if not corpora_dict:
         yield {"hits": 0}
+        return
     
     cqpstarttime = time.time()
     result = {}
@@ -3093,6 +3097,7 @@ def authenticate(_=None):
                     if permitted_resources["corpora"][c]["read"]:
                         result["corpora"].append(c.upper())
             yield result
+            return
 
     yield {}
 
