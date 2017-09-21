@@ -451,8 +451,8 @@ def query(args=None):
     
     assert_key("cqp", args, r"", True)
     assert_key("corpus", args, IS_IDENT, True)
-    assert_key("start", args, IS_NUMBER, True)
-    assert_key("end", args, IS_NUMBER, True)
+    assert_key("start", args, IS_NUMBER)
+    assert_key("end", args, IS_NUMBER)
     # assert_key("context", args, r"^\d+ [\w-]+$")
     assert_key("show", args, IS_IDENT)
     assert_key("show_struct", args, IS_IDENT)
@@ -486,7 +486,7 @@ def query(args=None):
     
     expand_prequeries = not args.get("expand_prequeries", "").lower() == "false"
     
-    start, end = int(args.get("start")), int(args.get("end"))
+    start, end = int(args.get("start") or 0), int(args.get("end") or 9)
 
     if config.MAX_KWIC_ROWS and end - start >= config.MAX_KWIC_ROWS:
         raise ValueError("At most %d KWIC rows can be returned per call." % config.MAX_KWIC_ROWS)
@@ -1697,7 +1697,7 @@ def count_time(args=None):
         if dt > (df + add):
             raise ValueError("The date range is too large for the selected granularity. Use 'to' and 'from' to limit the range.")
 
-    strategy = int(args.get("strategy") or "1")
+    strategy = int(args.get("strategy") or 1)
     
     if granularity in "hns":
         groupby = ["text_datefrom", "text_timefrom", "text_dateto", "text_timeto"]
@@ -2255,7 +2255,7 @@ def timespan(args=None):
     spans = (args.get("spans", "").lower() == "true")
     combined = (not args.get("combined", "").lower() == "false")
     per_corpus = (not args.get("per_corpus", "").lower() == "false")
-    strategy = int(args.get("strategy") or "1")
+    strategy = int(args.get("strategy") or 1)
     fromdate = args.get("from")
     todate = args.get("to")
     
@@ -2777,8 +2777,8 @@ def relations_sentences(args=None):
     
     check_authentication(source.keys())
     
-    start = int(args.get("start") or "0")
-    end = int(args.get("end") or "99")
+    start = int(args.get("start") or 0)
+    end = int(args.get("end") or 9)
     shown = args.get("show") or "word"
     shown_structs = args.get("show_struct") or []
     if isinstance(shown_structs, str):
