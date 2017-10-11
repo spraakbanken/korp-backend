@@ -2824,7 +2824,7 @@ def relations_sentences(args=None):
     for row in cursor:
         corpus_hits[row["corpus"]] = int(row["freq"])
     
-    sql = " UNION ALL ".join(selects) + (" LIMIT %d, %d" % (start, end - 1))
+    sql = " UNION ALL ".join(selects) + (" LIMIT %d, %d" % (start, end - start + 1))
     cursor.execute(sql)
     
     querytime = time.time() - querystarttime
