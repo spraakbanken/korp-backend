@@ -124,7 +124,8 @@ def main_handler(generator):
     @functools.wraps(generator)  # Copy original function's information, needed by Flask
     def decorated(args=None):
     
-        flask.g.cache = bool(not request.values.get("cache", "").lower() == "false" and config.CACHE_DIR)
+        flask.g.cache = bool(not request.values.get("cache", "").lower() == "false" and
+                             config.CACHE_DIR and os.path.exists(config.CACHE_DIR))
     
         def error_handler():
             """Format exception info for output to user."""
@@ -465,6 +466,7 @@ def query(args=None):
     # First we read all parameters and translate them to CQP
     
     incremental = args.get("incremental", "").lower() == "true"
+    cache = flask.g.cache
     
     corpora = args.get("corpus")
     if isinstance(corpora, str):
@@ -543,7 +545,7 @@ def query(args=None):
                 debug["unparseable_querydata"] = True
         
         if saved_hits:
-            if "debug" in args and "using_cache" not in result:
+            if "debug" in args and "cache_read" not in debug:
                 debug["using_querydata"] = True
             saved_checksum, saved_total_hits, stats_temp = saved_hits.split(";", 2)
             if saved_checksum == checksum:
@@ -579,8 +581,8 @@ def query(args=None):
             corpus, hits = list(corpora_hits.items())[0]
 
             def _query_single_corpus(queue):
-                result["kwic"], _ = query_and_parse(args, corpus, cqp, cqpextra, shown, shown_structs, hits[0], hits[1],
-                                                    expand_prequeries=expand_prequeries)
+                result["kwic"], _ = query_and_parse(args, corpus, cqp, cqpextra, shown, shown_structs, hits[0],
+                                                    hits[1], expand_prequeries=expand_prequeries, cache=cache)
                 queue.put("DONE")
 
             for msg in prevent_timeout(_query_single_corpus):
@@ -591,7 +593,8 @@ def query(args=None):
             with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
                 future_query = dict((executor.submit(query_and_parse, args, corpus, cqp, cqpextra, shown, shown_structs,
                                                      corpora_hits[corpus][0], corpora_hits[corpus][1], False,
-                                                     expand_prequeries), corpus) for corpus in corpora_hits)
+                                                     expand_prequeries, cache), corpus)
+                                    for corpus in corpora_hits)
                 
                 def _query_corpora_in_parallel(queue):
                     for future in futures.as_completed(future_query):
@@ -632,7 +635,7 @@ def query(args=None):
                     break
 
                 kwic, nr_hits = query_and_parse(args, corpus, cqp, cqpextra, shown, shown_structs, ns.start_local,
-                                                ns.end_local, False, expand_prequeries)
+                                                ns.end_local, False, expand_prequeries, cache)
 
                 statistics[corpus] = nr_hits
                 ns.total_hits += nr_hits
@@ -664,8 +667,9 @@ def query(args=None):
         if ns.rest_corpora:
 
             with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-                future_query = dict((executor.submit(query_corpus, args, corpus, cqp, cqpextra, shown, shown_structs, 0,
-                                                     0, True, expand_prequeries), corpus) for corpus in ns.rest_corpora)
+                future_query = dict((executor.submit(query_corpus, args, corpus, cqp, cqpextra, shown, shown_structs,
+                                                     0, 0, True, expand_prequeries, flask.g.cache), corpus)
+                                    for corpus in ns.rest_corpora)
                 
                 def _get_total_in_parallel(queue):
                     for future in futures.as_completed(future_query):
@@ -816,26 +820,27 @@ def query_optimize(cqp, cqpextra, find_match=True, expand=True):
 
 
 def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results=False,
-                 expand_prequeries=True):
+                 expand_prequeries=True, cache=False):
 
-    # Calculate checksum
-    # Needs to contains any arguments that may influence the results
-    checksum_data = (
-                     corpus,
-                     cqp,
-                     sorted(cqpextra.items()),
-                     args.get("defaultwithin", ""),
-                     expand_prequeries
-                    )
-    
-    checksum = get_hash(checksum_data)
-    unique_id = str(uuid.uuid4())
-    tempcachefilename = os.path.join(config.CACHE_DIR, "query_positions_%s_%s.gz" % (checksum, unique_id))
-    cachefilename = os.path.join(config.CACHE_DIR, "query_positions_%s.gz" % checksum)
-    tempcachehitsfilename = os.path.join(config.CACHE_DIR, "query_size_%s_%s.gz" % (checksum, unique_id))
-    cachehitsfilename = os.path.join(config.CACHE_DIR, "query_size_%s.gz" % checksum)
-    is_cached = os.path.isfile(cachefilename)
-    cached_no_hits = is_cached and os.path.getsize(cachefilename) == 0
+    if cache:
+        # Calculate checksum
+        # Needs to contains all arguments that may influence the results
+        checksum_data = (corpus,
+            cqp,
+            sorted(cqpextra.items()),
+            args.get("defaultwithin", ""),
+            expand_prequeries)
+
+        checksum = get_hash(checksum_data)
+        unique_id = str(uuid.uuid4())
+        tempcachefilename = os.path.join(config.CACHE_DIR, "query_positions_%s_%s.gz" % (checksum, unique_id))
+        cachefilename = os.path.join(config.CACHE_DIR, "query_positions_%s.gz" % checksum)
+        tempcachehitsfilename = os.path.join(config.CACHE_DIR, "query_size_%s_%s.gz" % (checksum, unique_id))
+        cachehitsfilename = os.path.join(config.CACHE_DIR, "query_size_%s.gz" % checksum)
+        is_cached = os.path.isfile(cachefilename)
+        cached_no_hits = is_cached and os.path.getsize(cachefilename) == 0
+    else:
+        is_cached = False
     
     # Optimization
     optimize = True
@@ -943,17 +948,17 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
             if pre_query:
                 cmd += ["Last;"]
     
-    if cached_no_hits:
+    if cache and cached_no_hits:
         # Print EOL if no hits
         cmd += [".EOL.;"]
     else:
         # This prints the size of the query (i.e., the number of results):
         cmd += ["size Last;"]
     
-    if not is_cached:
+    if cache and not is_cached:
         cmd += ['dump Last > "| gzip > %s";' % tempcachefilename]
         # cmd += ['dump Last > "%s";' % tempcachefilename]  # If we don't need compression
-    if not no_results and not cached_no_hits:
+    if not no_results and not (cache and cached_no_hits):
         cmd += ["show +%s;" % " +".join(shown)]
         if len(context) == 1:
             cmd += ["set Context %s;" % context[0]]
@@ -984,7 +989,7 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
     nr_hits = next(lines)
     nr_hits = 0 if nr_hits == END_OF_LINE else int(nr_hits)
     
-    if not is_cached:
+    if cache and not is_cached:
         with open(tempcachehitsfilename, "w") as f:
             f.write("%d\n" % nr_hits)
     
@@ -1144,9 +1149,9 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
 
 
 def query_and_parse(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results=False,
-                    expand_prequeries=True):
-    lines, nr_hits, attrs = query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end,
-                                         no_results, expand_prequeries)
+                    expand_prequeries=True, cache=False):
+    lines, nr_hits, attrs = query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs,
+                                         start, end, no_results,expand_prequeries, cache)
     kwic = query_parse_lines(corpus, lines, attrs, shown, shown_structs)
     return kwic, nr_hits
     
