@@ -2447,8 +2447,8 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
         dateto = "".join(x for x in str(row["dt"]) if x.isdigit()) if row["dt"] else ""
         if dateto == "0" * len(dateto):
             dateto = ""
-        datefrom_short = shorten(datefrom, granularity) if datefrom else ""
-        dateto_short = shorten(dateto, granularity) if dateto else ""
+        datefrom_short = shorten(datefrom, granularity) if datefrom else None
+        dateto_short = shorten(dateto, granularity) if dateto else None
         
         if strategy == 1:
             # Some overlaps permitted
@@ -2488,8 +2488,8 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
             nodes[corpus].add(("f", datefrom_short))
             nodes[corpus].add(("t", dateto_short))
     
-    corpusnodes = dict((k, sorted(v, key=lambda x: (x[1], x[0]))) for k, v in nodes.items())
-
+    corpusnodes = dict((k, sorted(v, key=lambda x: (x[1] is None, x[1] if x[1] else 0, x[0])))
+                       for k, v in nodes.items())
     result = {}
     if per_corpus:
         result["corpora"] = {}
@@ -2503,26 +2503,27 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
             start = nodes[i]
             end = nodes[i + 1]
             if start[0] == "t":
-                start = plusminusone(str(start[1]), add, df) if not start == "" else ""
+                start = plusminusone(str(start[1]), add, df) if not start is None else None
                 if start == end[1] and end[0] == "f":
                     continue
             else:
                 start = start[1]
-            if end[1] == "":
-                end = ""
+            if end[1] is None:
+                end = None
             else:
                 end = end[1] if end[0] == "t" else plusminusone(str(end[1]), add, df, True)
             
-            if points and not start == "":
+            if points and start is not None:
                 data["%d" % start] = 0
                 
             for row in rows[corpus]:
-                if row["datefrom"] <= start and row["dateto"] >= end:
+                if (all([row["datefrom"], start, row["dateto"],end]) and row["datefrom"] <= start and row["dateto"] >= end) \
+                        or all([x is None for x in [row["datefrom"], start, row["dateto"], end]]):
                     if points:
-                        data[str(start)] += row["tokens"]
+                        data[str(start if start is not None else "")] += row["tokens"]
                     else:
-                        data["%d - %d" % (start, end) if start else ""] += row["tokens"]
-            if points and not end == "":
+                        data["%d - %d" % (start, end) if start is not None else ""] += row["tokens"]
+            if points and end is not None:
                 data["%d" % plusminusone(str(end), add, df, False)] = 0
         
         if combined and corpus == "__combined__":
