@@ -1757,7 +1757,7 @@ def count_time(args=None):
             for future in futures.as_completed(future_query):
                 corpus = future_query[future]
                 if future.exception() is not None:
-                    if "Can't find attribute ``text_datefrom''" not in future.exception().message:
+                    if "Can't find attribute ``text_datefrom''" not in str(future.exception()):
                         raise CQPError(future.exception())
                 else:
                     lines, _, corpus_size = future.result()
@@ -3198,7 +3198,7 @@ def reraise_with_stack(func):
             return func(*args, **kwargs)
         except Exception as e:
             # Raise an exception of the same type with the traceback as message
-            raise sys.exc_info()[0](traceback.format_exc(e))
+            raise sys.exc_info()[0](traceback.format_exc())
 
     return wrapped
 
