@@ -1548,9 +1548,9 @@ def count(args=None):
                 for corpus in corpora:
                     new_corpus_part = {"absolute": {}, "relative": {},
                                        "sums": result["corpora"][corpus][query_no]["sums"]}
-                    if ngram in result["corpora"][corpus]["absolute"]:
+                    if ngram in result["corpora"][corpus][query_no]["absolute"]:
                         new_corpus_part["absolute"][ngram] = result["corpora"][corpus][query_no]["absolute"][ngram]
-                    if ngram in result["corpora"][corpus]["relative"]:
+                    if ngram in result["corpora"][corpus][query_no]["relative"]:
                         new_corpus_part["relative"][ngram] = result["corpora"][corpus][query_no]["relative"][ngram]
             
                 result["corpora"][corpus][query_no] = new_corpus_part
