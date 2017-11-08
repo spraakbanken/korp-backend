@@ -1195,7 +1195,7 @@ def struct_values(args=None):
     incremental = args.get("incremental", "").lower() == "true"
     
     stats = args.get("count", "").lower() == "true"
-    
+
     corpora = args.get("corpus")
     if isinstance(corpora, str):
         corpora = corpora.upper().split(QUERY_DELIM)
@@ -1206,6 +1206,10 @@ def struct_values(args=None):
     structs = args.get("struct")
     if isinstance(structs, str):
         structs = structs.split(QUERY_DELIM)
+
+    split = args.get("split", "")
+    if isinstance(split, str):
+        split = split.split(QUERY_DELIM)
 
     ns = Namespace()  # To make variables writable from nested functions
 
@@ -1218,9 +1222,9 @@ def struct_values(args=None):
         all_cache = True
         for corpus in corpora:
             for struct in structs:
-                checksum_data = (corpus, struct, stats)
+                checksum_data = (corpus, struct, split, stats)
                 checksum = get_hash(checksum_data)
-                
+
                 cachefilename = os.path.join(config.CACHE_DIR, "values_%s_%s" % (corpus, checksum))
                 if os.path.exists(cachefilename):
                     with open(cachefilename, "r") as cachefile:
@@ -1257,31 +1261,47 @@ def struct_values(args=None):
                 else:
                     lines, nr_hits, corpus_size = future.result()
 
-                    corpus_stats = {} if stats else []
+                    corpus_stats = {} if stats else set()
                     vals_dict = {}
-                    
+                    struct_list = struct.split(">")
+
                     for line in lines:
-                        count, ngram = line.lstrip().split(" ", 1)
+                        freq, val = line.lstrip().split(" ", 1)
                         
                         if ">" in struct:
-                            ngram = ngram.split("\t")
-                            prev = vals_dict
-                            for i, n in enumerate(ngram):
-                                if stats and i == len(ngram)-1:
-                                    prev[n] = int(count)
-                                    break
-                                elif not stats and i == len(ngram)-2:
-                                    prev.setdefault(n, [])
-                                    prev[n].append(ngram[i+1])
-                                    break
-                                else:
-                                    prev.setdefault(n, {})
-                                prev = prev[n]
-                        else:
-                            if stats:
-                                corpus_stats[ngram] = int(count)
+                            vals = val.split("\t")
+
+                            if split:
+                                vals = [[x for x in n.split("|") if x] if struct_list[i] in split and n else [n] for i, n in enumerate(vals)]
+                                vals_prod = itertools.product(*vals)
                             else:
-                                corpus_stats.append(ngram)
+                                vals_prod = [vals]
+
+                            for val in vals_prod:
+                                prev = vals_dict
+                                for i, n in enumerate(val):
+                                    if stats and i == len(val)-1:
+                                        prev.setdefault(n, 0)
+                                        prev[n] += int(freq)
+                                        break
+                                    elif not stats and i == len(val)-1:
+                                        prev.append(n)
+                                        break
+                                    elif not stats and i == len(val)-2:
+                                        prev.setdefault(n, [])
+                                    else:
+                                        prev.setdefault(n, {})
+                                    prev = prev[n]
+                        else:
+                            if struct in split:
+                                vals = [x for x in val.split("|") if x] if val else [""]
+                            else:
+                                vals = [val]
+                            for val in vals:
+                                if stats:
+                                    corpus_stats[val] = int(freq)
+                                else:
+                                    corpus_stats.add(val)
     
                     if ">" in struct:
                         result["corpora"][corpus][struct] = vals_dict
@@ -1305,7 +1325,7 @@ def struct_values(args=None):
             for struct in structs:
                 if (corpus, struct) in from_cache:
                     continue
-                checksum_data = (corpus, struct, stats)
+                checksum_data = (corpus, struct, split, stats)
                 checksum = get_hash(checksum_data)
                 cachefilename = os.path.join(config.CACHE_DIR, "values_%s_%s" % (corpus, checksum))
                 tmpfile = "%s.%s" % (cachefilename, unique_id)
