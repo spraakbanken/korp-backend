@@ -466,6 +466,8 @@ def query(args=None):
     # First we read all parameters and translate them to CQP
     
     incremental = args.get("incremental", "").lower() == "true"
+    free_search = args.get("in_order", "").lower() == "false"
+
     cache = flask.g.cache
     
     corpora = args.get("corpus")
@@ -512,7 +514,8 @@ def query(args=None):
                      cqp,
                      sorted(cqpextra.items()),
                      args.get("defaultwithin", ""),
-                     expand_prequeries
+                     expand_prequeries,
+                     free_search
                     )
 
     # Calculate querydata checksum
@@ -582,7 +585,8 @@ def query(args=None):
 
             def _query_single_corpus(queue):
                 result["kwic"], _ = query_and_parse(args, corpus, cqp, cqpextra, shown, shown_structs, hits[0],
-                                                    hits[1], expand_prequeries=expand_prequeries, cache=cache)
+                                                    hits[1], expand_prequeries=expand_prequeries, free_search=free_search,
+                                                    cache=cache)
                 queue.put("DONE")
 
             for msg in prevent_timeout(_query_single_corpus):
@@ -593,7 +597,7 @@ def query(args=None):
             with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
                 future_query = dict((executor.submit(query_and_parse, args, corpus, cqp, cqpextra, shown, shown_structs,
                                                      corpora_hits[corpus][0], corpora_hits[corpus][1], False,
-                                                     expand_prequeries, cache), corpus)
+                                                     expand_prequeries, free_search, cache), corpus)
                                     for corpus in corpora_hits)
                 
                 def _query_corpora_in_parallel(queue):
@@ -635,7 +639,7 @@ def query(args=None):
                     break
 
                 kwic, nr_hits = query_and_parse(args, corpus, cqp, cqpextra, shown, shown_structs, ns.start_local,
-                                                ns.end_local, False, expand_prequeries, cache)
+                                                ns.end_local, False, expand_prequeries, free_search, cache)
 
                 statistics[corpus] = nr_hits
                 ns.total_hits += nr_hits
@@ -668,7 +672,7 @@ def query(args=None):
 
             with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
                 future_query = dict((executor.submit(query_corpus, args, corpus, cqp, cqpextra, shown, shown_structs,
-                                                     0, 0, True, expand_prequeries, flask.g.cache), corpus)
+                                                     0, 0, True, expand_prequeries, free_search, flask.g.cache), corpus)
                                     for corpus in ns.rest_corpora)
                 
                 def _get_total_in_parallel(queue):
@@ -732,20 +736,18 @@ def optimize(args=None):
         cqpextra["cut"] = args["cut"]
     
     cqp = args["cqp"]
-    result = {"cqp": query_optimize(cqp, cqpextra)}
+    result = {"cqp": query_optimize(cqp, cqpextra, find_match=False, expand=False, free_search=True)}
     yield result
 
 
-def query_optimize(cqp, cqpextra, find_match=True, expand=True):
+def query_optimize(cqp, cqpextra, find_match=True, expand=True, free_search=False):
     """ Optimize simple queries with multiple words by converting them to an MU query.
         Optimization only works for queries with at least two tokens, or one token preceded
         by one or more wildcards. The query also must use "within".
         """
     q, rest = parse_cqp(cqp)
-    
-    if expand:
-        expand = cqpextra.get("within")
-    
+    within = cqpextra.get("within")
+
     leading_wildcards = False
     trailing_wildcards = False
     # Remove leading and trailing wildcards since they will only slow us down
@@ -757,7 +759,7 @@ def query_optimize(cqp, cqpextra, find_match=True, expand=True):
         del q[-1]
     
     # Determine if this query may not benefit from optimization
-    if len(q) == 0 or (len(q) == 1 and not leading_wildcards) or rest or not expand:
+    if len(q) == 0 or (len(q) == 1 and not leading_wildcards) or rest or not within:
         return make_query(make_cqp(cqp, cqpextra))
     
     cmd = ["MU"]
@@ -796,10 +798,12 @@ def query_optimize(cqp, cqpextra, find_match=True, expand=True):
             continue
         elif i + 1 in wildcards:
             if wildcard_range[1] >= 9999:
-                cmd[0] += " %s)" % expand
+                cmd[0] += " %s)" % within
             else:
                 cmd[0] += " %d %d)" % (wildcard_range[0], wildcard_range[1])
             wildcard_range = [1, 1]
+        elif free_search:
+            cmd[0] += " %s)" % cqpextra.get("within")
         else:
             cmd[0] += " 1 1)"
 
@@ -808,19 +812,21 @@ def query_optimize(cqp, cqpextra, find_match=True, expand=True):
         # do a new non-optimized search within the results, and to be able to do that we first need to expand the rows.
         # Most of the times we only need to expand to the right, except for when leading wildcards are used.
         if leading_wildcards:
-            cmd[0] += " expand to %s;" % expand
+            cmd[0] += " expand to %s;" % within
         else:
-            cmd[0] += " expand right to %s;" % expand
+            cmd[0] += " expand right to %s;" % within
         cmd += ["Last;"]
         cmd += make_query(make_cqp(cqp, cqpextra))
+    elif expand:
+        cmd[0] += " expand to %s;" % within
     else:
-        cmd[0] += " expand to %s;" % expand
+        cmd[0] += ";"
 
     return cmd
 
 
 def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results=False,
-                 expand_prequeries=True, cache=False):
+                 expand_prequeries=True, free_search=False, cache=False):
 
     if cache:
         # Calculate checksum
@@ -829,7 +835,8 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
             cqp,
             sorted(cqpextra.items()),
             args.get("defaultwithin", ""),
-            expand_prequeries)
+            expand_prequeries,
+            free_search)
 
         checksum = get_hash(checksum_data)
         unique_id = str(uuid.uuid4())
@@ -937,11 +944,12 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
             
             if pre_query and expand_prequeries:
                 cqpextra_temp["expand"] = "to " + cqpextra["within"]
-            
-            # If expand_prequeries is False, we can't use optimization
-            if optimize and expand_prequeries:
-                cmd += query_optimize(c, cqpextra_temp, find_match=(not pre_query),
-                                      expand=not (pre_query and not expand_prequeries))
+
+            if free_search:
+                cmd += query_optimize(c, cqpextra_temp, find_match=False, expand=pre_query, free_search=True)
+            elif optimize and expand_prequeries:
+                # If expand_prequeries is False, we can't use optimization
+                cmd += query_optimize(c, cqpextra_temp, find_match=(not pre_query))
             else:
                 cmd += make_query(make_cqp(c, cqpextra_temp))
             
@@ -1151,9 +1159,9 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
 
 
 def query_and_parse(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results=False,
-                    expand_prequeries=True, cache=False):
+                    expand_prequeries=True, free_search=False, cache=False):
     lines, nr_hits, attrs = query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs,
-                                         start, end, no_results,expand_prequeries, cache)
+                                         start, end, no_results, expand_prequeries, free_search, cache)
     kwic = query_parse_lines(corpus, lines, attrs, shown, shown_structs)
     return kwic, nr_hits
     
