@@ -836,7 +836,7 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
         tempcachefilename = os.path.join(config.CACHE_DIR, "query_positions_%s_%s.gz" % (checksum, unique_id))
         cachefilename = os.path.join(config.CACHE_DIR, "query_positions_%s.gz" % checksum)
         tempcachehitsfilename = os.path.join(config.CACHE_DIR, "query_size_%s_%s.gz" % (checksum, unique_id))
-        cachehitsfilename = os.path.join(config.CACHE_DIR, "query_size_%s.gz" % checksum)
+        cachehitsfilename = os.path.join(config.CACHE_DIR, "query_size_%s" % checksum)
         is_cached = os.path.isfile(cachefilename)
         cached_no_hits = is_cached and os.path.getsize(cachefilename) == 0
     else:
@@ -990,6 +990,8 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
     nr_hits = 0 if nr_hits == END_OF_LINE else int(nr_hits)
     
     if cache and not is_cached:
+        # When dump files are read from a pipe, CWB needs to know the total
+        # number of matches. We save this in a separate file.
         with open(tempcachehitsfilename, "w") as f:
             f.write("%d\n" % nr_hits)
     
@@ -1179,7 +1181,7 @@ def struct_values(args=None):
     if args is None:
         args = request.values
     assert_key("corpus", args, IS_IDENT, True)
-    assert_key("struct", args, IS_IDENT, True)
+    assert_key("struct", args, re.compile(r"^[\w_\d,>]+$"), True)
     assert_key("incremental", request.values, r"(true|false)")
     
     incremental = args.get("incremental", "").lower() == "true"
@@ -3082,7 +3084,7 @@ def run_cwb_scan(corpus, attrs, form, executable=config.CWB_SCAN_EXECUTABLE, reg
     reply, error = process.communicate()
     if error:
         # Remove newlines from the error string:
-        error = re.sub(r"\s+", r" ", error)
+        error = re.sub(r"\s+", r" ", error.decode())
         # Ignore certain errors:
         # 1) "show +attr" for unknown attr,
         # 2) querying unknown structural attribute,
