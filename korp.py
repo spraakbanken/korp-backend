@@ -1014,7 +1014,10 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
             f.write("%d\n" % nr_hits)
     
         os.rename(tempcachehitsfilename, cachehitsfilename)
-        os.rename(tempcachefilename, cachefilename)
+        try:
+            os.rename(tempcachefilename, cachefilename)
+        except FileNotFoundError:
+            pass
 
     return lines, nr_hits, attrs
 
