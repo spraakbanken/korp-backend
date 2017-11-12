@@ -745,53 +745,54 @@ def query_optimize(cqp, cqpextra, find_match=True, expand=True, free_search=Fals
         Optimization only works for queries with at least two tokens, or one token preceded
         by one or more wildcards. The query also must use "within".
         """
-    q, rest = parse_cqp(cqp)
+    # Split query into tokens
+    tokens, rest = parse_cqp(cqp)
     within = cqpextra.get("within")
 
     leading_wildcards = False
     trailing_wildcards = False
     # Remove leading and trailing wildcards since they will only slow us down
-    while q and q[0].startswith("[]"):
+    while tokens and tokens[0].startswith("[]"):
         leading_wildcards = True
-        del q[0]
-    while q and q[-1].startswith("[]"):
+        del tokens[0]
+    while tokens and tokens[-1].startswith("[]"):
         trailing_wildcards = True
-        del q[-1]
+        del tokens[-1]
     
     # Determine if this query may not benefit from optimization
-    if len(q) == 0 or (len(q) == 1 and not leading_wildcards) or rest or not within:
+    if len(tokens) == 0 or (len(tokens) == 1 and not leading_wildcards) or rest or not within:
         return make_query(make_cqp(cqp, cqpextra))
     
     cmd = ["MU"]
     wildcards = {}
 
-    for i in range(len(q) - 1):
-        if q[i].startswith("[]"):
+    for i in range(len(tokens) - 1):
+        if tokens[i].startswith("[]"):
             n1 = n2 = None
-            if q[i] == "[]":
+            if tokens[i] == "[]":
                 n1 = n2 = 1
-            elif re.search(r"{\s*(\d+)\s*,\s*(\d*)\s*}$", q[i]):
-                n = re.search(r"{\s*(\d+)\s*,\s*(\d*)\s*}$", q[i]).groups()
+            elif re.search(r"{\s*(\d+)\s*,\s*(\d*)\s*}$", tokens[i]):
+                n = re.search(r"{\s*(\d+)\s*,\s*(\d*)\s*}$", tokens[i]).groups()
                 n1 = int(n[0])
                 n2 = int(n[1]) if n[1] else 9999
-            elif re.search(r"{\s*(\d*)\s*}$", q[i]):
-                n1 = n2 = int(re.search(r"{\s*(\d*)\s*}$", q[i]).groups()[0])
+            elif re.search(r"{\s*(\d*)\s*}$", tokens[i]):
+                n1 = n2 = int(re.search(r"{\s*(\d*)\s*}$", tokens[i]).groups()[0])
             if n1 is not None:
                 wildcards[i] = (n1, n2)
             continue
-        elif re.search(r"{.*?}$", q[i]):
+        elif re.search(r"{.*?}$", tokens[i]):
             # Repetition for anything other than wildcards can't be optimized
             return make_query(make_cqp(cqp, cqpextra))
-        cmd[0] += " (meet %s" % (q[i])
+        cmd[0] += " (meet %s" % (tokens[i])
 
-    if re.search(r"{.*?}$", q[-1]):
+    if re.search(r"{.*?}$", tokens[-1]):
         # Repetition for anything other than wildcards can't be optimized
         return make_query(make_cqp(cqp, cqpextra))
 
-    cmd[0] += " %s" % q[-1]
+    cmd[0] += " %s" % tokens[-1]
 
     wildcard_range = [1, 1]
-    for i in range(len(q) - 2, -1, -1):
+    for i in range(len(tokens) - 2, -1, -1):
         if i in wildcards:
             wildcard_range[0] += wildcards[i][0]
             wildcard_range[1] += wildcards[i][1]
@@ -807,7 +808,7 @@ def query_optimize(cqp, cqpextra, find_match=True, expand=True, free_search=Fals
         else:
             cmd[0] += " 1 1)"
 
-    if find_match:
+    if find_match and not free_search:
         # MU searches only highlight the first keyword of each hit. To highlight all keywords we need to
         # do a new non-optimized search within the results, and to be able to do that we first need to expand the rows.
         # Most of the times we only need to expand to the right, except for when leading wildcards are used.
@@ -817,7 +818,7 @@ def query_optimize(cqp, cqpextra, find_match=True, expand=True, free_search=Fals
             cmd[0] += " expand right to %s;" % within
         cmd += ["Last;"]
         cmd += make_query(make_cqp(cqp, cqpextra))
-    elif expand:
+    elif expand or free_search:
         cmd[0] += " expand to %s;" % within
     else:
         cmd[0] += ";"
@@ -946,7 +947,7 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
                 cqpextra_temp["expand"] = "to " + cqpextra["within"]
 
             if free_search:
-                cmd += query_optimize(c, cqpextra_temp, find_match=False, expand=pre_query, free_search=True)
+                cmd += query_optimize(c, cqpextra_temp, free_search=True)
             elif optimize and expand_prequeries:
                 # If expand_prequeries is False, we can't use optimization
                 cmd += query_optimize(c, cqpextra_temp, find_match=(not pre_query))
@@ -966,6 +967,13 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
     if cache and not is_cached:
         cmd += ['dump Last > "| gzip > %s";' % tempcachefilename]
         # cmd += ['dump Last > "%s";' % tempcachefilename]  # If we don't need compression
+
+    if free_search:
+        tokens, _ = parse_cqp(cqp[-1])
+        cmd += ["Last;"]
+        cmd += ["cut %s %s;" % (start, end)]
+        cmd += make_query(make_cqp("(%s)" % " | ".join(tokens), cqpextra))
+
     if not no_results and not (cache and cached_no_hits):
         cmd += ["show +%s;" % " +".join(shown)]
         if len(context) == 1:
@@ -978,10 +986,12 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
             cmd += ["set PrintStructures '%s';" % ", ".join(shown_structs)]
         cmd += ["set ExternalSort yes;"]
         cmd += sortcmd
-        # This prints the result rows:
-        cmd += ["cat Last %s %s;" % (start, end)]
+        if free_search:
+            cmd += ["cat Last;"]
+        else:
+            cmd += ["cat Last %s %s;" % (start, end)]
     cmd += ["exit;"]
-    
+
     ######################################################################
     # Then we call the CQP binary, and read the results
     
@@ -996,7 +1006,7 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
     # Read the size of the query, i.e., the number of results
     nr_hits = next(lines)
     nr_hits = 0 if nr_hits == END_OF_LINE else int(nr_hits)
-    
+
     if cache and not is_cached:
         # When dump files are read from a pipe, CWB needs to know the total
         # number of matches. We save this in a separate file.
@@ -1005,14 +1015,12 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
     
         os.rename(tempcachehitsfilename, cachehitsfilename)
         os.rename(tempcachefilename, cachefilename)
-    
+
     return lines, nr_hits, attrs
 
 
-def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
-    ######################################################################
-    # Now we create the concordance (kwic = keywords in context)
-    # from the remaining lines
+def query_parse_lines(corpus, lines, attrs, shown, shown_structs, free_matches=False):
+    """Parse concordance lines from CWB."""
     
     # Filter out unavailable attributes
     p_attrs = [attr for attr in attrs["p"] if attr in shown]
@@ -1020,6 +1028,8 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
     s_attrs = set(attr for attr in attrs["s"] if attr in shown)
     ls_attrs = set(attr for attr in attrs["s"] if attr in shown_structs)
     # a_attrs = set(attr for attr in attrs["a"] if attr in shown)
+
+    last_line_span = ()
 
     kwic = []
     for line in lines:
@@ -1149,11 +1159,20 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs):
                 # TODO: CQP bug - CQP can't handle too long sentences, skipping
                 continue
             # Otherwise we add a new kwic row
-            kwic_row = {"corpus": corpus, "match": match}
+            kwic_row = {"corpus": corpus, "match": match if not free_matches else [match]}
             if linestructs:
                 kwic_row["structs"] = linestructs
             kwic_row["tokens"] = tokens
-            kwic.append(kwic_row)
+
+            if free_matches:
+                line_span = (match["position"] - match["start"], match["position"] - match["start"] + len(tokens) - 1)
+                if line_span == last_line_span:
+                    kwic[-1]["match"].append(match)
+                else:
+                    kwic.append(kwic_row)
+                last_line_span = line_span
+            else:
+                kwic.append(kwic_row)
 
     return kwic
 
@@ -1162,7 +1181,7 @@ def query_and_parse(args, corpus, cqp, cqpextra, shown, shown_structs, start, en
                     expand_prequeries=True, free_search=False, cache=False):
     lines, nr_hits, attrs = query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs,
                                          start, end, no_results, expand_prequeries, free_search, cache)
-    kwic = query_parse_lines(corpus, lines, attrs, shown, shown_structs)
+    kwic = query_parse_lines(corpus, lines, attrs, shown, shown_structs, free_matches=free_search)
     return kwic, nr_hits
     
 
@@ -3091,7 +3110,9 @@ def run_cqp(command, args=None, executable=config.CQP_EXECUTABLE, registry=confi
         # 1) "show +attr" for unknown attr,
         # 2) querying unknown structural attribute,
         # 3) calculating statistics for empty results
-        if not (attr_ignore and "No such attribute:" in error) and "is not defined for corpus" not in error \
+        if not (attr_ignore and "No such attribute:" in error) \
+                and "is not defined for corpus" not in error \
+                and "cut operator" not in error \
                 and "cl->range && cl->size > 0" not in error \
                 and "neither a positional/structural attribute" not in error \
                 and "CL: major error, cannot compose string: invalid UTF8 string passed to cl_string_canonical..." not in error:
