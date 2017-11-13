@@ -1489,7 +1489,7 @@ def count(args=None):
 
     total_stats = [{"absolute": defaultdict(int),
                     "relative": defaultdict(float),
-                    "sums": {"absolute": 0, "relative": 0.0}}] * (len(subcqp) + 1)
+                    "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
     
     ns = Namespace()  # To make variables writable from nested functions
     ns.total_size = 0
@@ -1518,7 +1518,7 @@ def count(args=None):
                     ns.total_size += corpus_size
                     corpus_stats = [{"absolute": defaultdict(int),
                                      "relative": defaultdict(float),
-                                     "sums": {"absolute": 0, "relative": 0.0}}] * (len(subcqp) + 1)
+                                     "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
                     
                     query_no = 0
                     for line in lines:
@@ -1572,7 +1572,7 @@ def count(args=None):
                         
                         if subcqp and query_no > 0:
                             corpus_stats[query_no]["cqp"] = subcqp[query_no - 1]
-                
+
                     result["corpora"][corpus] = corpus_stats
                     
                     ns.limit_count += len(corpus_stats[0]["absolute"])
@@ -1794,7 +1794,7 @@ def count_time(args=None):
     corpora_sizes = {}
     
     ns = Namespace()
-    total_rows = [[]] * (len(subcqp) + 1)
+    total_rows = [[] for i in range(len(subcqp) + 1)]
     ns.total_size = 0
     
     ns.progress_count = 0
@@ -1861,7 +1861,7 @@ def count_time(args=None):
     for corpus in corpora:
         corpus_stats = [{"absolute": defaultdict(int),
                          "relative": defaultdict(float),
-                         "sums": {"absolute": 0, "relative": 0.0}}] * (len(subcqp) + 1)
+                         "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
         
         basedates = dict([(date, None if corpus_timedata["corpora"][corpus][date] == 0 else 0)
                           for date in corpus_timedata["corpora"].get(corpus, {})])
@@ -1891,7 +1891,7 @@ def count_time(args=None):
 
     total_stats = [{"absolute": defaultdict(int),
                     "relative": defaultdict(float),
-                    "sums": {"absolute": 0, "relative": 0.0}}] * (len(subcqp) + 1)
+                    "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
 
     basedates = dict([(date, None if corpus_timedata["combined"][date] == 0 else 0)
                       for date in corpus_timedata.get("combined", {})])
