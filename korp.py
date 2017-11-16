@@ -17,9 +17,9 @@ Dependencies (install with 'pip install ...'):
 """
 
 # gevent
-from gevent.pywsgi import WSGIServer
 from gevent import monkey
 monkey.patch_all()  # Patching needs to be done as early as possible, before other imports
+from gevent.pywsgi import WSGIServer
 
 # Waitress
 # from waitress import serve
@@ -729,39 +729,50 @@ def optimize(args=None):
     assert_key("cqp", args, r"", True)
     
     cqpextra = {}
-
-    if args.get("within"):
-        cqpextra["within"] = args["within"]
+    cqpextra["within"] = args.get("within") or "sentence"
     if args.get("cut"):
         cqpextra["cut"] = args["cut"]
-    
+
+    free_search = args.get("in_order", "").lower() == "false"
+
     cqp = args["cqp"]
-    result = {"cqp": query_optimize(cqp, cqpextra, find_match=False, expand=False, free_search=True)}
+    result = {"cqp": query_optimize(cqp, cqpextra, find_match=False, expand=False, free_search=free_search)}
     yield result
 
 
 def query_optimize(cqp, cqpextra, find_match=True, expand=True, free_search=False):
-    """ Optimize simple queries with multiple words by converting them to an MU query.
+    """ Optimize simple queries with multiple words by converting them to MU queries.
         Optimization only works for queries with at least two tokens, or one token preceded
         by one or more wildcards. The query also must use "within".
+        Return a tuple (return code, query)
+        0 = optimization successful
+        1 = optimization not needed (e.g. single word searches)
+        2 = optimization not possible (e.g. searches with repetition of non-wildcards)
         """
     # Split query into tokens
     tokens, rest = parse_cqp(cqp)
     within = cqpextra.get("within")
 
     leading_wildcards = False
-    trailing_wildcards = False
-    # Remove leading and trailing wildcards since they will only slow us down
-    while tokens and tokens[0].startswith("[]"):
-        leading_wildcards = True
-        del tokens[0]
-    while tokens and tokens[-1].startswith("[]"):
-        trailing_wildcards = True
-        del tokens[-1]
-    
-    # Determine if this query may not benefit from optimization
-    if len(tokens) == 0 or (len(tokens) == 1 and not leading_wildcards) or rest or not within:
-        return make_query(make_cqp(cqp, cqpextra))
+
+    # Don't allow wildcards in free searches
+    if free_search:
+        if any([token.startswith("[]") for token in tokens]):
+            raise CQPError("Wildcards not allowed in free order query.")
+    else:
+        # Remove leading and trailing wildcards since they will only slow us down
+        while tokens and tokens[0].startswith("[]"):
+            leading_wildcards = True
+            del tokens[0]
+        while tokens and tokens[-1].startswith("[]"):
+            del tokens[-1]
+
+    if len(tokens) == 0 or (len(tokens) == 1 and not leading_wildcards):
+        # Query doesn't benefit from optimization
+        return 1, make_query(make_cqp(cqp, cqpextra))
+    elif rest or not within:
+        # Couldn't optimize this query
+        return 2, make_query(make_cqp(cqp, cqpextra))
     
     cmd = ["MU"]
     wildcards = {}
@@ -782,12 +793,12 @@ def query_optimize(cqp, cqpextra, find_match=True, expand=True, free_search=Fals
             continue
         elif re.search(r"{.*?}$", tokens[i]):
             # Repetition for anything other than wildcards can't be optimized
-            return make_query(make_cqp(cqp, cqpextra))
+            return 2, make_query(make_cqp(cqp, cqpextra))
         cmd[0] += " (meet %s" % (tokens[i])
 
     if re.search(r"{.*?}$", tokens[-1]):
         # Repetition for anything other than wildcards can't be optimized
-        return make_query(make_cqp(cqp, cqpextra))
+        return 2, make_query(make_cqp(cqp, cqpextra))
 
     cmd[0] += " %s" % tokens[-1]
 
@@ -823,7 +834,7 @@ def query_optimize(cqp, cqpextra, find_match=True, expand=True, free_search=Fals
     else:
         cmd[0] += ";"
 
-    return cmd
+    return 0, cmd
 
 
 def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results=False,
@@ -947,10 +958,13 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
                 cqpextra_temp["expand"] = "to " + cqpextra["within"]
 
             if free_search:
-                cmd += query_optimize(c, cqpextra_temp, free_search=True)
+                retcode, free_query = query_optimize(c, cqpextra_temp, free_search=True)
+                if retcode == 2:
+                    raise CQPError("Couldn't convert into free order query.")
+                cmd += free_query
             elif optimize and expand_prequeries:
                 # If expand_prequeries is False, we can't use optimization
-                cmd += query_optimize(c, cqpextra_temp, find_match=(not pre_query))
+                cmd += query_optimize(c, cqpextra_temp, find_match=(not pre_query))[1]
             else:
                 cmd += make_query(make_cqp(c, cqpextra_temp))
             
@@ -968,11 +982,11 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
         cmd += ['dump Last > "| gzip > %s";' % tempcachefilename]
         # cmd += ['dump Last > "%s";' % tempcachefilename]  # If we don't need compression
 
-    if free_search:
+    if free_search and retcode == 0:
         tokens, _ = parse_cqp(cqp[-1])
         cmd += ["Last;"]
         cmd += ["cut %s %s;" % (start, end)]
-        cmd += make_query(make_cqp("(%s)" % " | ".join(tokens), cqpextra))
+        cmd += make_query(make_cqp("(%s)" % " | ".join(set(tokens)), cqpextra))
 
     if not no_results and not (cache and cached_no_hits):
         cmd += ["show +%s;" % " +".join(shown)]
@@ -1961,7 +1975,7 @@ def count_query_worker(corpus, cqp, groupby, ignore_case, form, expand_prequerie
             cqpextra_temp["expand"] = "to " + cqpextra["within"]
         
         if optimize:
-            cmd += query_optimize(c, cqpextra_temp, find_match=(not pre_query))
+            cmd += query_optimize(c, cqpextra_temp, find_match=(not pre_query))[1]
         else:
             cmd += make_query(make_cqp(c, cqpextra_temp))
         
@@ -1987,7 +2001,7 @@ def count_query_worker(corpus, cqp, groupby, ignore_case, form, expand_prequerie
         for c in subcqp:
             cmd += [".EOL.;"]
             cmd += ["mainresult;"]
-            cmd += query_optimize(c, cqpextra_temp, find_match=True)
+            cmd += query_optimize(c, cqpextra_temp, find_match=True)[1]
             cmd += ["""tabulate Last %s > "| sort | uniq -c | sort -nr";""" % ", ".join(
                 "match .. matchend %s" % g for g in groupby)]
 
@@ -3115,7 +3129,6 @@ def run_cqp(command, args=None, executable=config.CQP_EXECUTABLE, registry=confi
         # 3) calculating statistics for empty results
         if not (attr_ignore and "No such attribute:" in error) \
                 and "is not defined for corpus" not in error \
-                and "cut operator" not in error \
                 and "cl->range && cl->size > 0" not in error \
                 and "neither a positional/structural attribute" not in error \
                 and "CL: major error, cannot compose string: invalid UTF8 string passed to cl_string_canonical..." not in error:
