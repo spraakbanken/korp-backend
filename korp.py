@@ -854,10 +854,13 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
         unique_id = str(uuid.uuid4())
         tempcachefilename = os.path.join(config.CACHE_DIR, "query_positions_%s_%s.gz" % (checksum, unique_id))
         cachefilename = os.path.join(config.CACHE_DIR, "query_positions_%s.gz" % checksum)
-        tempcachehitsfilename = os.path.join(config.CACHE_DIR, "query_size_%s_%s.gz" % (checksum, unique_id))
-        cachehitsfilename = os.path.join(config.CACHE_DIR, "query_size_%s" % checksum)
-        is_cached = os.path.isfile(cachefilename)
-        cached_no_hits = is_cached and os.path.getsize(cachefilename) == 0
+        tempcachesizefilename = os.path.join(config.CACHE_DIR, "query_size_%s_%s" % (checksum, unique_id))
+        cachesizefilename = os.path.join(config.CACHE_DIR, "query_size_%s" % checksum)
+        is_cached = os.path.isfile(cachefilename) and os.path.isfile(cachesizefilename)
+        if is_cached:
+            with open(cachesizefilename, "r") as cachehitsfile:
+                cache_hits = cachehitsfile.read()
+        cached_no_hits = is_cached and int(cache_hits) == 0
     else:
         is_cached = False
     
@@ -944,10 +947,12 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
     # This prints the attributes and their relative order:
     cmd += show_attributes()
 
+    retcode = 0
+
     if is_cached:
         # This exact query has been done before. Read corpus positions from cache.
         if not cached_no_hits:
-            cmd += ['undump Last with target keyword < "cat %s && gzip -cd %s |";' % (cachehitsfilename, cachefilename)]
+            cmd += ['undump Last with target keyword < "cat %s && gzip -cd %s |";' % (cachesizefilename, cachefilename)]
             # cmd += ['undump Last with target keyword < "%s";' % cachefilename]  # If we don't need compression
     else:
         for i, c in enumerate(cqp):
@@ -982,13 +987,13 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
         cmd += ['dump Last > "| gzip > %s";' % tempcachefilename]
         # cmd += ['dump Last > "%s";' % tempcachefilename]  # If we don't need compression
 
-    if free_search and retcode == 0:
-        tokens, _ = parse_cqp(cqp[-1])
-        cmd += ["Last;"]
-        cmd += ["cut %s %s;" % (start, end)]
-        cmd += make_query(make_cqp("(%s)" % " | ".join(set(tokens)), cqpextra))
-
     if not no_results and not (cache and cached_no_hits):
+        if free_search and retcode == 0:
+            tokens, _ = parse_cqp(cqp[-1])
+            cmd += ["Last;"]
+            cmd += ["cut %s %s;" % (start, end)]
+            cmd += make_query(make_cqp("(%s)" % " | ".join(set(tokens)), cqpextra))
+
         cmd += ["show +%s;" % " +".join(shown)]
         if len(context) == 1:
             cmd += ["set Context %s;" % context[0]]
@@ -1004,6 +1009,7 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
             cmd += ["cat Last;"]
         else:
             cmd += ["cat Last %s %s;" % (start, end)]
+
     cmd += ["exit;"]
 
     ######################################################################
@@ -1024,10 +1030,10 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
     if cache and not is_cached:
         # When dump files are read from a pipe, CWB needs to know the total
         # number of matches. We save this in a separate file.
-        with open(tempcachehitsfilename, "w") as f:
+        with open(tempcachesizefilename, "w") as f:
             f.write("%d\n" % nr_hits)
     
-        os.rename(tempcachehitsfilename, cachehitsfilename)
+        os.rename(tempcachesizefilename, cachesizefilename)
         try:
             os.rename(tempcachefilename, cachefilename)
         except FileNotFoundError:
