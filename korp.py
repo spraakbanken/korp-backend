@@ -1668,7 +1668,7 @@ def count_all(args=None):
 
     The required parameters are
      - corpus: the CWB corpus
-     - groupby: add once for each corpus positional or structural attribute
+     - groupby: positional or structural attributes
 
     The optional parameters are
      - within: only search for matches within the given s-attribute (e.g., within a sentence)
@@ -1681,7 +1681,8 @@ def count_all(args=None):
     """
 
     if args is None:
-        args = request.values.copy()
+        # Get a mutable dict to be able to modify arguments
+        args = request.values.to_dict()
 
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("groupby", args, IS_IDENT, True)
@@ -3289,7 +3290,7 @@ class CustomTracebackException(Exception):
 
 
 def prevent_timeout(f, args=None, timeout=15):
-    """ Used in places where the script otherwise might timeout. Keeps the CGI alive by printing
+    """ Used in places where the script otherwise might timeout. Keeps the connection alive by printing
     out whitespace. """
 
     q = Queue()
