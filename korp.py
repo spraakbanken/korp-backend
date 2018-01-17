@@ -1561,7 +1561,7 @@ def count(args=None):
                                     split_tokens = [[x for x in token.split("|") if x][:top[groupby[i]]]
                                                     if not token == "|" else ["|"] for token in tokens]
                                 else:
-                                    split_tokens = [[x for x in token.split("|") if x] if not token == "|" else ["|"]
+                                    split_tokens = [[x for x in token.split("|") if x] if not token == "|" else [""]
                                                     for token in tokens]
                                 ngrams = itertools.product(*split_tokens)
                                 ngrams = [" ".join(x) for x in ngrams]
