@@ -11,27 +11,35 @@ Dependencies (install with 'pip install ...'):
 * flask
 * flask_cors
 * flask-mysqldb
-* waitress or gevent
+* gevent
 * python-dateutil
-
 """
 
-# gevent
-from gevent import monkey
+# Skip monkey patching if run through gunicorn (which does the patching for us)
+import os
+if "gunicorn" not in os.environ.get("SERVER_SOFTWARE", ""):
+    from gevent import monkey
+    monkey.patch_all(subprocess=False)  # Patching needs to be done as early as possible, before other imports
 
-monkey.patch_all()  # Patching needs to be done as early as possible, before other imports
 from gevent.pywsgi import WSGIServer
+from gevent.threadpool import ThreadPool
+from gevent.queue import Queue, Empty
 
-# Waitress
-# from waitress import serve
+# gunicorn patches everything, and gevent's subprocess module can't be used in
+# native threads other than the main one, so we need to un-patch the subprocess module.
+from importlib import reload
+import subprocess
+reload(subprocess)
 
-from subprocess import Popen, PIPE
-from collections import defaultdict
 from concurrent import futures
+from concurrent.futures import ThreadPoolExecutor
+from collections import defaultdict
+from dateutil.relativedelta import relativedelta
+from copy import deepcopy
+import datetime
 import uuid
 import binascii
 import sys
-import os
 import time
 import re
 import json
@@ -41,10 +49,7 @@ import urllib.parse
 import urllib.error
 import base64
 import hashlib
-from queue import Queue, Empty
-import threading
 import itertools
-from flask_mysqldb import MySQL
 import pickle
 import traceback
 import functools
@@ -53,6 +58,7 @@ import random
 import config
 import flask
 from flask import Flask, request, Response, stream_with_context
+from flask_mysqldb import MySQL
 from flask_cors import CORS
 
 ################################################################################
@@ -186,7 +192,7 @@ def sleep(args=None):
     t = int(args.get("t", 5))
     for x in range(t):
         time.sleep(1)
-        yield {"t": x}
+        yield {"%d" % x: x}
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -564,13 +570,14 @@ def query(args=None):
         else:
             if incremental:
                 yield {"progress_corpora": list(corpora_hits.keys())}
-            with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-                future_query = dict((executor.submit(query_and_parse, args, corpus, cqp, cqpextra, shown, shown_structs,
-                                                     corpora_hits[corpus][0], corpora_hits[corpus][1], False,
-                                                     expand_prequeries, free_search, cache), corpus)
-                                    for corpus in corpora_hits)
+            
+            def _query_corpora_in_parallel(queue):
+                with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
+                    future_query = dict((executor.submit(query_and_parse, args, corpus, cqp, cqpextra, shown, shown_structs,
+                                                         corpora_hits[corpus][0], corpora_hits[corpus][1], False,
+                                                         expand_prequeries, free_search, cache), corpus)
+                                        for corpus in corpora_hits)
 
-                def _query_corpora_in_parallel(queue):
                     for future in futures.as_completed(future_query):
                         corpus = future_query[future]
                         if future.exception() is not None:
@@ -585,15 +592,15 @@ def query(args=None):
                                 ns.progress_count += 1
                     queue.put("DONE")
 
-                for msg in prevent_timeout(_query_corpora_in_parallel):
-                    yield msg
+            for msg in prevent_timeout(_query_corpora_in_parallel):
+                yield msg
 
-                for corpus in corpora:
-                    if corpus in corpora_hits.keys():
-                        if "kwic" in result:
-                            result["kwic"].extend(corpora_kwics[corpus])
-                        else:
-                            result["kwic"] = corpora_kwics[corpus]
+            for corpus in corpora:
+                if corpus in corpora_hits.keys():
+                    if "kwic" in result:
+                        result["kwic"].extend(corpora_kwics[corpus])
+                    else:
+                        result["kwic"] = corpora_kwics[corpus]
     else:
         if incremental:
             yield {"progress_corpora": corpora}
@@ -639,13 +646,12 @@ def query(args=None):
             result = {}
 
         if ns.rest_corpora:
-
-            with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-                future_query = dict((executor.submit(query_corpus, args, corpus, cqp, cqpextra, shown, shown_structs,
-                                                     0, 0, True, expand_prequeries, free_search, flask.g.cache), corpus)
-                                    for corpus in ns.rest_corpora)
-
-                def _get_total_in_parallel(queue):
+            def _get_total_in_parallel(queue):
+                with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
+                    future_query = dict((executor.submit(query_corpus, args, corpus, cqp, cqpextra, shown, shown_structs,
+                                                         0, 0, True, expand_prequeries, free_search, cache), corpus)
+                                        for corpus in ns.rest_corpora)
+                    
                     for future in futures.as_completed(future_query):
                         corpus = future_query[future]
                         if future.exception() is not None:
@@ -657,10 +663,10 @@ def query(args=None):
                             if incremental:
                                 queue.put({"progress_%d" % ns.progress_count: {"corpus": corpus, "hits": nr_hits}})
                                 ns.progress_count += 1
-                    queue.put("DONE")
+                queue.put("DONE")
 
-                for msg in prevent_timeout(_get_total_in_parallel):
-                    yield msg
+            for msg in prevent_timeout(_get_total_in_parallel):
+                yield msg
 
     if "debug" in args:
         debug["cqp"] = cqp
@@ -1258,12 +1264,13 @@ def struct_values(args=None):
     if incremental:
         yield ({"progress_corpora": list(corpora)})
 
-    with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-        future_query = dict((executor.submit(count_query_worker_simple, corpus, None, struct.split(">"),
-                                             False, args, False), (corpus, struct))
-                            for corpus in corpora for struct in structs if not (corpus, struct) in from_cache)
-
-        def anti_timeout(queue):
+    def anti_timeout(queue):
+        with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
+            future_query = dict((executor.submit(count_query_worker_simple, corpus, None,
+                                                 struct.split(">"),
+                                                 False, args, False), (corpus, struct))
+                                for corpus in corpora for struct in structs if not (corpus, struct) in from_cache)
+            
             for future in futures.as_completed(future_query):
                 corpus, struct = future_query[future]
                 if future.exception() is not None:
@@ -1324,8 +1331,8 @@ def struct_values(args=None):
                         ns.progress_count += 1
             queue.put("DONE")
 
-        for msg in prevent_timeout(anti_timeout):
-            yield msg
+    for msg in prevent_timeout(anti_timeout):
+        yield msg
 
     result["combined"] = {}
 
@@ -1490,12 +1497,11 @@ def count(args=None):
     if incremental:
         yield {"progress_corpora": list(corpora)}
 
-    with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-        future_query = dict((executor.submit(count_function, corpus, cqp, groupby, ignore_case, args,
-                                             expand_prequeries), corpus) for corpus in corpora)
-
-        @reraise_with_stack
-        def anti_timeout(queue):
+    @reraise_with_stack
+    def anti_timeout(queue):
+        with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
+            future_query = dict((executor.submit(count_function, corpus, cqp, groupby, ignore_case, args,
+                                                 expand_prequeries), corpus) for corpus in corpora)
 
             for future in futures.as_completed(future_query):
                 corpus = future_query[future]
@@ -1547,6 +1553,7 @@ def count(args=None):
                                         ngramtemp, pointer = ngrams[j].rsplit(":", 1)
                                         if pointer.isnumeric():
                                             ngrams[j] = ngramtemp
+
                             all_ngrams.append(ngrams)
 
                         cross = list(itertools.product(*all_ngrams))
@@ -1572,8 +1579,8 @@ def count(args=None):
                         ns.progress_count += 1
             queue.put("DONE")
 
-        for msg in prevent_timeout(anti_timeout):
-            yield msg
+    for msg in prevent_timeout(anti_timeout):
+        yield msg
 
     result["count"] = len(total_stats[0]["absolute"])
 
@@ -1583,7 +1590,6 @@ def count(args=None):
             # Only a selected range of results requested
             total_absolute = sorted(total_stats[query_no]["absolute"].items(), key=lambda x: x[1],
                                     reverse=True)[start:end + 1]
-            new_corpora = {}
             for ngram, freq in total_absolute:
                 total_stats[query_no]["relative"][ngram] = freq / float(ns.total_size) * 1000000
 
@@ -1672,13 +1678,24 @@ def remap_keys(mapping):
     return [{'key': k, 'value': v} for k, v in mapping.items()]
 
 
+def strptime(date):
+    """Take a date in string format and return a datetime object.
+    Input must be on the format "YYYYMMDDhhmmss".
+    We need this since the built in strptime isn't thread safe (and this is much faster)."""
+    year = int(date[:4])
+    month = int(date[4:6]) if len(date) > 4 else 1
+    day = int(date[6:8]) if len(date) > 6 else 1
+    hour = int(date[8:10]) if len(date) > 8 else 0
+    minute = int(date[10:12]) if len(date) > 10 else 0
+    second = int(date[12:14]) if len(date) > 12 else 0
+    return datetime.datetime(year, month, day, hour, minute, second)
+
+
 @app.route("/count_time", methods=["GET", "POST"])
 @main_handler
 def count_time(args=None):
     """
     """
-    import datetime
-    from dateutil.relativedelta import relativedelta
 
     if args is None:
         args = request.values
@@ -1726,16 +1743,16 @@ def count_time(args=None):
     corpora_copy = corpora.copy()
 
     if fromdate and todate:
-        df = datetime.datetime.strptime(fromdate, "%Y%m%d%H%M%S")
-        dt = datetime.datetime.strptime(todate, "%Y%m%d%H%M%S")
+        df = strptime(fromdate)
+        dt = strptime(todate)
 
         # Remove corpora not within selected date span
         for c in corpus_info["corpora"]:
             firstdate = corpus_info["corpora"][c]["info"].get("FirstDate")
             lastdate = corpus_info["corpora"][c]["info"].get("LastDate")
             if firstdate and lastdate:
-                firstdate = datetime.datetime.strptime(firstdate, "%Y-%m-%d %H:%M:%S")
-                lastdate = datetime.datetime.strptime(lastdate, "%Y-%m-%d %H:%M:%S")
+                firstdate = strptime(firstdate.replace("-", "").replace(":", "").replace(" ", ""))
+                lastdate = strptime(lastdate.replace("-", "").replace(":", "").replace(" ", ""))
 
                 if not (firstdate <= dt and lastdate >= df):
                     corpora.remove(c)
@@ -1746,8 +1763,8 @@ def count_time(args=None):
             firstdate = corpus_info["corpora"][c]["info"].get("FirstDate")
             lastdate = corpus_info["corpora"][c]["info"].get("LastDate")
             if firstdate and lastdate:
-                firstdate = datetime.datetime.strptime(firstdate, "%Y-%m-%d %H:%M:%S")
-                lastdate = datetime.datetime.strptime(lastdate, "%Y-%m-%d %H:%M:%S")
+                firstdate = strptime(firstdate.replace("-", "").replace(":", "").replace(" ", ""))
+                lastdate = strptime(lastdate.replace("-", "").replace(":", "").replace(" ", ""))
 
                 if not df or firstdate < df:
                     df = firstdate
@@ -1792,11 +1809,11 @@ def count_time(args=None):
     if incremental:
         yield {"progress_corpora": list(corpora)}
 
-    with futures.ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-        future_query = dict((executor.submit(count_query_worker, corpus, cqp, groupby, [], args), corpus)
-                            for corpus in corpora)
+    def anti_timeout(queue):
+        with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
+            future_query = dict((executor.submit(count_query_worker, corpus, cqp, groupby, [], args), corpus)
+                                for corpus in corpora)
 
-        def anti_timeout(queue):
             for future in futures.as_completed(future_query):
                 corpus = future_query[future]
                 if future.exception() is not None:
@@ -1832,13 +1849,13 @@ def count_time(args=None):
                         total_rows[query_no].append({"corpus": corpus, "df": datefrom + timefrom, "dt": dateto + timeto,
                                                      "sum": int(count)})
 
-                    if incremental:
-                        queue.put({"progress_%d" % ns.progress_count: corpus})
-                        ns.progress_count += 1
+                if incremental:
+                    queue.put({"progress_%d" % ns.progress_count: corpus})
+                    ns.progress_count += 1
             queue.put("DONE")
 
-        for msg in prevent_timeout(anti_timeout):
-            yield msg
+    for msg in prevent_timeout(anti_timeout):
+        yield msg
 
     corpus_timedata = generator_to_dict(timespan({"corpus": list(corpora), "granularity": granularity, "from": fromdate,
                                                   "to": todate, "strategy": str(strategy)}))
@@ -2453,9 +2470,6 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
        (default: true)
     """
 
-    import datetime
-    from dateutil.relativedelta import relativedelta
-
     gs = {"y": 4, "m": 6, "d": 8, "h": 10, "n": 12, "s": 14}
 
     def strftime(dt, fmt):
@@ -2495,7 +2509,7 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
 
     def plusminusone(date, value, df, negative=False):
         date = "0" + date if len(date) % 2 else date  # Handle years with three digits
-        d = datetime.datetime.strptime(date, df)
+        d = strptime(date)
         if negative:
             d = d - value
         else:
@@ -2655,8 +2669,6 @@ def relations(args=None):
 
     if args is None:
         args = request.values
-
-    import math
 
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("word", args, "", True)
@@ -2860,8 +2872,6 @@ def relations_sentences(args=None):
 
     if args is None:
         args = request.values
-
-    from copy import deepcopy
 
     assert_key("source", args, "", True)
     assert_key("start", args, IS_NUMBER, False)
@@ -3097,8 +3107,10 @@ def run_cqp(command, args=None, executable=config.CQP_EXECUTABLE, registry=confi
         command = "\n".join(command)
     command = "set PrettyPrint off;\n" + command
     command = command.encode(encoding)
-    process = Popen([executable, "-c", "-r", registry],
-                    stdin=PIPE, stdout=PIPE, stderr=PIPE, env=env)
+    process = subprocess.Popen([executable, "-c", "-r", registry],
+                               stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, env=env)
     reply, error = process.communicate(command)
     if error:
         error = error.decode(encoding)
@@ -3129,8 +3141,8 @@ def run_cwb_scan(corpus, attrs, form, executable=config.CWB_SCAN_EXECUTABLE, reg
     If there is an error, raise a CQPError exception.
     """
     encoding = form.get("encoding", config.CQP_ENCODING)
-    process = Popen([executable, "-q", "-r", registry, corpus] + attrs,
-                    stdout=PIPE, stderr=PIPE)
+    process = subprocess.Popen([executable, "-q", "-r", registry, corpus] + attrs,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     reply, error = process.communicate()
     if error:
         # Remove newlines from the error string:
@@ -3243,7 +3255,7 @@ def generator_to_dict(generator):
 
 
 def reraise_with_stack(func):
-    """ Wrapper to preserve traceback when using concurrent.futures. """
+    """ Wrapper to preserve traceback when using ThreadPoolExecutor. """
 
     @functools.wraps(func)
     def wrapped(*args, **kwargs):
@@ -3275,8 +3287,9 @@ def prevent_timeout(f, args=None, timeout=15):
 
     args = args or []
     args.append(q)
-    t = threading.Thread(target=error_catcher, args=[f] + args)
-    t.start()
+    
+    pool = ThreadPool(1)
+    pool.spawn(error_catcher, f, *args)
 
     while True:
         try:
@@ -3293,11 +3306,10 @@ def prevent_timeout(f, args=None, timeout=15):
 
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "dev":
-        app.run(debug=True, host=config.WSGI_HOST, port=config.WSGI_PORT)  # Run using Flask (use only for development!)
+        # Run using Flask (use only for development)
+        app.run(debug=True, threaded=True, host=config.WSGI_HOST, port=config.WSGI_PORT)
     else:
-        # serve(app, host=config.WSGI_HOST, port=config.WSGI_PORT)  # Run using Waitress (does not support streaming/incremental response)
-
-        # Run using gevent (recommended)
+        # Run using gevent
         print("Serving using gevent")
         http = WSGIServer((config.WSGI_HOST, config.WSGI_PORT), app.wsgi_app)
         http.serve_forever()
