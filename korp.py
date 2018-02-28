@@ -59,25 +59,8 @@ from flask_cors import CORS
 # Nothing needs to be changed in this file. Use config.py for configuration.
 
 # The version of this script
-KORP_VERSION = "6.1.0"
-KORP_VERSION_DATE = "2017-09-06"
-
-# The available commands. For each command there must be a function with the
-# same name, taking one argument (a dictionary with form or query string data).
-COMMANDS = ["authenticate",
-            "count",
-            "count_all",
-            "count_time",
-            "info",
-            "lemgram_count",
-            "loglike",
-            "optimize",
-            "query",
-            "query_sample",
-            "relations",
-            "relations_sentences",
-            "struct_values",
-            "timespan"]
+KORP_VERSION = "7.0.0"
+KORP_VERSION_DATE = "2018-02-28"
 
 # Special symbols used by this script; they must NOT be in the corpus
 END_OF_LINE = "-::-EOL-::-"
@@ -191,18 +174,6 @@ def main_handler(generator):
     return decorated
 
 
-@app.route("/", methods=["GET", "POST"])
-def main():
-    """Handle legacy calls using /?command=<command> instead of /<command>,
-    by calling the same-named function."""
-    command = request.values.get("command")
-    if not command:
-        command = "info"
-    if command not in COMMANDS:
-        raise ValueError("'%s' is not a permitted command, try these instead: '%s'" % (command, "', '".join(COMMANDS)))
-    return globals()[command]()
-
-
 ################################################################################
 # INFO
 ################################################################################
@@ -218,6 +189,7 @@ def sleep(args=None):
         yield {"t": x}
 
 
+@app.route("/", methods=["GET", "POST"])
 @app.route("/info", methods=["GET", "POST"])
 @main_handler
 def info(args=None):
