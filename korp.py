@@ -2179,45 +2179,56 @@ def loglike(args):
 
     same_cqp = args.get("set1_cqp") == args.get("set2_cqp")
 
-    # If same CQP for both sets, handle as one query for better performance
-    if same_cqp:
-        args["cqp"] = args.get("set1_cqp")
-        args["corpus"] = QUERY_DELIM.join(corpora)
-        count_result = generator_to_dict(count(args))
+    result = {}
 
-        sets = [{"total": 0, "freq": defaultdict(int)}, {"total": 0, "freq": defaultdict(int)}]
-        for i, cset in enumerate((set1, set2)):
-            for corpus in cset:
-                sets[i]["total"] += count_result["corpora"][corpus]["sums"]["absolute"]
-                if len(cset) == 1:
-                    sets[i]["freq"] = count_result["corpora"][corpus]["absolute"]
-                else:
-                    for w, f in count_result["corpora"][corpus]["absolute"].items():
-                        sets[i]["freq"][w] += f
+    def anti_timeout(queue):
+            # If same CQP for both sets, handle as one query for better performance
+            if same_cqp:
+                args["cqp"] = args.get("set1_cqp")
+                args["corpus"] = QUERY_DELIM.join(corpora)
+                count_result = generator_to_dict(count(args))
 
-    else:
-        args1, args2 = args.copy(), args.copy()
-        args1["corpus"] = QUERY_DELIM.join(set1)
-        args1["cqp"] = args.get("set1_cqp")
-        args2["corpus"] = QUERY_DELIM.join(set2)
-        args2["cqp"] = args.get("set2_cqp")
-        count_result = [generator_to_dict(count(args1)), generator_to_dict(count(args2))]
+                sets = [{"total": 0, "freq": defaultdict(int)}, {"total": 0, "freq": defaultdict(int)}]
+                for i, cset in enumerate((set1, set2)):
+                    for corpus in cset:
+                        sets[i]["total"] += count_result["corpora"][corpus]["sums"]["absolute"]
+                        if len(cset) == 1:
+                            sets[i]["freq"] = count_result["corpora"][corpus]["absolute"]
+                        else:
+                            for w, f in count_result["corpora"][corpus]["absolute"].items():
+                                sets[i]["freq"][w] += f
 
-        sets = [{}, {}]
-        for i, cset in enumerate((set1, set2)):
-            count_result_temp = count_result if same_cqp else count_result[i]
-            sets[i]["total"] = count_result_temp["total"]["sums"]["absolute"]
-            sets[i]["freq"] = count_result_temp["total"]["absolute"]
+            else:
+                args1, args2 = args.copy(), args.copy()
+                args1["corpus"] = QUERY_DELIM.join(set1)
+                args1["cqp"] = args.get("set1_cqp")
+                args2["corpus"] = QUERY_DELIM.join(set2)
+                args2["cqp"] = args.get("set2_cqp")
+                count_result = [generator_to_dict(count(args1)), generator_to_dict(count(args2))]
 
-    ll_list = compute_list(sets[0]["freq"], sets[0]["total"], sets[1]["freq"], sets[1]["total"])
-    (ws, avg, mi, ma) = compute_ll_stats(ll_list, maxresults, sets)
+                sets = [{}, {}]
+                for i, cset in enumerate((set1, set2)):
+                    count_result_temp = count_result if same_cqp else count_result[i]
+                    sets[i]["total"] = count_result_temp["total"]["sums"]["absolute"]
+                    sets[i]["freq"] = count_result_temp["total"]["absolute"]
 
-    result = {"loglike": {}, "average": avg, "set1": {}, "set2": {}}
+            ll_list = compute_list(sets[0]["freq"], sets[0]["total"], sets[1]["freq"], sets[1]["total"])
+            (ws, avg, mi, ma) = compute_ll_stats(ll_list, maxresults, sets)
 
-    for (ll, w) in ws:
-        result["loglike"][w] = ll
-        result["set1"][w] = sets[0]["freq"].get(w, 0)
-        result["set2"][w] = sets[1]["freq"].get(w, 0)
+            result["loglike"] = {}
+            result["average"] = avg
+            result["set1"] = {}
+            result["set2"] = {}
+
+            for (ll, w) in ws:
+                result["loglike"][w] = ll
+                result["set1"][w] = sets[0]["freq"].get(w, 0)
+                result["set2"][w] = sets[1]["freq"].get(w, 0)
+
+            queue.put("DONE")
+
+    for msg in prevent_timeout(anti_timeout):
+        yield msg
 
     yield result
 
