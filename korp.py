@@ -102,7 +102,7 @@ if config.CACHE_DIR and not os.path.exists(config.CACHE_DIR):
 
 def main_handler(generator):
     """Decorator wrapping all WSGI endpoints, handling errors and formatting.
-    
+
     Global parameters are
      - callback: an identifier that the result should be wrapped in
      - encoding: the encoding for interacting with the corpus (default: UTF-8)
@@ -112,70 +112,89 @@ def main_handler(generator):
 
     @functools.wraps(generator)  # Copy original function's information, needed by Flask
     def decorated(args=None):
+        internal = args is not None
+        if not internal:
+            args = request.values.to_dict()
 
-        flask.g.cache = bool(not request.values.get("cache", "").lower() == "false" and
-                             config.CACHE_DIR and os.path.exists(config.CACHE_DIR))
+        if not isinstance(args.get("cache"), bool):
+            args["cache"] = bool(not args.get("cache", "").lower() == "false" and
+                                 config.CACHE_DIR and os.path.exists(config.CACHE_DIR))
 
-        def error_handler():
-            """Format exception info for output to user."""
-            exc = sys.exc_info()
-            if isinstance(exc[1], CustomTracebackException):
-                exc = exc[1].exception
-            error = {"ERROR": {"type": exc[0].__name__,
-                               "value": str(exc[1])
-                               }}
-            if "debug" in request.values:
-                error["ERROR"]["traceback"] = "".join(traceback.format_exception(*exc)).splitlines()
-            return error
-
-        def incremental_json(ff):
-            """Incrementally yield result as JSON."""
-            if callback:
-                yield callback + "("
-            yield "{\n"
-
-            try:
-                for response in ff:
-                    if not response:
-                        yield " \n"
-                    else:
-                        yield json.dumps(response)[1:-1] + ",\n"
-            except GeneratorExit:
-                raise
-            except:
-                error = error_handler()
-                yield json.dumps(error)[1:-1] + ",\n"
-
-            yield json.dumps({"time": time.time() - starttime})[1:] + "\n"
-            if callback:
-                yield ")"
-
-        if args is not None:
+        if internal:
             # Function is internally used
             return generator(args)
         else:
-            # Function is externally called
-            starttime = time.time()
-            incremental = request.values.get("incremental", "").lower() == "true"
-            callback = request.values.get("callback")
-            indent = request.values.get("indent", None, type=int)
+            # Function is called externally
+            def error_handler():
+                """Format exception info for output to user."""
+                exc = sys.exc_info()
+                if isinstance(exc[1], CustomTracebackException):
+                    exc = exc[1].exception
+                error = {"ERROR": {"type": exc[0].__name__,
+                                   "value": str(exc[1])
+                                   }}
+                if "debug" in request.values:
+                    error["ERROR"]["traceback"] = "".join(traceback.format_exception(*exc)).splitlines()
+                return error
 
-            if incremental:
-                # Streaming response
-                return Response(stream_with_context(incremental_json(generator())), mimetype="application/json")
-            else:
-                # Regular non-streaming response
+            def incremental_json(ff):
+                """Incrementally yield result as JSON."""
+                if callback:
+                    yield callback + "("
+                yield "{\n"
+
                 try:
-                    result = generator_to_dict(generator())
+                    for response in ff:
+                        if not response:
+                            # Yield whitespace to prevent timeout
+                            yield " \n"
+                        else:
+                            yield json.dumps(response)[1:-1] + ",\n"
+                except GeneratorExit:
+                    raise
+                except:
+                    error = error_handler()
+                    yield json.dumps(error)[1:-1] + ",\n"
+
+                yield json.dumps({"time": time.time() - starttime})[1:] + "\n"
+                if callback:
+                    yield ")"
+
+            def full_json(ff):
+                """Yield full JSON at end, but keep returning newlines to prevent timeout."""
+                result = {}
+
+                try:
+                    for response in ff:
+                        if not response:
+                            # Yield whitespace to prevent timeout
+                            yield " \n"
+                        else:
+                            result.update(response)
+                except GeneratorExit:
+                    raise
                 except:
                     result = error_handler()
+
                 result["time"] = time.time() - starttime
 
                 if callback:
                     result = callback + "(" + json.dumps(result, indent=indent) + ")"
                 else:
                     result = json.dumps(result, indent=indent)
-                return Response(result, mimetype="application/json")
+                yield result
+
+            starttime = time.time()
+            incremental = request.values.get("incremental", "").lower() == "true"
+            callback = request.values.get("callback")
+            indent = request.values.get("indent", None, type=int)
+
+            if incremental:
+                # Incremental response
+                return Response(stream_with_context(incremental_json(generator(args))), mimetype="application/json")
+            else:
+                # We still use a streaming response even when non-incremental, to prevent timeouts
+                return Response(stream_with_context(full_json(generator(args))), mimetype="application/json")
 
     return decorated
 
@@ -186,9 +205,7 @@ def main_handler(generator):
 
 @app.route("/sleep", methods=["GET", "POST"])
 @main_handler
-def sleep(args=None):
-    if args is None:
-        args = request.values
+def sleep(args):
     t = int(args.get("t", 5))
     for x in range(t):
         time.sleep(1)
@@ -198,23 +215,21 @@ def sleep(args=None):
 @app.route("/", methods=["GET", "POST"])
 @app.route("/info", methods=["GET", "POST"])
 @main_handler
-def info(args=None):
+def info(args):
     """Return information, either about a specific corpus
     or general information about the available corpora.
     """
     if request.values.get("corpus"):
-        yield corpus_info()
+        yield corpus_info(args)
     else:
-        yield general_info()
+        yield general_info(args)
 
 
-def general_info(args=None):
+def general_info(args):
     """Return information about the available corpora.
     """
-    if args is None:
-        args = request.values
 
-    if flask.g.cache:
+    if args["cache"]:
         cachefilename = os.path.join(config.CACHE_DIR, "info")
         if os.path.isfile(cachefilename):
             with open(cachefilename, "r") as cachefile:
@@ -234,7 +249,7 @@ def general_info(args=None):
 
     result = {"version": KORP_VERSION, "cqp-version": version, "corpora": list(corpora), "protected_corpora": protected}
 
-    if flask.g.cache:
+    if args["cache"]:
         if not os.path.exists(cachefilename):
             tmpfile = "%s.%s" % (cachefilename, str(uuid.uuid4()))
 
@@ -249,12 +264,9 @@ def general_info(args=None):
     return result
 
 
-def corpus_info(args=None):
+def corpus_info(args):
     """Return information about a specific corpus or corpora.
     """
-    if args is None:
-        args = request.values
-
     assert_key("corpus", args, IS_IDENT, True)
 
     corpora = args.get("corpus")
@@ -263,7 +275,7 @@ def corpus_info(args=None):
     corpora = sorted(set(corpora))
 
     # Check if whole query is cached
-    if flask.g.cache:
+    if args["cache"]:
         checksum_combined = get_hash((sorted(corpora),))
         checksums = {}
         cachefilename = os.path.join(config.CACHE_DIR, "info_" + checksum_combined)
@@ -284,7 +296,7 @@ def corpus_info(args=None):
 
     for corpus in corpora:
         # Check if corpus is cached
-        if flask.g.cache:
+        if args["cache"]:
             checksum = get_hash((corpus,))
             checksums[corpus] = [checksum, False]
             cachefilename = os.path.join(config.CACHE_DIR, "info_" + checksum)
@@ -303,7 +315,7 @@ def corpus_info(args=None):
         # Call the CQP binary
         lines = run_cqp(cmd)
 
-        # Skip CQP version 
+        # Skip CQP version
         next(lines)
 
     for corpus in corpora:
@@ -330,7 +342,7 @@ def corpus_info(args=None):
                     total_sentences += int(infoval)
 
         result["corpora"][corpus] = {"attrs": attrs, "info": info}
-        if flask.g.cache:
+        if args["cache"]:
             if not checksums[corpus][1]:
                 cachefilename = os.path.join(config.CACHE_DIR, "info_" + checksums[corpus][0])
                 tmpfile = "%s.%s" % (cachefilename, str(uuid.uuid4()))
@@ -341,7 +353,7 @@ def corpus_info(args=None):
     result["total_size"] = total_size
     result["total_sentences"] = total_sentences
 
-    if flask.g.cache:
+    if args["cache"]:
         # Cache whole query
         cachefilename = os.path.join(config.CACHE_DIR, "info_" + checksum_combined)
         if not os.path.exists(cachefilename):
@@ -368,13 +380,9 @@ def corpus_info(args=None):
 
 @app.route("/query_sample", methods=["GET", "POST"])
 @main_handler
-def query_sample(args=None):
+def query_sample(args):
     """Run a sequential query in the selected corpora in random order until at least one
     hit is found, and then abort the query. Use to get a random sample sentence."""
-
-    if args is None:
-        # Get a mutable dict to be able to modify arguments
-        args = request.values.to_dict()
 
     corpora = args.get("corpus")
     if isinstance(corpora, str):
@@ -400,7 +408,7 @@ def query_sample(args=None):
 
 @app.route("/query", methods=["GET", "POST"])
 @main_handler
-def query(args=None):
+def query(args):
     """Perform a CQP query and return a number of matches.
 
     Each match contains position information and a list of the words and attributes in the match.
@@ -424,10 +432,6 @@ def query(args=None):
        (default: no sorting)
      - incremental: returns the result incrementally instead of all at once
     """
-
-    if args is None:
-        args = request.values
-
     assert_key("cqp", args, r"", True)
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("start", args, IS_NUMBER)
@@ -446,7 +450,7 @@ def query(args=None):
     incremental = args.get("incremental", "").lower() == "true"
     free_search = args.get("in_order", "").lower() == "false"
 
-    cache = flask.g.cache
+    use_cache = args["cache"]
 
     corpora = args.get("corpus")
     if isinstance(corpora, str):
@@ -509,7 +513,7 @@ def query(args=None):
     saved_total_hits = 0
     saved_hits = args.get("querydata", "")
 
-    if saved_hits or (flask.g.cache and os.path.exists(os.path.join(config.CACHE_DIR, "query_" + checksum))):
+    if saved_hits or (use_cache and os.path.exists(os.path.join(config.CACHE_DIR, "query_" + checksum))):
         if not saved_hits:
             with open(os.path.join(config.CACHE_DIR, "query_" + checksum), "r") as cachefile:
                 saved_hits = cachefile.read()
@@ -562,7 +566,7 @@ def query(args=None):
             def _query_single_corpus(queue):
                 result["kwic"], _ = query_and_parse(args, corpus, cqp, cqpextra, shown, shown_structs, hits[0],
                                                     hits[1], expand_prequeries=expand_prequeries,
-                                                    free_search=free_search, cache=cache)
+                                                    free_search=free_search, use_cache=use_cache)
                 queue.put("DONE")
 
             for msg in prevent_timeout(_query_single_corpus):
@@ -570,12 +574,12 @@ def query(args=None):
         else:
             if incremental:
                 yield {"progress_corpora": list(corpora_hits.keys())}
-            
+
             def _query_corpora_in_parallel(queue):
                 with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
                     future_query = dict((executor.submit(query_and_parse, args, corpus, cqp, cqpextra, shown, shown_structs,
                                                          corpora_hits[corpus][0], corpora_hits[corpus][1], False,
-                                                         expand_prequeries, free_search, cache), corpus)
+                                                         expand_prequeries, free_search, use_cache), corpus)
                                         for corpus in corpora_hits)
 
                     for future in futures.as_completed(future_query):
@@ -616,7 +620,7 @@ def query(args=None):
                     break
 
                 kwic, nr_hits = query_and_parse(args, corpus, cqp, cqpextra, shown, shown_structs, ns.start_local,
-                                                ns.end_local, False, expand_prequeries, free_search, cache)
+                                                ns.end_local, False, expand_prequeries, free_search, use_cache)
 
                 statistics[corpus] = nr_hits
                 ns.total_hits += nr_hits
@@ -649,9 +653,9 @@ def query(args=None):
             def _get_total_in_parallel(queue):
                 with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
                     future_query = dict((executor.submit(query_corpus, args, corpus, cqp, cqpextra, shown, shown_structs,
-                                                         0, 0, True, expand_prequeries, free_search, cache), corpus)
+                                                         0, 0, True, expand_prequeries, free_search, use_cache), corpus)
                                         for corpus in ns.rest_corpora)
-                    
+
                     for future in futures.as_completed(future_query):
                         corpus = future_query[future]
                         if future.exception() is not None:
@@ -678,7 +682,7 @@ def query(args=None):
         bytes(checksum + ";" + str(ns.total_hits) + ";" + ";".join("%s:%d" % (c, h) for c, h in statistics.items()),
               "utf-8"))).decode("utf-8").replace("+", "-").replace("/", "_")
 
-    if flask.g.cache:
+    if use_cache:
         cachefilename = os.path.join(config.CACHE_DIR, "query_" + checksum)
         if not os.path.exists(cachefilename):
             tmpfile = "%s.%s" % (cachefilename, str(uuid.uuid4()))
@@ -698,10 +702,7 @@ def query(args=None):
 
 @app.route("/optimize", methods=["GET", "POST"])
 @main_handler
-def optimize(args=None):
-    if args is None:
-        args = request.values
-
+def optimize(args):
     assert_key("cqp", args, r"", True)
 
     cqpextra = {"within": args.get("within") or "sentence"}
@@ -813,8 +814,8 @@ def query_optimize(cqp, cqpextra, find_match=True, expand=True, free_search=Fals
 
 
 def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results=False,
-                 expand_prequeries=True, free_search=False, cache=False):
-    if cache:
+                 expand_prequeries=True, free_search=False, use_cache=False):
+    if use_cache:
         # Calculate checksum
         # Needs to contains all arguments that may influence the results
         checksum_data = (corpus,
@@ -950,18 +951,18 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
             if pre_query:
                 cmd += ["Last;"]
 
-    if cache and cached_no_hits:
+    if use_cache and cached_no_hits:
         # Print EOL if no hits
         cmd += [".EOL.;"]
     else:
         # This prints the size of the query (i.e., the number of results):
         cmd += ["size Last;"]
 
-    if cache and not is_cached:
+    if use_cache and not is_cached:
         cmd += ['dump Last > "| gzip > %s";' % tempcachefilename]
         # cmd += ['dump Last > "%s";' % tempcachefilename]  # If we don't need compression
 
-    if not no_results and not (cache and cached_no_hits):
+    if not no_results and not (use_cache and cached_no_hits):
         if free_search and retcode == 0:
             tokens, _ = parse_cqp(cqp[-1])
             cmd += ["Last;"]
@@ -994,14 +995,14 @@ def query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, 
     # Skip the CQP version
     next(lines)
 
-    # Read the attributes and their relative order 
+    # Read the attributes and their relative order
     attrs = read_attributes(lines)
 
     # Read the size of the query, i.e., the number of results
     nr_hits = next(lines)
     nr_hits = 0 if nr_hits == END_OF_LINE else int(nr_hits)
 
-    if cache and not is_cached:
+    if use_cache and not is_cached:
         # When dump files are read from a pipe, CWB needs to know the total
         # number of matches. We save this in a separate file.
         with open(tempcachesizefilename, "w") as f:
@@ -1175,9 +1176,9 @@ def query_parse_lines(corpus, lines, attrs, shown, shown_structs, free_matches=F
 
 
 def query_and_parse(args, corpus, cqp, cqpextra, shown, shown_structs, start, end, no_results=False,
-                    expand_prequeries=True, free_search=False, cache=False):
+                    expand_prequeries=True, free_search=False, use_cache=False):
     lines, nr_hits, attrs = query_corpus(args, corpus, cqp, cqpextra, shown, shown_structs,
-                                         start, end, no_results, expand_prequeries, free_search, cache)
+                                         start, end, no_results, expand_prequeries, free_search, use_cache)
     kwic = query_parse_lines(corpus, lines, attrs, shown, shown_structs, free_matches=free_search)
     return kwic, nr_hits
 
@@ -1201,9 +1202,7 @@ def which_hits(corpora, stats, start, end):
 
 @app.route("/struct_values", methods=["GET", "POST"])
 @main_handler
-def struct_values(args=None):
-    if args is None:
-        args = request.values
+def struct_values(args):
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("struct", args, re.compile(r"^[\w_\d,>]+$"), True)
     assert_key("incremental", request.values, r"(true|false)")
@@ -1234,7 +1233,7 @@ def struct_values(args=None):
 
     from_cache = set()  # Keep track of what has been read from cache
 
-    if flask.g.cache:
+    if args["cache"]:
         all_cache = True
         for corpus in corpora:
             for struct in structs:
@@ -1270,7 +1269,7 @@ def struct_values(args=None):
                                                  struct.split(">"),
                                                  False, args, False), (corpus, struct))
                                 for corpus in corpora for struct in structs if not (corpus, struct) in from_cache)
-            
+
             for future in futures.as_completed(future_query):
                 corpus, struct = future_query[future]
                 if future.exception() is not None:
@@ -1336,7 +1335,7 @@ def struct_values(args=None):
 
     result["combined"] = {}
 
-    if flask.g.cache:
+    if args["cache"]:
         unique_id = str(uuid.uuid4())
 
         for corpus in corpora:
@@ -1366,7 +1365,7 @@ def struct_values(args=None):
 
 @app.route("/count", methods=["GET", "POST"])
 @main_handler
-def count(args=None):
+def count(args):
     """Perform a CQP query and return a count of the given words/attrs.
 
     The required parameters are
@@ -1387,9 +1386,6 @@ def count(args=None):
        defined by 'within') from the previous query, or just the matches.
        (default: true)
     """
-    if args is None:
-        args = request.values
-
     assert_key("cqp", args, r"", True)
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("groupby", args, IS_IDENT, True)
@@ -1469,7 +1465,7 @@ def count(args=None):
                      end)
     checksum = get_hash(checksum_data)
 
-    if flask.g.cache:
+    if args["cache"]:
         cachefilename = os.path.join(config.CACHE_DIR, "count_" + checksum)
         if os.path.exists(cachefilename):
             with open(cachefilename, "r") as cachefile:
@@ -1624,7 +1620,7 @@ def count(args=None):
     if "debug" in args:
         result["DEBUG"] = {"cqp": cqp, "checksum": checksum, "simple": simple}
 
-    if flask.g.cache and ns.limit_count <= config.CACHE_MAX_STATS:
+    if args["cache"] and ns.limit_count <= config.CACHE_MAX_STATS:
         unique_id = str(uuid.uuid4())
         cachefilename = os.path.join(config.CACHE_DIR, "count_" + checksum)
         tmpfile = "%s.%s" % (cachefilename, unique_id)
@@ -1641,7 +1637,7 @@ def count(args=None):
 
 @app.route("/count_all", methods=["GET", "POST"])
 @main_handler
-def count_all(args=None):
+def count_all(args):
     """Return a count of the given attrs.
 
     The required parameters are
@@ -1657,11 +1653,6 @@ def count_all(args=None):
      - incremental: incrementally report the progress while executing
        (default: false)
     """
-
-    if args is None:
-        # Get a mutable dict to be able to modify arguments
-        args = request.values.to_dict()
-
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("groupby", args, IS_IDENT, True)
     assert_key("cut", args, IS_NUMBER)
@@ -1693,13 +1684,9 @@ def strptime(date):
 
 @app.route("/count_time", methods=["GET", "POST"])
 @main_handler
-def count_time(args=None):
+def count_time(args):
     """
     """
-
-    if args is None:
-        args = request.values
-
     assert_key("cqp", args, r"", True)
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("cut", args, IS_NUMBER)
@@ -1739,7 +1726,7 @@ def count_time(args=None):
             raise ValueError("When using 'from' or 'to', both need to be specified.")
 
     # Get date range of selected corpora
-    corpus_info = generator_to_dict(info({"corpus": QUERY_DELIM.join(corpora)}))
+    corpus_data = corpus_info({"corpus": QUERY_DELIM.join(corpora), "cache": args["cache"]})
     corpora_copy = corpora.copy()
 
     if fromdate and todate:
@@ -1747,9 +1734,9 @@ def count_time(args=None):
         dt = strptime(todate)
 
         # Remove corpora not within selected date span
-        for c in corpus_info["corpora"]:
-            firstdate = corpus_info["corpora"][c]["info"].get("FirstDate")
-            lastdate = corpus_info["corpora"][c]["info"].get("LastDate")
+        for c in corpus_data["corpora"]:
+            firstdate = corpus_data["corpora"][c]["info"].get("FirstDate")
+            lastdate = corpus_data["corpora"][c]["info"].get("LastDate")
             if firstdate and lastdate:
                 firstdate = strptime(firstdate.replace("-", "").replace(":", "").replace(" ", ""))
                 lastdate = strptime(lastdate.replace("-", "").replace(":", "").replace(" ", ""))
@@ -1759,9 +1746,9 @@ def count_time(args=None):
 
     else:
         # If no date range was provided, use whole date range of the selected corpora
-        for c in corpus_info["corpora"]:
-            firstdate = corpus_info["corpora"][c]["info"].get("FirstDate")
-            lastdate = corpus_info["corpora"][c]["info"].get("LastDate")
+        for c in corpus_data["corpora"]:
+            firstdate = corpus_data["corpora"][c]["info"].get("FirstDate")
+            lastdate = corpus_data["corpora"][c]["info"].get("LastDate")
             if firstdate and lastdate:
                 firstdate = strptime(firstdate.replace("-", "").replace(":", "").replace(" ", ""))
                 lastdate = strptime(lastdate.replace("-", "").replace(":", "").replace(" ", ""))
@@ -1858,7 +1845,7 @@ def count_time(args=None):
         yield msg
 
     corpus_timedata = generator_to_dict(timespan({"corpus": list(corpora), "granularity": granularity, "from": fromdate,
-                                                  "to": todate, "strategy": str(strategy)}))
+                                                  "to": todate, "strategy": str(strategy), "cache": args["cache"]}))
     search_timedata = []
     search_timedata_combined = []
     for total_row in total_rows:
@@ -2057,9 +2044,9 @@ def count_query_worker_simple(corpus, cqp, groupby, ignore_case, form, expand_pr
 
 @app.route("/loglike", methods=["GET", "POST"])
 @main_handler
-def loglike(args=None):
+def loglike(args):
     """Run a log-likelihood comparison on two queries.
-    
+
     The required parameters are
      - set1_cqp: the first CQP query
      - set2_cqp: the second CQP query
@@ -2072,11 +2059,6 @@ def loglike(args=None):
      - max: maxium number of results per set
        (default: 15)
     """
-
-    if args is None:
-        # Get a mutable dict to be able to modify arguments
-        args = request.values.to_dict()
-
     def expected(total, wordtotal, sumtotal):
         """ The expected is that the words are uniformely distributed over the corpora. """
         return wordtotal * (float(total) / sumtotal)
@@ -2246,7 +2228,7 @@ def loglike(args=None):
 
 @app.route("/lemgram_count", methods=["GET", "POST"])
 @main_handler
-def lemgram_count(args=None):
+def lemgram_count(args):
     """Return lemgram statistics per corpus.
 
     The required parameters are
@@ -2258,9 +2240,6 @@ def lemgram_count(args=None):
      - count: what to count (lemgram/prefix/suffix)
        (default: lemgram)
     """
-    if args is None:
-        args = request.values
-
     assert_key("lemgram", args, r"", True)
     assert_key("corpus", args, IS_IDENT)
     assert_key("count", args, r"(lemgram|prefix|suffix)")
@@ -2317,7 +2296,7 @@ def sql_escape(s):
 
 @app.route("/timespan", methods=["GET", "POST"])
 @main_handler
-def timespan(args=None):
+def timespan(args):
     """Calculate timespan information for corpora.
     The time information is retrieved from the database.
 
@@ -2336,10 +2315,6 @@ def timespan(args=None):
      - from: from this date and time, on the format 20150513063500 or 2015-05-13 06:35:00 (times optional) (optional)
      - to: to this date and time (optional)
     """
-
-    if args is None:
-        args = request.values
-
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("granularity", args, r"[ymdhnsYMDHNS]")
     assert_key("spans", args, r"(true|false)")
@@ -2370,9 +2345,10 @@ def timespan(args=None):
 
     shorten = {"y": 4, "m": 7, "d": 10, "h": 13, "n": 16, "s": 19}
 
+    use_cache = args["cache"]
     unique_id = str(uuid.uuid4())
 
-    if flask.g.cache:
+    if use_cache:
         cachedata = (granularity,
                      spans,
                      combined,
@@ -2392,7 +2368,6 @@ def timespan(args=None):
                 return
 
     ns = {}
-    use_cache = flask.g.cache
 
     def anti_timeout_fun(queue):
         with app.app_context():
@@ -2649,7 +2624,7 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
 
 @app.route("/relations", methods=["GET", "POST"])
 @main_handler
-def relations(args=None):
+def relations(args):
     """Calculate word picture data.
 
     The required parameters are
@@ -2666,10 +2641,6 @@ def relations(args=None):
      - incremental: incrementally report the progress while executing
        (default: false)
     """
-
-    if args is None:
-        args = request.values
-
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("word", args, "", True)
     assert_key("type", args, r"(word|lemgram)", False)
@@ -2701,7 +2672,7 @@ def relations(args=None):
                      maxresults)
     checksum = get_hash(checksum_data)
 
-    if flask.g.cache and os.path.exists(os.path.join(config.CACHE_DIR, "wordpicture_" + checksum)):
+    if args["cache"] and os.path.exists(os.path.join(config.CACHE_DIR, "wordpicture_" + checksum)):
         with open(os.path.join(config.CACHE_DIR, "wordpicture_" + checksum), "r") as cachefile:
             result = json.load(cachefile)
             if "debug" in args:
@@ -2836,7 +2807,7 @@ def relations(args=None):
              }
         result.setdefault("relations", []).append(r)
 
-    if flask.g.cache:
+    if args["cache"]:
         unique_id = str(uuid.uuid4())
         cachefilename = os.path.join(config.CACHE_DIR, "wordpicture_" + checksum)
         tmpfile = "%s.%s" % (cachefilename, unique_id)
@@ -2858,7 +2829,7 @@ def relations(args=None):
 
 @app.route("/relations_sentences", methods=["GET", "POST"])
 @main_handler
-def relations_sentences(args=None):
+def relations_sentences(args):
     """Execute a CQP query to find sentences with a given relation from a word picture.
 
     The required parameters are
@@ -2869,9 +2840,6 @@ def relations_sentences(args=None):
      - show
      - show_struct
     """
-
-    if args is None:
-        args = request.values
 
     assert_key("source", args, "", True)
     assert_key("start", args, IS_NUMBER, False)
@@ -3287,7 +3255,7 @@ def prevent_timeout(f, args=None, timeout=15):
 
     args = args or []
     args.append(q)
-    
+
     pool = ThreadPool(1)
     pool.spawn(error_catcher, f, *args)
 
