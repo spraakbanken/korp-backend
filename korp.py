@@ -60,6 +60,7 @@ import flask
 from flask import Flask, request, Response, stream_with_context
 from flask_mysqldb import MySQL
 from flask_cors import CORS
+from flask_compress import Compress
 
 ################################################################################
 # Nothing needs to be changed in this file. Use config.py for configuration.
@@ -83,6 +84,7 @@ QUERY_DELIM = ","
 
 
 app = Flask(__name__)
+Compress(app)
 CORS(app)
 
 # Configure database connection
