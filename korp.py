@@ -116,7 +116,10 @@ def main_handler(generator):
     def decorated(args=None):
         internal = args is not None
         if not internal:
-            args = request.values.to_dict()
+            if request.is_json:
+                args = request.get_json()
+            else:
+                args = request.values.to_dict()
 
         if not isinstance(args.get("cache"), bool):
             args["cache"] = bool(not args.get("cache", "").lower() == "false" and
@@ -135,7 +138,7 @@ def main_handler(generator):
                 error = {"ERROR": {"type": exc[0].__name__,
                                    "value": str(exc[1])
                                    }}
-                if "debug" in request.values:
+                if "debug" in args:
                     error["ERROR"]["traceback"] = "".join(traceback.format_exception(*exc)).splitlines()
                 return error
 
@@ -187,9 +190,9 @@ def main_handler(generator):
                 yield result
 
             starttime = time.time()
-            incremental = request.values.get("incremental", "").lower() == "true"
-            callback = request.values.get("callback")
-            indent = request.values.get("indent", None, type=int)
+            incremental = args.get("incremental", "").lower() == "true"
+            callback = args.get("callback")
+            indent = int(args.get("indent", 0))
 
             if incremental:
                 # Incremental response
@@ -221,7 +224,7 @@ def info(args):
     """Return information, either about a specific corpus
     or general information about the available corpora.
     """
-    if request.values.get("corpus"):
+    if args.get("corpus"):
         yield corpus_info(args)
     else:
         yield general_info(args)
@@ -444,7 +447,7 @@ def query(args):
     # assert_key("within", args, IS_IDENT)
     assert_key("cut", args, IS_NUMBER)
     assert_key("sort", args, r"")
-    assert_key("incremental", request.values, r"(true|false)")
+    assert_key("incremental", args, r"(true|false)")
 
     ############################################################################
     # First we read all parameters and translate them to CQP
@@ -1207,7 +1210,7 @@ def which_hits(corpora, stats, start, end):
 def struct_values(args):
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("struct", args, re.compile(r"^[\w_\d,>]+$"), True)
-    assert_key("incremental", request.values, r"(true|false)")
+    assert_key("incremental", args, r"(true|false)")
 
     incremental = args.get("incremental", "").lower() == "true"
 
@@ -3079,11 +3082,9 @@ def run_cqp(command, args=None, executable=config.CQP_EXECUTABLE, registry=confi
     Yield one result line at the time, disregarding empty lines.
     If there is an error, raise a CQPError exception.
     """
-    if not args:
-        args = request.values
     env = os.environ.copy()
     env["LC_COLLATE"] = config.LC_COLLATE
-    encoding = args.get("encoding") or config.CQP_ENCODING
+    encoding = args.get("encoding") or config.CQP_ENCODING if args else config.CQP_ENCODING
     if not isinstance(command, str):
         command = "\n".join(command)
     command = "set PrettyPrint off;\n" + command
