@@ -2311,8 +2311,6 @@ def timespan(args):
     The optional parameters are
      - granularity: granularity of result (y = year, m = month, d = day, h = hour, n = minute, s = second)
        (default: year)
-     - spans: if set to true, gives results as spans instead of points
-       (default: points)
      - combined: include combined results
        (default: true)
      - per_corpus: include results per corpus
@@ -2322,7 +2320,6 @@ def timespan(args):
     """
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("granularity", args, r"[ymdhnsYMDHNS]")
-    assert_key("spans", args, r"(true|false)")
     assert_key("combined", args, r"(true|false)")
     assert_key("per_corpus", args, r"(true|false)")
     assert_key("strategy", args, r"^[123]$")
@@ -2337,7 +2334,6 @@ def timespan(args):
     # check_authentication(corpora)
 
     granularity = (args.get("granularity") or "y").lower()
-    spans = (args.get("spans", "").lower() == "true")
     combined = (not args.get("combined", "").lower() == "false")
     per_corpus = (not args.get("per_corpus", "").lower() == "false")
     strategy = int(args.get("strategy") or 1)
@@ -2355,7 +2351,6 @@ def timespan(args):
 
     if use_cache:
         cachedata = (granularity,
-                     spans,
                      combined,
                      per_corpus,
                      fromdate,
@@ -2412,7 +2407,7 @@ def timespan(args):
             cursor = mysql.connection.cursor()
             cursor.execute(sql)
 
-            ns["result"] = timespan_calculator(cursor, granularity=granularity, spans=spans, combined=combined,
+            ns["result"] = timespan_calculator(cursor, granularity=granularity, combined=combined,
                                                per_corpus=per_corpus, strategy=strategy)
 
             if use_cache:
@@ -2433,7 +2428,7 @@ def timespan(args):
     yield ns["result"]
 
 
-def timespan_calculator(timedata, granularity="y", spans=False, combined=True, per_corpus=True, strategy=1):
+def timespan_calculator(timedata, granularity="y", combined=True, per_corpus=True, strategy=1):
     """Calculate timespan information for corpora.
 
     The required parameters are
@@ -2442,8 +2437,6 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
     The optional parameters are
      - granularity: granularity of result (y = year, m = month, d = day, h = hour, n = minute, s = second)
        (default: year)
-     - spans: give results as spans instead of points
-       (default: points)
      - combined: include combined results
        (default: true)
      - per_corpus: include results per corpus
@@ -2499,8 +2492,6 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
     def shorten(date, g):
         alt = 1 if len(date) % 2 else 0  # Handle years with three digits
         return int(date[:gs[g] - alt])
-
-    points = not spans
 
     if granularity == "y":
         df = "%Y"
@@ -2602,17 +2593,14 @@ def timespan_calculator(timedata, granularity="y", spans=False, combined=True, p
             else:
                 end = end[1] if end[0] == "t" else plusminusone(str(end[1]), add, df, True)
 
-            if points and start:
+            if start:
                 data["%d" % start] = 0
 
             for row in rows[corpus]:
                 if row["datefrom"] <= start and row["dateto"] >= end:
-                    if points:
-                        data[str(start if start else "")] += row["tokens"]
-                    else:
-                        data["%d - %d" % (start, end) if start is not None else ""] += row["tokens"]
+                    data[str(start if start else "")] += row["tokens"]
 
-            if points and end:
+            if end:
                 data["%d" % plusminusone(str(end), add, df, False)] = 0
 
         if combined and corpus == "__combined__":
