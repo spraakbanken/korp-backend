@@ -1,18 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 korp.py is a WSGI application for querying corpora available on the server.
-Currently it acts as a wrapper for the CQP querying language of Corpus Workbench.
+Currently it acts as a wrapper for the CQP Query Language of Corpus Workbench.
 
 Configuration is done by editing config.py.
 
 https://spraakbanken.gu.se/korp/
-
-Dependencies (install with 'pip install ...'):
-* flask
-* flask_cors
-* flask-mysqldb
-* gevent
-* python-dateutil
 """
 
 # Skip monkey patching if run through gunicorn (which does the patching for us)
@@ -56,7 +49,6 @@ import functools
 import math
 import random
 import config
-import flask
 from flask import Flask, request, Response, stream_with_context
 from flask_mysqldb import MySQL
 from flask_cors import CORS
@@ -80,7 +72,6 @@ IS_IDENT = re.compile(r"^[\w\-,|]+$")
 QUERY_DELIM = ","
 
 ################################################################################
-
 
 app = Flask(__name__)
 CORS(app)
@@ -2185,50 +2176,50 @@ def loglike(args):
     result = {}
 
     def anti_timeout(queue):
-            # If same CQP for both sets, handle as one query for better performance
-            if same_cqp:
-                args["cqp"] = args.get("set1_cqp")
-                args["corpus"] = QUERY_DELIM.join(corpora)
-                count_result = generator_to_dict(count(args))
+        # If same CQP for both sets, handle as one query for better performance
+        if same_cqp:
+            args["cqp"] = args.get("set1_cqp")
+            args["corpus"] = QUERY_DELIM.join(corpora)
+            count_result = generator_to_dict(count(args))
 
-                sets = [{"total": 0, "freq": defaultdict(int)}, {"total": 0, "freq": defaultdict(int)}]
-                for i, cset in enumerate((set1, set2)):
-                    for corpus in cset:
-                        sets[i]["total"] += count_result["corpora"][corpus]["sums"]["absolute"]
-                        if len(cset) == 1:
-                            sets[i]["freq"] = count_result["corpora"][corpus]["absolute"]
-                        else:
-                            for w, f in count_result["corpora"][corpus]["absolute"].items():
-                                sets[i]["freq"][w] += f
+            sets = [{"total": 0, "freq": defaultdict(int)}, {"total": 0, "freq": defaultdict(int)}]
+            for i, cset in enumerate((set1, set2)):
+                for corpus in cset:
+                    sets[i]["total"] += count_result["corpora"][corpus]["sums"]["absolute"]
+                    if len(cset) == 1:
+                        sets[i]["freq"] = count_result["corpora"][corpus]["absolute"]
+                    else:
+                        for w, f in count_result["corpora"][corpus]["absolute"].items():
+                            sets[i]["freq"][w] += f
 
-            else:
-                args1, args2 = args.copy(), args.copy()
-                args1["corpus"] = QUERY_DELIM.join(set1)
-                args1["cqp"] = args.get("set1_cqp")
-                args2["corpus"] = QUERY_DELIM.join(set2)
-                args2["cqp"] = args.get("set2_cqp")
-                count_result = [generator_to_dict(count(args1)), generator_to_dict(count(args2))]
+        else:
+            args1, args2 = args.copy(), args.copy()
+            args1["corpus"] = QUERY_DELIM.join(set1)
+            args1["cqp"] = args.get("set1_cqp")
+            args2["corpus"] = QUERY_DELIM.join(set2)
+            args2["cqp"] = args.get("set2_cqp")
+            count_result = [generator_to_dict(count(args1)), generator_to_dict(count(args2))]
 
-                sets = [{}, {}]
-                for i, cset in enumerate((set1, set2)):
-                    count_result_temp = count_result if same_cqp else count_result[i]
-                    sets[i]["total"] = count_result_temp["total"]["sums"]["absolute"]
-                    sets[i]["freq"] = count_result_temp["total"]["absolute"]
+            sets = [{}, {}]
+            for i, cset in enumerate((set1, set2)):
+                count_result_temp = count_result if same_cqp else count_result[i]
+                sets[i]["total"] = count_result_temp["total"]["sums"]["absolute"]
+                sets[i]["freq"] = count_result_temp["total"]["absolute"]
 
-            ll_list = compute_list(sets[0]["freq"], sets[0]["total"], sets[1]["freq"], sets[1]["total"])
-            (ws, avg, mi, ma) = compute_ll_stats(ll_list, maxresults, sets)
+        ll_list = compute_list(sets[0]["freq"], sets[0]["total"], sets[1]["freq"], sets[1]["total"])
+        (ws, avg, mi, ma) = compute_ll_stats(ll_list, maxresults, sets)
 
-            result["loglike"] = {}
-            result["average"] = avg
-            result["set1"] = {}
-            result["set2"] = {}
+        result["loglike"] = {}
+        result["average"] = avg
+        result["set1"] = {}
+        result["set2"] = {}
 
-            for (ll, w) in ws:
-                result["loglike"][w] = ll
-                result["set1"][w] = sets[0]["freq"].get(w, 0)
-                result["set2"][w] = sets[1]["freq"].get(w, 0)
+        for (ll, w) in ws:
+            result["loglike"][w] = ll
+            result["set1"][w] = sets[0]["freq"].get(w, 0)
+            result["set2"][w] = sets[1]["freq"].get(w, 0)
 
-            queue.put("DONE")
+        queue.put("DONE")
 
     for msg in prevent_timeout(anti_timeout):
         yield msg
