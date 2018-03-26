@@ -1365,7 +1365,8 @@ def count(args):
     The required parameters are
      - corpus: the CWB corpus
      - cqp: the CQP query string
-     - groupby: add once for each corpus positional or structural attribute
+     - groupby: comma separated list of positional attributes
+     - groupby_struct: comma separated list of structural attributes
 
     The optional parameters are
      - within: only search for matches within the given s-attribute (e.g., within a sentence)
@@ -1382,7 +1383,8 @@ def count(args):
     """
     assert_key("cqp", args, r"", True)
     assert_key("corpus", args, IS_IDENT, True)
-    assert_key("groupby", args, IS_IDENT, True)
+    assert_key("groupby", args, IS_IDENT, False)
+    assert_key("groupby_struct", args, IS_IDENT, False)
     assert_key("cut", args, IS_NUMBER)
     assert_key("ignore_case", args, IS_IDENT)
     assert_key("incremental", args, r"(true|false)")
@@ -1396,9 +1398,17 @@ def count(args):
 
     check_authentication(corpora)
 
-    groupby = args.get("groupby")
+    groupby = args.get("groupby") or []
     if isinstance(groupby, str):
         groupby = groupby.split(QUERY_DELIM)
+
+    groupby_struct = args.get("groupby_struct") or []
+    if isinstance(groupby_struct, str):
+        groupby_struct = groupby_struct.split(QUERY_DELIM)
+
+    assert groupby or groupby_struct, "Either 'groupby' or 'groupby_struct' needs to be specified."
+
+    groupby = [(g, False) for g in groupby] + [(g, True) for g in groupby_struct]
 
     ignore_case = args.get("ignore_case") or []
     if isinstance(ignore_case, str):
@@ -1521,23 +1531,26 @@ def count(args):
 
                         for i, ngram in enumerate(ngram_groups):
                             # Split value sets and treat each value as a hit
-                            if groupby[i] in split:
+                            if groupby[i][0] in split:
                                 tokens = [t + "|" for t in ngram.split(
                                     "| ")]  # We can't split on just space due to spaces in annotations
                                 tokens[-1] = tokens[-1][:-1]
-                                if groupby[i] in top:
-                                    split_tokens = [[x for x in token.split("|") if x][:top[groupby[i]]]
+                                if groupby[i][0] in top:
+                                    split_tokens = [[x for x in token.split("|") if x][:top[groupby[i][0]]]
                                                     if not token == "|" else ["|"] for token in tokens]
                                 else:
                                     split_tokens = [[x for x in token.split("|") if x] if not token == "|" else [""]
                                                     for token in tokens]
                                 ngrams = itertools.product(*split_tokens)
-                                ngrams = [" ".join(x) for x in ngrams]
+                                ngrams = tuple(x for x in ngrams)
                             else:
-                                ngrams = [ngram]
+                                if not groupby[i][1]:
+                                    ngrams = (tuple(ngram.split(" ")),)
+                                else:
+                                    ngrams = (ngram,)
 
                             # Remove multi word pointers
-                            if groupby[i] in strippointer:
+                            if groupby[i][0] in strippointer:
                                 for j in range(len(ngrams)):
                                     if ":" in ngrams[j]:
                                         ngramtemp, pointer = ngrams[j].rsplit(":", 1)
@@ -1549,7 +1562,6 @@ def count(args):
                         cross = list(itertools.product(*all_ngrams))
 
                         for ngram in cross:
-                            ngram = "/".join(ngram)
                             corpus_stats[query_no]["absolute"][ngram] += int(freq)
                             corpus_stats[query_no]["relative"][ngram] += int(freq) / float(corpus_size) * 1000000
                             corpus_stats[query_no]["sums"]["absolute"] += int(freq)
@@ -1599,11 +1611,28 @@ def count(args):
             for ngram, freq in total_stats[query_no]["absolute"].items():
                 total_stats[query_no]["relative"][ngram] = freq / float(ns.total_size) * 1000000
 
+        for corpus in corpora:
+            for relabs in ("absolute", "relative"):
+                new_list = []
+                for ngram, freq in result["corpora"][corpus][query_no][relabs].items():
+                    row = {"value": dict((key[0], ngram[i]) for i, key in enumerate(groupby)),
+                           "freq": freq}
+                    new_list.append(row)
+                result["corpora"][corpus][query_no][relabs] = new_list
+
         total_stats[query_no]["sums"]["relative"] = (total_stats[query_no]["sums"]["absolute"] / float(ns.total_size)
                                                      * 1000000 if ns.total_size > 0 else 0.0)
 
         if subcqp and query_no > 0:
             total_stats[query_no]["cqp"] = subcqp[query_no - 1]
+
+        for relabs in ("absolute", "relative"):
+            new_list = []
+            for ngram, freq in total_stats[query_no][relabs].items():
+                row = {"value": dict((key[0], ngram[i]) for i, key in enumerate(groupby)),
+                       "freq": freq}
+                new_list.append(row)
+                total_stats[query_no][relabs] = new_list
 
     result["total"] = total_stats if len(total_stats) > 1 else total_stats[0]
 
@@ -1775,9 +1804,9 @@ def count_time(args):
     strategy = int(args.get("strategy") or 1)
 
     if granularity in "hns":
-        groupby = ["text_datefrom", "text_timefrom", "text_dateto", "text_timeto"]
+        groupby = [(v, True) for v in ("text_datefrom", "text_timefrom", "text_dateto", "text_timeto")]
     else:
-        groupby = ["text_datefrom", "text_dateto"]
+        groupby = [(v, True) for v in ("text_datefrom", "text_dateto")]
 
     result = {"corpora": {}}
     corpora_sizes = {}
@@ -1962,13 +1991,10 @@ def count_query_worker(corpus, cqp, groupby, ignore_case, form, expand_prequerie
     cmd += ["info; .EOL.;"]
 
     # TODO: Match targets in a better way
-    if any("@[" in x for x in cqp):
-        match = "target"
-    else:
-        match = "match .. matchend"
+    has_target = any("@[" in x for x in cqp)
 
     cmd += ["""tabulate Last %s > "| sort | uniq -c | sort -nr";""" % ", ".join("%s %s%s" % (
-        match, g, " %c" if g in ignore_case else "") for g in groupby)]
+        "target" if has_target else ("match" if g[1] else "match .. matchend"), g[0], " %c" if g in ignore_case else "") for g in groupby)]
 
     if subcqp:
         cmd += ["mainresult=Last;"]
@@ -1979,7 +2005,7 @@ def count_query_worker(corpus, cqp, groupby, ignore_case, form, expand_prequerie
             cmd += ["mainresult;"]
             cmd += query_optimize(c, cqpextra_temp, find_match=True)[1]
             cmd += ["""tabulate Last %s > "| sort | uniq -c | sort -nr";""" % ", ".join(
-                "match .. matchend %s" % g for g in groupby)]
+                "match .. matchend %s" % g[0] for g in groupby)]
 
     cmd += ["exit;"]
 
@@ -2006,13 +2032,13 @@ def count_query_worker_simple(corpus, cqp, groupby, ignore_case, form, expand_pr
     """Worker for simple statistics queries which can be run using cwb-scan-corpus.
     Currently only used for searches on [] (any word)."""
 
-    lines = list(run_cwb_scan(corpus, groupby, form))
+    lines = list(run_cwb_scan(corpus, [g[0] for g in groupby], form))
     nr_hits = 0
 
     ic_index = []
     new_lines = {}
     if ignore_case:
-        ic_index = [i for i, g in enumerate(groupby) if g in ignore_case]
+        ic_index = [i for i, g in enumerate(groupby) if g[0] in ignore_case]
 
     for i in range(len(lines)):
         c, v = lines[i].split("\t", 1)
@@ -2187,9 +2213,11 @@ def loglike(args):
                 for corpus in cset:
                     sets[i]["total"] += count_result["corpora"][corpus]["sums"]["absolute"]
                     if len(cset) == 1:
-                        sets[i]["freq"] = count_result["corpora"][corpus]["absolute"]
+                        sets[i]["freq"] = dict((tuple((y[0], tuple(y[1])) for y in sorted(x["value"].items())), x["freq"])
+                                               for x in count_result["corpora"][corpus]["absolute"])
                     else:
-                        for w, f in count_result["corpora"][corpus]["absolute"].items():
+                        for w, f in ((tuple((y[0], tuple(y[1])) for y in sorted(x["value"].items())), x["freq"])
+                                     for x in count_result["corpora"][corpus]["absolute"]):
                             sets[i]["freq"][w] += f
 
         else:
@@ -2204,7 +2232,8 @@ def loglike(args):
             for i, cset in enumerate((set1, set2)):
                 count_result_temp = count_result if same_cqp else count_result[i]
                 sets[i]["total"] = count_result_temp["total"]["sums"]["absolute"]
-                sets[i]["freq"] = count_result_temp["total"]["absolute"]
+                sets[i]["freq"] = dict((tuple((y[0], tuple(y[1])) for y in sorted(x["value"].items())), x["freq"])
+                                       for x in count_result_temp["total"]["absolute"])
 
         ll_list = compute_list(sets[0]["freq"], sets[0]["total"], sets[1]["freq"], sets[1]["total"])
         (ws, avg, mi, ma) = compute_ll_stats(ll_list, maxresults, sets)
@@ -2215,9 +2244,10 @@ def loglike(args):
         result["set2"] = {}
 
         for (ll, w) in ws:
-            result["loglike"][w] = ll
-            result["set1"][w] = sets[0]["freq"].get(w, 0)
-            result["set2"][w] = sets[1]["freq"].get(w, 0)
+            w_formatted = " ".join(w[0][1])
+            result["loglike"][w_formatted] = ll
+            result["set1"][w_formatted] = sets[0]["freq"].get(w, 0)
+            result["set2"][w_formatted] = sets[1]["freq"].get(w, 0)
 
         queue.put("DONE")
 
