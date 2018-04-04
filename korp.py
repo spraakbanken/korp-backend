@@ -57,7 +57,7 @@ from flask_cors import CORS
 # Nothing needs to be changed in this file. Use config.py for configuration.
 
 # The version of this script
-KORP_VERSION = "7.0.1"
+KORP_VERSION = "7.0.2"
 KORP_VERSION_DATE = "2018-04-04"
 
 # Special symbols used by this script; they must NOT be in the corpus
@@ -1260,7 +1260,7 @@ def struct_values(args):
     def anti_timeout(queue):
         with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
             future_query = dict((executor.submit(count_query_worker_simple, corpus, None,
-                                                 struct.split(">"),
+                                                 [(s, True) for s in struct.split(">")],
                                                  False, args, False), (corpus, struct))
                                 for corpus in corpora for struct in structs if not (corpus, struct) in from_cache)
 
