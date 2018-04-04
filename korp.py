@@ -57,8 +57,8 @@ from flask_cors import CORS
 # Nothing needs to be changed in this file. Use config.py for configuration.
 
 # The version of this script
-KORP_VERSION = "7.0.0"
-KORP_VERSION_DATE = "2018-02-28"
+KORP_VERSION = "7.0.1"
+KORP_VERSION_DATE = "2018-04-04"
 
 # Special symbols used by this script; they must NOT be in the corpus
 END_OF_LINE = "-::-EOL-::-"
@@ -2597,7 +2597,7 @@ def timespan_calculator(timedata, granularity="y", combined=True, per_corpus=Tru
             nodes[corpus].add(("f", datefrom_short))
             nodes[corpus].add(("t", dateto_short))
 
-    corpusnodes = dict((k, sorted(v, key=lambda x: (not x[1], x[1] if x[1] else 0, x[0])))
+    corpusnodes = dict((k, sorted(v, key=lambda x: (x[1] if x[1] else 0, x[0])))
                        for k, v in nodes.items())
     result = {}
     if per_corpus:
