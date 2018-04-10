@@ -1661,7 +1661,7 @@ def count(args):
                 row = {"value": dict((key[0], ngram[i]) for i, key in enumerate(groupby)),
                        "freq": freq}
                 new_list.append(row)
-                total_stats[query_no][relabs] = new_list
+            total_stats[query_no][relabs] = new_list
 
     result["total"] = total_stats if len(total_stats) > 1 else total_stats[0]
 
