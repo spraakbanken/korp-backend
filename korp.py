@@ -50,7 +50,7 @@ import functools
 import math
 import random
 import config
-from flask import Flask, request, Response, stream_with_context
+from flask import Flask, request, Response, stream_with_context, copy_current_request_context
 from flask_mysqldb import MySQL
 from flask_cors import CORS
 
@@ -214,6 +214,7 @@ def prevent_timeout(generator):
         timeout = 15
         q = Queue()
 
+        @copy_current_request_context
         def error_catcher(g, *args, **kwargs):
             try:
                 g(*args, **kwargs)
