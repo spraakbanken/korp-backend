@@ -2505,7 +2505,8 @@ def timespan(args, no_combined_cache=False):
         ns["result"] = timespan_calculator(itertools.chain(cached_data, cursor), granularity=granularity,
                                            combined=combined, per_corpus=per_corpus, strategy=strategy)
 
-        cursor.close()
+        if corpora_rest:
+            cursor.close()
 
     if args["cache"] and not no_combined_cache:
         # Save cache for whole query
