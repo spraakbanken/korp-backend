@@ -59,7 +59,6 @@ from flask_cors import CORS
 
 # The version of this script
 KORP_VERSION = "7.0.4"
-KORP_VERSION_DATE = "2018-04-11"
 
 # Special symbols used by this script; they must NOT be in the corpus
 END_OF_LINE = "-::-EOL-::-"
