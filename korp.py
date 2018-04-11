@@ -59,7 +59,7 @@ from flask_cors import CORS
 
 # The version of this script
 KORP_VERSION = "7.0.4"
-KORP_VERSION_DATE = "2018-04-09"
+KORP_VERSION_DATE = "2018-04-11"
 
 # Special symbols used by this script; they must NOT be in the corpus
 END_OF_LINE = "-::-EOL-::-"
@@ -103,7 +103,7 @@ def main_handler(generator):
     """
 
     @functools.wraps(generator)  # Copy original function's information, needed by Flask
-    def decorated(args=None):
+    def decorated(args=None, *pargs, **kwargs):
         internal = args is not None
         if not internal:
             if request.is_json:
@@ -119,7 +119,7 @@ def main_handler(generator):
 
         if internal:
             # Function is internally used
-            return generator(args)
+            return generator(args, *pargs, **kwargs)
         else:
             # Function is called externally
             def error_handler():
@@ -188,10 +188,10 @@ def main_handler(generator):
 
             if incremental:
                 # Incremental response
-                return Response(stream_with_context(incremental_json(generator(args))), mimetype="application/json")
+                return Response(stream_with_context(incremental_json(generator(args, *pargs, **kwargs))), mimetype="application/json")
             else:
                 # We still use a streaming response even when non-incremental, to prevent timeouts
-                return Response(stream_with_context(full_json(generator(args))), mimetype="application/json")
+                return Response(stream_with_context(full_json(generator(args, *pargs, **kwargs))), mimetype="application/json")
 
     return decorated
 
@@ -200,14 +200,14 @@ def prevent_timeout(generator):
     """Decorator for long-running functions that might otherwise timeout."""
 
     @functools.wraps(generator)
-    def decorated(args=None):
+    def decorated(args=None, *pargs, **kwargs):
         if args["internal"]:
             # Internally used
-            yield from generator(args)
+            yield from generator(args, *pargs, **kwargs)
             return
 
         def f(queue):
-            for response in generator(args):
+            for response in generator(args, *pargs, **kwargs):
                 queue.put(response)
             queue.put("DONE")
 
@@ -215,9 +215,9 @@ def prevent_timeout(generator):
         q = Queue()
 
         @copy_current_request_context
-        def error_catcher(g, *args, **kwargs):
+        def error_catcher(g, *pargs, **kwargs):
             try:
-                g(*args, **kwargs)
+                g(*pargs, **kwargs)
             except Exception as e:
                 q.put(sys.exc_info())
 
