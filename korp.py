@@ -44,12 +44,18 @@ import urllib.error
 import base64
 import hashlib
 import itertools
-import pickle
 import traceback
 import functools
 import math
 import random
 import config
+try:
+    import pylibmc
+except ImportError:
+    print("Could not load pylibmc. Caching will be disabled.")
+    cache_disabled = True
+else:
+    cache_disabled = False
 from flask import Flask, request, Response, stream_with_context, copy_current_request_context
 from flask_mysqldb import MySQL
 from flask_cors import CORS
@@ -58,7 +64,7 @@ from flask_cors import CORS
 # Nothing needs to be changed in this file. Use config.py for configuration.
 
 # The version of this script
-KORP_VERSION = "7.0.4"
+KORP_VERSION = "7.0.5"
 
 # Special symbols used by this script; they must NOT be in the corpus
 END_OF_LINE = "-::-EOL-::-"
@@ -86,10 +92,6 @@ app.config["MYSQL_USE_UNICODE"] = True
 app.config["MYSQL_CURSORCLASS"] = "DictCursor"
 mysql = MySQL(app)
 
-# Create cache dir if needed
-if config.CACHE_DIR and not os.path.exists(config.CACHE_DIR):
-    os.makedirs(config.CACHE_DIR)
-
 
 def main_handler(generator):
     """Decorator wrapping all WSGI endpoints, handling errors and formatting.
@@ -113,8 +115,10 @@ def main_handler(generator):
         args["internal"] = internal
 
         if not isinstance(args.get("cache"), bool):
-            args["cache"] = bool(not args.get("cache", "").lower() == "false" and
-                                 config.CACHE_DIR and os.path.exists(config.CACHE_DIR))
+            args["cache"] = bool(not cache_disabled and
+                                 not args.get("cache", "").lower() == "false" and
+                                 config.CACHE_DIR and os.path.exists(config.CACHE_DIR) and
+                                 config.MEMCACHED_SERVERS)
 
         if internal:
             # Function is internally used
@@ -187,10 +191,12 @@ def main_handler(generator):
 
             if incremental:
                 # Incremental response
-                return Response(stream_with_context(incremental_json(generator(args, *pargs, **kwargs))), mimetype="application/json")
+                return Response(stream_with_context(incremental_json(generator(args, *pargs, **kwargs))),
+                                mimetype="application/json")
             else:
                 # We still use a streaming response even when non-incremental, to prevent timeouts
-                return Response(stream_with_context(full_json(generator(args, *pargs, **kwargs))), mimetype="application/json")
+                return Response(stream_with_context(full_json(generator(args, *pargs, **kwargs))),
+                                mimetype="application/json")
 
     return decorated
 
@@ -299,10 +305,9 @@ def general_info(args):
     """
 
     if args["cache"]:
-        cache_filename = os.path.join(config.CACHE_DIR, "info")
-        if os.path.isfile(cache_filename):
-            with open(cache_filename, "r") as cachefile:
-                result = json.load(cachefile)
+        with mc_pool.reserve() as mc:
+            result = mc.get("%s:info" % cache_prefix())
+        if result:
             if "debug" in args:
                 result.setdefault("DEBUG", {})
                 result["DEBUG"]["cache_read"] = True
@@ -319,16 +324,11 @@ def general_info(args):
     result = {"version": KORP_VERSION, "cqp-version": version, "corpora": list(corpora), "protected_corpora": protected}
 
     if args["cache"]:
-        if not os.path.exists(cache_filename):
-            cache_filename_temp = "%s.%s" % (cache_filename, str(uuid.uuid4()))
-
-            with open(cache_filename_temp, "w") as cachefile:
-                json.dump(result, cachefile)
-            os.rename(cache_filename_temp, cache_filename)
-
-            if "debug" in args:
-                result.setdefault("DEBUG", {})
-                result["DEBUG"]["cache_saved"] = True
+        with mc_pool.reserve() as mc:
+            added = mc.add("%s:info" % cache_prefix(), result)
+        if added and "debug" in args:
+            result.setdefault("DEBUG", {})
+            result["DEBUG"]["cache_saved"] = True
 
     return result
 
@@ -344,10 +344,10 @@ def corpus_info(args, no_combined_cache=False):
     if args["cache"]:
         checksum_combined = get_hash((sorted(corpora),))
         save_cache = []
-        cache_filename = os.path.join(config.CACHE_DIR, "info_" + checksum_combined)
-        if os.path.exists(cache_filename):
-            with open(cache_filename, "r") as f:
-                result = json.load(f)
+        combined_cache_key = "%s:info_%s" % (cache_prefix(), checksum_combined)
+        with mc_pool.reserve() as mc:
+            result = mc.get(combined_cache_key)
+        if result:
             if "debug" in args:
                 result.setdefault("DEBUG", {})
                 result["DEBUG"]["cache_read"] = True
@@ -363,10 +363,10 @@ def corpus_info(args, no_combined_cache=False):
     for corpus in corpora:
         # Check if corpus is cached
         if args["cache"]:
-            cache_filename = os.path.join(config.CACHE_DIR, "%s:info" % corpus)
-            if os.path.exists(cache_filename):
-                with open(cache_filename, "r") as f:
-                    result["corpora"][corpus] = json.load(f)
+            with mc_pool.reserve() as mc:
+                corpus_result = mc.get("%s:info" % cache_prefix(corpus))
+            if corpus_result:
+                result["corpora"][corpus] = corpus_result
             else:
                 save_cache.append(corpus)
         if corpus not in result["corpora"]:
@@ -409,28 +409,23 @@ def corpus_info(args, no_combined_cache=False):
         result["corpora"][corpus] = {"attrs": attrs, "info": info}
         if args["cache"]:
             if corpus in save_cache:
-                cache_filename = os.path.join(config.CACHE_DIR, "%s:info" % corpus)
-                cache_filename_temp = "%s.%s" % (cache_filename, str(uuid.uuid4()))
-                with open(cache_filename_temp, "w") as f:
-                    json.dump(result["corpora"][corpus], f)
-                os.rename(cache_filename_temp, cache_filename)
+                with mc_pool.reserve() as mc:
+                    mc.add("%s:info" % cache_prefix(corpus), result["corpora"][corpus])
 
     result["total_size"] = total_size
     result["total_sentences"] = total_sentences
 
     if args["cache"] and not no_combined_cache:
         # Cache whole query
-        cache_filename = os.path.join(config.CACHE_DIR, "info_" + checksum_combined)
-        if not os.path.exists(cache_filename):
-            cache_filename_temp = "%s.%s" % (cache_filename, str(uuid.uuid4()))
-
-            with open(cache_filename_temp, "w") as f:
-                json.dump(result, f)
-            os.rename(cache_filename_temp, cache_filename)
-
-            if "debug" in args:
-                result.setdefault("DEBUG", {})
-                result["DEBUG"]["cache_saved"] = True
+        with mc_pool.reserve() as mc:
+            try:
+                saved = mc.add(combined_cache_key, result)
+            except pylibmc.TooBig:
+                pass
+            else:
+                if saved and "debug" in args:
+                    result.setdefault("DEBUG", {})
+                    result["DEBUG"]["cache_saved"] = True
 
     return result
 
@@ -613,11 +608,10 @@ def query(args):
                                         cut,
                                         expand_prequeries,
                                         free_search))
-
-            cache_hits_filename = os.path.join(config.CACHE_DIR, "%s:query_size_%s" % (corpus, corpus_checksum))
-            if os.path.isfile(cache_hits_filename):
-                with open(cache_hits_filename, "r") as cache_hits:
-                    saved_statistics[corpus] = int(cache_hits.read())
+            with mc_pool.reserve() as mc:
+                cached_corpus_hits = mc.get("%s:query_size_%s" % (cache_prefix(corpus.split("|")[0]), corpus_checksum))
+            if cached_corpus_hits is not None:
+                saved_statistics[corpus] = cached_corpus_hits
 
     ns.start_local = start
     ns.end_local = end
@@ -889,17 +883,15 @@ def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, sh
         cache_query = "query_data_%s" % checksum
         cache_query_temp = cache_query + "_" + unique_id
 
-        cache_filename = os.path.join(config.CACHE_DIR, "%s:query_data_%s" % (corpus, checksum))
+        cache_filename = os.path.join(config.CACHE_DIR, "%s:query_data_%s" % (corpus.split("|")[0], checksum))
         cache_filename_temp = cache_filename + "_" + unique_id
 
-        cache_size_filename = os.path.join(config.CACHE_DIR, "%s:query_size_%s" % (corpus, checksum))
-        cache_size_filename_temp = cache_size_filename + "." + unique_id
+        cache_size_key = "%s:query_size_%s" % (cache_prefix(corpus.split("|")[0]), checksum)
 
-        is_cached = os.path.isfile(cache_filename) and os.path.isfile(cache_size_filename)
-        if is_cached:
-            with open(cache_size_filename, "r") as f:
-                cache_hits = f.read()
-        cached_no_hits = is_cached and int(cache_hits) == 0
+        with mc_pool.reserve() as mc:
+            cache_hits = mc.get(cache_size_key)
+        is_cached = cache_hits is not None and os.path.isfile(cache_filename)
+        cached_no_hits = cache_hits == 0
     else:
         is_cached = False
 
@@ -970,6 +962,8 @@ def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, sh
         # This exact query has been done before. Read corpus positions from cache.
         if not cached_no_hits:
             cmd += ["Last = %s;" % cache_query]
+            # Touch cache file to delay its removal
+            os.utime(cache_filename)
     else:
         for i, c in enumerate(cqp):
             cqpparams_temp = cqpparams.copy()
@@ -1042,12 +1036,10 @@ def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, sh
     nr_hits = next(lines)
     nr_hits = 0 if nr_hits == END_OF_LINE else int(nr_hits)
 
-    if use_cache and not is_cached:
+    if use_cache and not is_cached and not cached_no_hits:
         # Save number of hits
-        with open(cache_size_filename_temp, "w") as f:
-            f.write("%d\n" % nr_hits)
-
-        os.rename(cache_size_filename_temp, cache_size_filename)
+        with mc_pool.reserve() as mc:
+            mc.add(cache_size_key, nr_hits)
 
         try:
             os.rename(cache_filename_temp, cache_filename)
@@ -1276,16 +1268,12 @@ def struct_values(args):
         all_cache = True
         for corpus in corpora:
             for struct in structs:
-                checksum_data = (corpus, struct, split, stats)
-                checksum = get_hash(checksum_data)
-
-                cache_filename = os.path.join(config.CACHE_DIR, "%s:struct_values_%s" % (corpus, checksum))
-                if os.path.exists(cache_filename):
-                    with open(cache_filename, "r") as f:
-                        data = json.load(f)
+                checksum = get_hash((corpus, struct, split, stats))
+                with mc_pool.reserve() as mc:
+                    data = mc.get("%s:struct_values_%s" % (cache_prefix(corpus), checksum))
+                if data is not None:
                     result["corpora"].setdefault(corpus, {})
-                    if data:
-                        result["corpora"][corpus][struct] = data
+                    result["corpora"][corpus][struct] = data
                     if "debug" in args:
                         result.setdefault("DEBUG", {"caches_read": []})
                         result["DEBUG"]["caches_read"].append("%s:%s" % (corpus, struct))
@@ -1370,25 +1358,22 @@ def struct_values(args):
     result["combined"] = {}
 
     if args["cache"]:
-        unique_id = str(uuid.uuid4())
-
         for corpus in corpora:
             for struct in structs:
                 if (corpus, struct) in from_cache:
                     continue
-                checksum_data = (corpus, struct, split, stats)
-                checksum = get_hash(checksum_data)
-                cache_filename = os.path.join(config.CACHE_DIR, "%s:struct_values_%s" % (corpus, checksum))
-                cache_filename_temp = cache_filename + "." + unique_id
-
-                with open(cache_filename_temp, "w") as f:
-                    json.dump(result["corpora"][corpus].get(struct, []), f)
-                os.rename(cache_filename_temp, cache_filename)
-
-                if "debug" in args:
-                    result.setdefault("DEBUG", {})
-                    result["DEBUG"].setdefault("caches_saved", [])
-                    result["DEBUG"]["caches_saved"].append("%s:%s" % (corpus, struct))
+                checksum = get_hash((corpus, struct, split, stats))
+                cache_key = "%s:struct_values_%s" % (cache_prefix(corpus), checksum)
+                try:
+                    with mc_pool.reserve() as mc:
+                        mc.add(cache_key, result["corpora"][corpus].get(struct, {}))
+                except pylibmc.TooBig:
+                    pass
+                else:
+                    if "debug" in args:
+                        result.setdefault("DEBUG", {})
+                        result["DEBUG"].setdefault("caches_saved", [])
+                        result["DEBUG"]["caches_saved"].append("%s:%s" % (corpus, struct))
 
     yield result
 
@@ -1498,12 +1483,12 @@ def count(args):
                                         sorted(ignore_case),
                                         expand_prequeries))
 
-            cache_hits_filename = os.path.join(config.CACHE_DIR, "%s:count_size_%s" % (corpus, corpus_checksum))
-            if os.path.isfile(cache_hits_filename):
-                with open(cache_hits_filename, "r") as f:
-                    nr_hits, _ = f.read().split(";", 1)
+            with mc_pool.reserve() as mc:
+                cached_size = mc.get("%s:count_size_%s" % (cache_prefix(corpus), corpus_checksum))
+            if cached_size is not None:
+                nr_hits = cached_size[0]
                 read_from_cache += 1
-                if nr_hits == "0":
+                if nr_hits == 0:
                     zero_hits.append(corpus)
 
         if "debug" in args:
@@ -1970,25 +1955,19 @@ def count_query_worker(corpus, cqp, groupby, within, ignore_case=[], cut=None, e
                              within,
                              sorted(ignore_case),
                              expand_prequeries))
+        cache_key = "%s:count_data_%s" % (cache_prefix(corpus), checksum)
+        cache_size_key = "%s:count_size_%s" % (cache_prefix(corpus), checksum)
 
-        unique_id = str(uuid.uuid4())
+        with mc_pool.reserve() as mc:
+            cached_size = mc.get(cache_size_key)
+            if cached_size is not None:
+                corpus_hits, corpus_size = cached_size
+                if corpus_hits == 0:
+                    return [END_OF_LINE] * len(subcqp) if subcqp else [], corpus_hits, corpus_size
 
-        cache_filename = os.path.join(config.CACHE_DIR, "%s:count_%s" % (corpus, checksum))
-        cache_filename_temp = cache_filename + "." + unique_id
-
-        cache_size_filename = os.path.join(config.CACHE_DIR, "%s:count_size_%s" % (corpus, checksum))
-        cache_size_filename_temp = cache_size_filename + "." + unique_id
-
-        is_cached = os.path.isfile(cache_filename) and os.path.isfile(cache_size_filename)
-        if is_cached:
-            with open(cache_size_filename, "r") as f:
-                corpus_hits, corpus_size = (int(v) for v in f.read().split(";", 1))
-            if corpus_hits == 0:
-                return [END_OF_LINE] * len(subcqp) if subcqp else [], corpus_hits, corpus_size
-            with open(cache_filename, "rb") as f:
-                return pickle.load(f), corpus_hits, corpus_size
-    else:
-        is_cached = False
+                cached_result = mc.get(cache_key)
+                if cached_result is not None:
+                    return cached_result, corpus_hits, corpus_size
 
     do_optimize = True
     cqpparams = {"within": within,
@@ -2048,22 +2027,24 @@ def count_query_worker(corpus, cqp, groupby, within, ignore_case=[], cut=None, e
         elif line == END_OF_LINE:
             break
 
-    if use_cache and not is_cached:
-        with open(cache_size_filename_temp, "w") as f:
-            f.write("%d;%d" % (nr_hits, corpus_size))
-        os.rename(cache_size_filename_temp, cache_size_filename)
+    if use_cache:
+        with mc_pool.reserve() as mc:
+            mc.add(cache_size_key, (nr_hits, corpus_size))
 
         # Only save actual data if number of lines doesn't exceed the limit
         if nr_hits <= config.CACHE_MAX_STATS:
             lines = tuple(lines)
-            with open(cache_filename_temp, "wb") as f:
-                pickle.dump(lines, f, protocol=-1)
-            os.rename(cache_filename_temp, cache_filename)
+            with mc_pool.reserve() as mc:
+                try:
+                    mc.add(cache_key, lines)
+                except pylibmc.TooBig:
+                    pass
 
     return lines, nr_hits, corpus_size
 
 
-def count_query_worker_simple(corpus, cqp, groupby, within=None, ignore_case=[], expand_prequeries=True, use_cache=False):
+def count_query_worker_simple(corpus, cqp, groupby, within=None, ignore_case=[], expand_prequeries=True,
+                              use_cache=False):
     """Worker for simple statistics queries which can be run using cwb-scan-corpus.
     Currently only used for searches on [] (any word)."""
 
@@ -2416,10 +2397,10 @@ def timespan(args, no_combined_cache=False):
                                       fromdate,
                                       todate,
                                       sorted(corpora)))
-        cache_filename_combined = os.path.join(config.CACHE_DIR, "timespan_%s" % (get_hash(combined_checksum)))
-        if os.path.isfile(cache_filename_combined):
-            with open(cache_filename_combined, "rb") as f:
-                result = pickle.load(f)
+        cache_combined_key = "%s:timespan_%s" % (cache_prefix(), get_hash(combined_checksum))
+        with mc_pool.reserve() as mc:
+            result = mc.get(cache_combined_key)
+        if result is not None:
             if "debug" in args:
                 result.setdefault("DEBUG", {})
                 result["DEBUG"]["cache_read"] = True
@@ -2429,11 +2410,12 @@ def timespan(args, no_combined_cache=False):
         # Look for per-corpus caches
         for corpus in corpora:
             corpus_checksum = get_hash((fromdate, todate, granularity, strategy))
-            cache_filename = os.path.join(config.CACHE_DIR, "%s:timespan_%s" % (corpus, corpus_checksum))
+            cache_key = "%s:timespan_%s" % (cache_prefix(corpus), corpus_checksum)
+            with mc_pool.reserve() as mc:
+                corpus_cached_data = mc.get(cache_key)
 
-            if os.path.isfile(cache_filename):
-                with open(cache_filename, "rb") as f:
-                    cached_data.extend(pickle.load(f))
+            if corpus_cached_data is not None:
+                cached_data.extend(corpus_cached_data)
                 corpora_rest.remove(corpus)
 
     ns = {}
@@ -2477,16 +2459,14 @@ def timespan(args, no_combined_cache=False):
             cursor = tuple()
 
         if args["cache"]:
-            unique_id = str(uuid.uuid4())
-
             def save_cache(corpus, data):
                 corpus_checksum = get_hash((fromdate, todate, granularity, strategy))
-                cache_filename = os.path.join(config.CACHE_DIR, "%s:timespan_%s" % (corpus, corpus_checksum))
-                cache_filename_temp = cache_filename + "." + unique_id
-                if not os.path.isfile(cache_filename_temp):
-                    with open(cache_filename_temp, "wb") as f:
-                        pickle.dump(data, f, protocol=-1)
-                    os.rename(cache_filename_temp, cache_filename)
+                cache_key = "%s:timespan_%s" % (cache_prefix(corpus), corpus_checksum)
+                with mc_pool.reserve() as mc:
+                    try:
+                        mc.add(cache_key, data)
+                    except pylibmc.TooBig:
+                        pass
 
             corpus = None
             corpus_data = []
@@ -2510,10 +2490,11 @@ def timespan(args, no_combined_cache=False):
 
     if args["cache"] and not no_combined_cache:
         # Save cache for whole query
-        cache_filename_combined_temp = "%s.%s" % (cache_filename_combined, unique_id)
-        with open(cache_filename_combined_temp, "wb") as f:
-            pickle.dump(ns["result"], f, protocol=-1)
-        os.rename(cache_filename_combined_temp, cache_filename_combined)
+        with mc_pool.reserve() as mc:
+            try:
+                mc.add(cache_combined_key, ns["result"])
+            except pylibmc.TooBig:
+                pass
 
     yield ns["result"]
 
@@ -2766,10 +2747,10 @@ def relations(args):
                 corpus_checksum = get_hash((word,
                                             search_type,
                                             minfreq))
-                cache_filename = os.path.join(config.CACHE_DIR, "%s:relations_%s" % (corpus, corpus_checksum))
-                if os.path.isfile(cache_filename):
-                    with open(cache_filename, "rb") as f:
-                        relations_data.extend(pickle.load(f))
+                with mc_pool.reserve() as mc:
+                    cached_data = mc.get("%s:relations_%s" % (cache_prefix(corpus), corpus_checksum))
+                if cached_data is not None:
+                    relations_data.extend(cached_data)
                     corpora_rest.remove(corpus)
 
         selects = []
@@ -2843,16 +2824,14 @@ def relations(args):
     do_caching = False
     corpus = None
     corpus_data = []
-    unique_id = str(uuid.uuid4())
 
     def save_cache(corpus, data):
         corpus_checksum = get_hash((word, search_type, minfreq))
-        cache_filename = os.path.join(config.CACHE_DIR, "%s:relations_%s" % (corpus, corpus_checksum))
-        cache_filename_temp = cache_filename + "." + unique_id
-        if not os.path.isfile(cache_filename_temp):
-            with open(cache_filename_temp, "wb") as f:
-                pickle.dump(data, f, protocol=-1)
-            os.rename(cache_filename_temp, cache_filename)
+        with mc_pool.reserve() as mc:
+            try:
+                mc.add("%s:relations_%s" % (cache_prefix(corpus), corpus_checksum), data)
+            except pylibmc.TooBig:
+                pass
 
     for row in itertools.chain(relations_data, (None,), cursor_result):
         if row is None and args["cache"]:
@@ -3007,7 +2986,8 @@ def relations_sentences(args):
         querytime = time.time() - querystarttime
         corpora_dict = {}
         for row in cursor:
-            corpora_dict.setdefault(row["corpus"], {}).setdefault(row["sentence"], []).append((row["start"], row["end"]))
+            corpora_dict.setdefault(row["corpus"], {}).setdefault(row["sentence"], []).append(
+                (row["start"], row["end"]))
 
         cursor.close()
 
@@ -3066,39 +3046,90 @@ def relations_sentences(args):
 
 @app.route("/cache", methods=["GET", "POST"])
 @main_handler
+@prevent_timeout
 def cache_handler(args):
-    if not config.CACHE_DIR:
+    """Check for updated corpora and invalidate caches where needed. Also remove old disk cache."""
+    if not config.CACHE_DIR or not config.MEMCACHED_SERVERS or cache_disabled:
         return {}
 
     result = {}
 
-    if "clean" in args:
+    # Set up caching if needed
+    initial_setup = setup_cache()
+
+    if initial_setup:
+        result["initial_setup"] = True
+    else:
+        result = {"multi_invalidated": False,
+                  "corpora_invalidated": 0,
+                  "files_removed": 0}
         now = time.time()
 
         # Get modification time of corpus registry files
-        corpora = dict((os.path.basename(f).upper(), os.path.getmtime(f)) for f in
-                       glob.glob(os.path.join(config.CWB_REGISTRY, "*")))
-        last_update = max(corpora.values())
-        removed = 0
-        for corpus in corpora:
-            # Remove cache for updated corpora and old query data
-            for cachefile in glob.glob(os.path.join(config.CACHE_DIR, "%s:*" % corpus)):
-                cachefiletime = os.path.getmtime(cachefile)
-                if cachefiletime < corpora[corpus] or \
-                        (":query_data_" in cachefile and cachefiletime < (now - 20 * 60)):
-                    os.remove(cachefile)
-                    removed += 1
+        corpora = get_corpus_timestamps()
 
-        # Remove combined info and timespan caches older than the last updated corpus
-        for cachefile in itertools.chain(glob.glob(os.path.join(config.CACHE_DIR, "info*")),
-                                         glob.glob(os.path.join(config.CACHE_DIR, "timespan_*"))):
-            if os.path.getmtime(cachefile) < last_update:
+        with mc_pool.reserve() as mc:
+            # Invalidate cache for updated corpora
+            for corpus in corpora:
+                if mc.get("%s:last_update" % corpus, 0) < corpora[corpus]:
+                    mc.set("%s:version" % corpus, mc.get("%s:version" % corpus, 0) + 1)
+                    mc.set("%s:last_update" % corpus, corpora[corpus])
+                    result["corpora_invalidated"] += 1
+
+                    # Remove outdated query data
+                    for cachefile in glob.glob(os.path.join(config.CACHE_DIR, "%s:*" % corpus)):
+                        if os.path.getmtime(cachefile) < corpora[corpus]:
+                            os.remove(cachefile)
+                            result["files_removed"] += 1
+
+            # If any corpus has been updated or added, increase version to invalidate all combined caches
+            if result["corpora_invalidated"]:
+                mc.set("multi:version", mc.get("multi:version", 0) + 1)
+                result["multi_invalidated"] = True
+
+        # Remove old query data
+        for cachefile in glob.glob(os.path.join(config.CACHE_DIR, "*:query_data_*")):
+            if os.path.getmtime(cachefile) < (now - config.CACHE_LIFESPAN * 60):
                 os.remove(cachefile)
-                removed += 1
-
-        result["removed"] = removed
-
+                result["files_removed"] += 1
     yield result
+
+
+def cache_prefix(corpus="multi"):
+    with mc_pool.reserve() as mc:
+        return "%s:%d" % (corpus, mc.get("%s:version" % corpus, 0))
+
+
+def get_corpus_timestamps():
+    """Get modification time of corpus registry files."""
+    corpora = dict((os.path.basename(f).upper(), os.path.getmtime(f)) for f in
+                   glob.glob(os.path.join(config.CWB_REGISTRY, "*")))
+    return corpora
+
+
+def setup_cache():
+    """Setup disk cache and Memcached if needed."""
+    if cache_disabled:
+        return False
+
+    action_needed = False
+
+    # Create cache dir if needed
+    if config.CACHE_DIR and not os.path.exists(config.CACHE_DIR):
+        os.makedirs(config.CACHE_DIR)
+        action_needed = True
+
+    # Set up Memcached if needed
+    with mc_pool.reserve() as mc:
+        if "multi:version" not in mc:
+            corpora = get_corpus_timestamps()
+            mc.set("multi:version", 1)
+            for corpus in corpora:
+                mc.set("%s:version" % corpus, 1)
+                mc.set("%s:last_update" % corpus, corpora[corpus])
+            action_needed = True
+
+    return action_needed
 
 
 ################################################################################
@@ -3241,7 +3272,8 @@ def run_cqp(command, encoding=None, executable=config.CQP_EXECUTABLE, registry=c
             yield line
 
 
-def run_cwb_scan(corpus, attrs, encoding=config.CQP_ENCODING, executable=config.CWB_SCAN_EXECUTABLE, registry=config.CWB_REGISTRY):
+def run_cwb_scan(corpus, attrs, encoding=config.CQP_ENCODING, executable=config.CWB_SCAN_EXECUTABLE,
+                 registry=config.CWB_REGISTRY):
     """Call the cwb-scan-corpus binary with the given arguments.
     Yield one result line at the time, disregarding empty lines.
     If there is an error, raise a CQPError exception.
@@ -3297,8 +3329,7 @@ def assert_key(key, form, regexp, required=False):
 @app.route("/authenticate", methods=["GET", "POST"])
 @main_handler
 def authenticate(_=None):
-    """Authenticate a user against an authentication server.
-    """
+    """Authenticate a user against an authentication server."""
 
     auth_data = request.authorization
 
@@ -3363,6 +3394,20 @@ class CustomTracebackException(Exception):
     def __init__(self, exception):
         self.exception = exception
 
+
+# Set up Memcached client pool
+if config.MEMCACHED_SERVERS and not cache_disabled:
+    mc_client = pylibmc.Client(config.MEMCACHED_SERVERS)
+    mc_pool = pylibmc.ClientPool(mc_client, config.MEMCACHED_POOL_SIZE or 1)
+    with mc_pool.reserve() as mc:
+        try:
+            mc.get("test_connection")
+        except:
+            print("Could not connect to Memcached. Caching will be disabled.")
+            cache_disabled = True
+
+# Set up caching
+setup_cache()
 
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "dev":
