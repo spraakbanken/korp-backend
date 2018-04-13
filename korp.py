@@ -1443,7 +1443,7 @@ def count(args):
     start = int(args.get("start") or 0)
     end = int(args.get("end") or -1)
 
-    split = args.get("split", "")
+    split = args.get("split") or []
     if isinstance(split, str):
         split = split.split(QUERY_DELIM)
 
@@ -1603,32 +1603,23 @@ def count(args):
     for query_no in range(len(subcqp) + 1):
         if end > -1 and (start > 0 or len(total_stats[0]["absolute"]) > (end - start) + 1):
             # Only a selected range of results requested
-            total_absolute = sorted(total_stats[query_no]["absolute"].items(), key=lambda x: x[1],
-                                    reverse=True)[start:end + 1]
-            for ngram, freq in total_absolute:
-                total_stats[query_no]["relative"][ngram] = freq / float(ns.total_size) * 1000000
+            total_stats[query_no]["absolute"] = dict(
+                sorted(total_stats[query_no]["absolute"].items(), key=lambda x: x[1], reverse=True)[start:end + 1])
 
-                for corpus in corpora:
-                    new_corpus_part = {"absolute": {}, "relative": {},
-                                       "sums": result["corpora"][corpus][query_no]["sums"]}
-                    if ngram in result["corpora"][corpus][query_no]["absolute"]:
-                        new_corpus_part["absolute"][ngram] = result["corpora"][corpus][query_no]["absolute"][ngram]
-                    if ngram in result["corpora"][corpus][query_no]["relative"]:
-                        new_corpus_part["relative"][ngram] = result["corpora"][corpus][query_no]["relative"][ngram]
+            for corpus in corpora:
+                result["corpora"][corpus][query_no]["absolute"] = {k: v for k, v in result["corpora"][corpus][query_no][
+                    "absolute"].items() if k in total_stats[query_no]["absolute"]}
+                result["corpora"][corpus][query_no]["relative"] = {k: v for k, v in result["corpora"][corpus][query_no][
+                    "relative"].items() if k in total_stats[query_no]["absolute"]}
 
-                result["corpora"][corpus][query_no] = new_corpus_part
-
-            total_stats[query_no]["absolute"] = dict(total_absolute)
-        else:
-            # Complete results requested
-            for ngram, freq in total_stats[query_no]["absolute"].items():
-                total_stats[query_no]["relative"][ngram] = freq / float(ns.total_size) * 1000000
+        for ngram, freq in total_stats[query_no]["absolute"].items():
+            total_stats[query_no]["relative"][ngram] = freq / float(ns.total_size) * 1000000
 
         for corpus in corpora:
             for relabs in ("absolute", "relative"):
                 new_list = []
                 for ngram, freq in result["corpora"][corpus][query_no][relabs].items():
-                    row = {"value": dict((key[0], ngram[i]) for i, key in enumerate(groupby)),
+                    row = {"value": {key[0]: ngram[i] for i, key in enumerate(groupby)},
                            "freq": freq}
                     new_list.append(row)
                 result["corpora"][corpus][query_no][relabs] = new_list
