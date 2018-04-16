@@ -185,7 +185,7 @@ def main_handler(generator):
                 yield result
 
             starttime = time.time()
-            incremental = args.get("incremental", "").lower() == "true"
+            incremental = parse_bool(args, "incremental", False)
             callback = args.get("callback")
             indent = int(args.get("indent", 0))
 
@@ -499,8 +499,8 @@ def query(args):
     assert_key("sort", args, r"")
     assert_key("incremental", args, r"(true|false)")
 
-    incremental = args.get("incremental", "").lower() == "true"
-    free_search = args.get("in_order", "").lower() == "false"
+    incremental = parse_bool(args, "incremental", False)
+    free_search = not parse_bool(args, "in_order", True)
     use_cache = args["cache"]
     cut = args.get("cut")
 
@@ -518,7 +518,7 @@ def query(args):
         show_structs = show_structs.split(QUERY_DELIM)
     show_structs = set(show_structs)
 
-    expand_prequeries = not args.get("expand_prequeries", "").lower() == "false"
+    expand_prequeries = parse_bool(args, "expand_prequeries", True)
 
     start, end = int(args.get("start") or 0), int(args.get("end") or 9)
 
@@ -761,7 +761,7 @@ def optimize(args):
     if args.get("cut"):
         cqpparams["cut"] = args["cut"]
 
-    free_search = args.get("in_order", "").lower() == "false"
+    free_search = not parse_bool(args, "in_order", True)
 
     cqp = args["cqp"]
     result = {"cqp": query_optimize(cqp, cqpparams, find_match=False, expand=False, free_search=free_search)}
@@ -1241,9 +1241,8 @@ def struct_values(args):
     assert_key("struct", args, re.compile(r"^[\w_\d,>]+$"), True)
     assert_key("incremental", args, r"(true|false)")
 
-    incremental = args.get("incremental", "").lower() == "true"
-
-    stats = args.get("count", "").lower() == "true"
+    incremental = parse_bool(args, "incremental", False)
+    stats = parse_bool(args, "count", False)
 
     corpora = parse_corpora(args)
 
@@ -1417,7 +1416,7 @@ def count(args):
     assert_key("ignore_case", args, IS_IDENT)
     assert_key("incremental", args, r"(true|false)")
 
-    incremental = args.get("incremental", "").lower() == "true"
+    incremental = parse_bool(args, "incremental", False)
 
     corpora = parse_corpora(args)
 
@@ -1473,12 +1472,12 @@ def count(args):
     if subcqp:
         cqp.append(subcqp)
 
-    simple = args.get("simple", "").lower() == "true"
+    simple = parse_bool(args, "simple", False)
 
     if cqp == ["[]"]:
         simple = True
 
-    expand_prequeries = not args.get("expand_prequeries", "").lower() == "false"
+    expand_prequeries = parse_bool(args, "expand_prequeries", True)
 
     result = {"corpora": {}}
     debug = {}
@@ -1758,7 +1757,7 @@ def count_time(args):
     assert_key("to", args, r"^\d{14}$")
     assert_key("strategy", args, r"^[123]$")
 
-    incremental = args.get("incremental", "").lower() == "true"
+    incremental = parse_bool(args, "incremental", False)
 
     corpora = parse_corpora(args)
     check_authentication(corpora)
@@ -2409,8 +2408,8 @@ def timespan(args, no_combined_cache=False):
     # check_authentication(corpora)
 
     granularity = (args.get("granularity") or "y").lower()
-    combined = (not args.get("combined", "").lower() == "false")
-    per_corpus = (not args.get("per_corpus", "").lower() == "false")
+    combined = parse_bool(args, "combined", True)
+    per_corpus = parse_bool(args, "per_corpus", True)
     strategy = int(args.get("strategy") or 1)
     fromdate = args.get("from")
     todate = args.get("to")
@@ -2750,7 +2749,7 @@ def relations(args):
 
     check_authentication(corpora)
 
-    incremental = args.get("incremental", "").lower() == "true"
+    incremental = parse_bool(args, "incremental", False)
 
     word = args.get("word")
     search_type = args.get("type", "")
@@ -3423,6 +3422,13 @@ def generator_to_dict(generator):
     for v in generator:
         d.update(v)
     return d
+
+
+def parse_bool(args, key, default=True):
+    if default:
+        return args.get(key, "").lower() != "false"
+    else:
+        return args.get(key, "").lower() == "true"
 
 
 class CustomTracebackException(Exception):
