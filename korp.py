@@ -1406,6 +1406,8 @@ def count(args):
        subsequent queries should be run on the containing sentences (or any other structural attribute
        defined by 'within') from the previous query, or just the matches.
        (default: true)
+     - relative_to_struct: calculate relative frequencies based on total number of tokens with the same value for
+       the structural annotations specified here, instead of relative to corpus size.
     """
     assert_key("cqp", args, r"", True)
     assert_key("corpus", args, IS_IDENT, True)
@@ -1423,11 +1425,11 @@ def count(args):
 
     groupby = args.get("groupby") or []
     if isinstance(groupby, str):
-        groupby = groupby.split(QUERY_DELIM)
+        groupby = sorted(set(groupby.split(QUERY_DELIM)))
 
     groupby_struct = args.get("groupby_struct") or []
     if isinstance(groupby_struct, str):
-        groupby_struct = groupby_struct.split(QUERY_DELIM)
+        groupby_struct = sorted(set(groupby_struct.split(QUERY_DELIM)))
 
     assert groupby or groupby_struct, "Either 'groupby' or 'groupby_struct' needs to be specified."
 
@@ -1439,6 +1441,14 @@ def count(args):
     ignore_case = set(ignore_case)
 
     within = parse_within(args)
+
+    relative_to_struct = args.get("relative_to_struct") or []
+    if isinstance(relative_to_struct, str):
+        relative_to_struct = sorted(set(relative_to_struct.split(QUERY_DELIM)))
+    assert all(r in groupby_struct for r in
+               relative_to_struct), "All 'relative_to_struct' values also need to be present in 'groupby_struct'."
+
+    relative_to = [(r, True) for r in relative_to_struct]
 
     start = int(args.get("start") or 0)
     end = int(args.get("end") or -1)
@@ -1481,6 +1491,7 @@ def count(args):
                                         groupby,
                                         within[corpus],
                                         sorted(ignore_case),
+                                        relative_to,
                                         expand_prequeries))
 
             with mc_pool.reserve() as mc:
@@ -1500,6 +1511,24 @@ def count(args):
 
     ns = Namespace()  # To make variables writable from nested functions
     ns.total_size = 0
+
+    if relative_to:
+        relative_args = {
+            "cqp": "[]",
+            "corpus": args.get("corpus"),
+            "groupby_struct": relative_to_struct,
+            "split": split
+        }
+
+        relative_to_result = generator_to_dict(count(relative_args))
+        relative_to_freqs = {"total": {}, "corpora": defaultdict(dict)}
+
+        for row in relative_to_result["total"]["absolute"]:
+            relative_to_freqs["total"][tuple(v for k, v in sorted(row["value"].items()))] = row["freq"]
+
+        for corpus in relative_to_result["corpora"]:
+            for row in relative_to_result["corpora"][corpus]["absolute"]:
+                relative_to_freqs["corpora"][corpus][tuple(v for k, v in sorted(row["value"].items()))] = row["freq"]
 
     count_function = count_query_worker if not simple else count_query_worker_simple
 
@@ -1549,6 +1578,7 @@ def count(args):
                         ngram_groups = [ngram]
 
                     all_ngrams = []
+                    relative_to_pos = []
 
                     for i, ngram in enumerate(ngram_groups):
                         # Split value sets and treat each value as a hit
@@ -1581,15 +1611,28 @@ def count(args):
 
                         all_ngrams.append(ngrams)
 
+                        if relative_to and groupby[i] in relative_to:
+                            relative_to_pos.append(i)
+
                     cross = list(itertools.product(*all_ngrams))
 
                     for ngram in cross:
                         corpus_stats[query_no]["absolute"][ngram] += int(freq)
-                        corpus_stats[query_no]["relative"][ngram] += int(freq) / float(corpus_size) * 1000000
                         corpus_stats[query_no]["sums"]["absolute"] += int(freq)
-                        corpus_stats[query_no]["sums"]["relative"] += int(freq) / float(corpus_size) * 1000000
                         total_stats[query_no]["absolute"][ngram] += int(freq)
                         total_stats[query_no]["sums"]["absolute"] += int(freq)
+
+                        if relative_to:
+                            relativeto_ngram = tuple(ngram[pos] for pos in relative_to_pos)
+                            corpus_stats[query_no]["relative"][ngram] += int(freq) / float(
+                                relative_to_freqs["corpora"][corpus][relativeto_ngram]) * 1000000
+                            corpus_stats[query_no]["sums"]["relative"] += int(freq) / float(
+                                relative_to_freqs["corpora"][corpus][relativeto_ngram]) * 1000000
+                            total_stats[query_no]["relative"][ngram] += int(freq) / float(
+                                relative_to_freqs["total"][relativeto_ngram]) * 1000000
+                        else:
+                            corpus_stats[query_no]["relative"][ngram] += int(freq) / float(corpus_size) * 1000000
+                            corpus_stats[query_no]["sums"]["relative"] += int(freq) / float(corpus_size) * 1000000
 
                 result["corpora"][corpus] = corpus_stats
 
@@ -1612,8 +1655,9 @@ def count(args):
                 result["corpora"][corpus][query_no]["relative"] = {k: v for k, v in result["corpora"][corpus][query_no][
                     "relative"].items() if k in total_stats[query_no]["absolute"]}
 
-        for ngram, freq in total_stats[query_no]["absolute"].items():
-            total_stats[query_no]["relative"][ngram] = freq / float(ns.total_size) * 1000000
+        if not relative_to:
+            for ngram, freq in total_stats[query_no]["absolute"].items():
+                total_stats[query_no]["relative"][ngram] = freq / float(ns.total_size) * 1000000
 
         for corpus in corpora:
             for relabs in ("absolute", "relative"):
