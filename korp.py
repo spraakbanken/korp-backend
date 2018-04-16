@@ -1242,10 +1242,11 @@ def struct_values(args):
     assert_key("incremental", args, r"(true|false)")
 
     incremental = parse_bool(args, "incremental", False)
-    stats = parse_bool(args, "count", False)
+    include_count = parse_bool(args, "count", False)
 
+    per_corpus = parse_bool(args, "per_corpus", True)
+    combined = parse_bool(args, "combined", True)
     corpora = parse_corpora(args)
-
     check_authentication(corpora)
 
     structs = args.get("struct")
@@ -1258,7 +1259,7 @@ def struct_values(args):
 
     ns = Namespace()  # To make variables writable from nested functions
 
-    result = {"corpora": defaultdict(dict)}
+    result = {"corpora": defaultdict(dict), "combined": {}}
     total_stats = defaultdict(set)
 
     from_cache = set()  # Keep track of what has been read from cache
@@ -1267,7 +1268,7 @@ def struct_values(args):
         all_cache = True
         for corpus in corpora:
             for struct in structs:
-                checksum = get_hash((corpus, struct, split, stats))
+                checksum = get_hash((corpus, struct, split, include_count))
                 with mc_pool.reserve() as mc:
                     data = mc.get("%s:struct_values_%s" % (cache_prefix(corpus), checksum))
                 if data is not None:
@@ -1279,89 +1280,106 @@ def struct_values(args):
                     from_cache.add((corpus, struct))
                 else:
                     all_cache = False
+    else:
+        all_cache = False
 
-        if all_cache:
-            result["combined"] = {}
-            yield result
-            return
+    if not all_cache:
+        ns.progress_count = 0
+        if incremental:
+            yield ({"progress_corpora": list(corpora)})
 
-    ns.progress_count = 0
-    if incremental:
-        yield ({"progress_corpora": list(corpora)})
+        with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
+            future_query = dict((executor.submit(count_query_worker_simple, corpus, cqp=None,
+                                                 groupby=[(s, True) for s in struct.split(">")],
+                                                 use_cache=args["cache"]), (corpus, struct))
+                                for corpus in corpora for struct in structs if not (corpus, struct) in from_cache)
 
-    with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-        future_query = dict((executor.submit(count_query_worker_simple, corpus, cqp=None,
-                                             groupby=[(s, True) for s in struct.split(">")],
-                                             use_cache=args["cache"]), (corpus, struct))
-                            for corpus in corpora for struct in structs if not (corpus, struct) in from_cache)
+            for future in futures.as_completed(future_query):
+                corpus, struct = future_query[future]
+                if future.exception() is not None:
+                    raise CQPError(future.exception())
+                else:
+                    lines, nr_hits, corpus_size = future.result()
 
-        for future in futures.as_completed(future_query):
-            corpus, struct = future_query[future]
-            if future.exception() is not None:
-                raise CQPError(future.exception())
-            else:
-                lines, nr_hits, corpus_size = future.result()
+                    corpus_stats = {} if include_count else set()
+                    vals_dict = {}
+                    struct_list = struct.split(">")
 
-                corpus_stats = {} if stats else set()
-                vals_dict = {}
-                struct_list = struct.split(">")
+                    for line in lines:
+                        freq, val = line.lstrip().split(" ", 1)
 
-                for line in lines:
-                    freq, val = line.lstrip().split(" ", 1)
+                        if ">" in struct:
+                            vals = val.split("\t")
+
+                            if split:
+                                vals = [[x for x in n.split("|") if x] if struct_list[i] in split and n else [n] for
+                                        i, n in enumerate(vals)]
+                                vals_prod = itertools.product(*vals)
+                            else:
+                                vals_prod = [vals]
+
+                            for val in vals_prod:
+                                prev = vals_dict
+                                for i, n in enumerate(val):
+                                    if include_count and i == len(val) - 1:
+                                        prev.setdefault(n, 0)
+                                        prev[n] += int(freq)
+                                        break
+                                    elif not include_count and i == len(val) - 1:
+                                        prev.append(n)
+                                        break
+                                    elif not include_count and i == len(val) - 2:
+                                        prev.setdefault(n, [])
+                                    else:
+                                        prev.setdefault(n, {})
+                                    prev = prev[n]
+                        else:
+                            if struct in split:
+                                vals = [x for x in val.split("|") if x] if val else [""]
+                            else:
+                                vals = [val]
+                            for val in vals:
+                                if include_count:
+                                    corpus_stats[val] = int(freq)
+                                else:
+                                    corpus_stats.add(val)
 
                     if ">" in struct:
-                        vals = val.split("\t")
+                        result["corpora"][corpus][struct] = vals_dict
+                    elif corpus_stats:
+                        result["corpora"][corpus][struct] = corpus_stats if include_count else sorted(corpus_stats)
 
-                        if split:
-                            vals = [[x for x in n.split("|") if x] if struct_list[i] in split and n else [n] for
-                                    i, n in enumerate(vals)]
-                            vals_prod = itertools.product(*vals)
-                        else:
-                            vals_prod = [vals]
+                    if incremental:
+                        yield {"progress_%d" % ns.progress_count: corpus}
+                        ns.progress_count += 1
 
-                        for val in vals_prod:
-                            prev = vals_dict
-                            for i, n in enumerate(val):
-                                if stats and i == len(val) - 1:
-                                    prev.setdefault(n, 0)
-                                    prev[n] += int(freq)
-                                    break
-                                elif not stats and i == len(val) - 1:
-                                    prev.append(n)
-                                    break
-                                elif not stats and i == len(val) - 2:
-                                    prev.setdefault(n, [])
-                                else:
-                                    prev.setdefault(n, {})
-                                prev = prev[n]
-                    else:
-                        if struct in split:
-                            vals = [x for x in val.split("|") if x] if val else [""]
-                        else:
-                            vals = [val]
-                        for val in vals:
-                            if stats:
-                                corpus_stats[val] = int(freq)
-                            else:
-                                corpus_stats.add(val)
+    def merge(d1, d2):
+        merged = deepcopy(d1)
+        for key in d2:
+            if key in d1:
+                if isinstance(d1[key], dict) and isinstance(d2[key], dict):
+                    merged[key] = merge(d1[key], d2[key])
+                elif isinstance(d1[key], int):
+                    merged[key] += d2[key]
+                elif isinstance(d1[key], list):
+                    merged[key].extend(d2[key])
+                    merged[key] = sorted(set(merged[key]))
+            else:
+                merged[key] = d2[key]
+        return merged
 
-                if ">" in struct:
-                    result["corpora"][corpus][struct] = vals_dict
-                elif corpus_stats:
-                    result["corpora"][corpus][struct] = corpus_stats if stats else sorted(corpus_stats)
+    if combined:
+        for corpus in result["corpora"]:
+            result["combined"] = merge(result["combined"], result["corpora"][corpus])
+    else:
+        del result["combined"]
 
-                if incremental:
-                    yield {"progress_%d" % ns.progress_count: corpus}
-                    ns.progress_count += 1
-
-    result["combined"] = {}
-
-    if args["cache"]:
+    if args["cache"] and not all_cache:
         for corpus in corpora:
             for struct in structs:
                 if (corpus, struct) in from_cache:
                     continue
-                checksum = get_hash((corpus, struct, split, stats))
+                checksum = get_hash((corpus, struct, split, include_count))
                 cache_key = "%s:struct_values_%s" % (cache_prefix(corpus), checksum)
                 try:
                     with mc_pool.reserve() as mc:
@@ -1373,6 +1391,9 @@ def struct_values(args):
                         result.setdefault("DEBUG", {})
                         result["DEBUG"].setdefault("caches_saved", [])
                         result["DEBUG"]["caches_saved"].append("%s:%s" % (corpus, struct))
+
+    if not per_corpus:
+        del result["corpora"]
 
     yield result
 
