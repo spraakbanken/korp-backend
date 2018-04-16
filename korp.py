@@ -1451,7 +1451,8 @@ def count(args):
     if isinstance(groupby_struct, str):
         groupby_struct = sorted(set(groupby_struct.split(QUERY_DELIM)))
 
-    assert groupby or groupby_struct, "Either 'groupby' or 'groupby_struct' needs to be specified."
+    if not groupby and not groupby_struct:
+        groupby = ["word"]
 
     groupby = [(g, False) for g in groupby] + [(g, True) for g in groupby_struct]
 
