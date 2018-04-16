@@ -256,7 +256,7 @@ def parse_corpora(args):
 
 
 def parse_within(args):
-    within = defaultdict(lambda: args.get("defaultwithin"))
+    within = defaultdict(lambda: args.get("default_within", args.get("defaultwithin")))
 
     if args.get("within"):
         if ":" not in args.get("within"):
@@ -469,7 +469,7 @@ def query(args):
     Each match contains position information and a list of the words and attributes in the match.
 
     The required parameters are
-     - corpus: the CWB corpus. More than one parameter can be used.
+     - corpus: comma separated list of CWB corpora
      - cqp: the CQP query string
      - start, end: which result rows that should be returned
 
@@ -527,12 +527,12 @@ def query(args):
 
     within = parse_within(args)
 
-    # Parse "context"/"leftcontext"/"rightcontext"/"defaultcontext"
-    defaultcontext = args.get("defaultcontext") or "10 words"
-    context = defaultdict(lambda: (defaultcontext,))
+    # Parse "context"/"left_context"/"right_context"/"default_context"
+    default_context = args.get("default_context", args.get("defaultcontext")) or "10 words"
+    context = defaultdict(lambda: (default_context,))
     contexts = {}
 
-    for c in ("leftcontext", "rightcontext", "context"):
+    for c in ("left_context", "right_context", "context"):
         cv = args.get(c, "")
         if cv:
             if ":" not in cv:
@@ -542,11 +542,11 @@ def query(args):
             contexts[c] = {}
 
     for corpus in set(k for v in contexts.values() for k in v.keys()):
-        if corpus in contexts["leftcontext"] or corpus in contexts["rightcontext"]:
-            context[corpus] = (contexts["leftcontext"].get(corpus, defaultcontext),
-                               contexts["rightcontext"].get(corpus, defaultcontext))
+        if corpus in contexts["left_context"] or corpus in contexts["right_context"]:
+            context[corpus] = (contexts["left_context"].get(corpus, default_context),
+                               contexts["right_context"].get(corpus, default_context))
         else:
-            context[corpus] = (contexts["context"].get(corpus, defaultcontext),)
+            context[corpus] = (contexts["context"].get(corpus, default_context),)
 
     # Sort numbered CQP-queries numerically
     cqp, _ = parse_cqp_subcqp(args)
@@ -563,7 +563,7 @@ def query(args):
 
     result = {"kwic": []}
 
-    # Checksum for whole query, used to verify 'querydata' from the client
+    # Checksum for whole query, used to verify 'query_data' from the client
     checksum = get_hash((sorted(corpora),
                          cqp,
                          sorted(within.items()),
@@ -580,28 +580,28 @@ def query(args):
     statistics = {}
 
     saved_statistics = {}
-    querydata = args.get("querydata")
+    query_data = args.get("query_data", args.get("querydata"))
 
-    if querydata:
+    if query_data:
         try:
-            querydata = zlib.decompress(base64.b64decode(
-                querydata.replace("\\n", "\n").replace("-", "+").replace("_", "/"))).decode("UTF-8")
+            query_data = zlib.decompress(base64.b64decode(
+                query_data.replace("\\n", "\n").replace("-", "+").replace("_", "/"))).decode("UTF-8")
         except:
             if "debug" in args:
-                debug["querydata_unparseable"] = True
+                debug["query_data_unparseable"] = True
         else:
             if "debug" in args:
-                debug["querydata_read"] = True
-            saved_checksum, stats_temp = querydata.split(";", 1)
+                debug["query_data_read"] = True
+            saved_checksum, stats_temp = query_data.split(";", 1)
             if saved_checksum == checksum:
                 for pair in stats_temp.split(";"):
                     corpus, hits = pair.split(":")
                     saved_statistics[corpus] = int(hits)
             elif "debug" in args:
-                debug["querydata_checksum_mismatch"] = True
+                debug["query_data_checksum_mismatch"] = True
 
     if use_cache and not saved_statistics:
-        # Querydata parsing failed or was missing, so look for cached hits instead
+        # Query data parsing failed or was missing, so look for cached hits instead
         for corpus in corpora:
             corpus_checksum = get_hash((cqp,
                                         within[corpus],
@@ -742,9 +742,10 @@ def query(args):
     result["hits"] = ns.total_hits
     result["corpus_hits"] = statistics
     result["corpus_order"] = corpora
-    result["querydata"] = binascii.b2a_base64(zlib.compress(
+    result["query_data"] = binascii.b2a_base64(zlib.compress(
         bytes(checksum + ";" + ";".join("%s:%d" % (c, h) for c, h in statistics.items()),
               "utf-8"))).decode("utf-8").replace("+", "-").replace("/", "_")
+    result["querydata"] = result["query_data"]  # For backward compatibility
 
     if debug:
         result["DEBUG"] = debug
@@ -1290,7 +1291,7 @@ def struct_values(args):
 
         with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
             future_query = dict((executor.submit(count_query_worker_simple, corpus, cqp=None,
-                                                 groupby=[(s, True) for s in struct.split(">")],
+                                                 group_by=[(s, True) for s in struct.split(">")],
                                                  use_cache=args["cache"]), (corpus, struct))
                                 for corpus in corpora for struct in structs if not (corpus, struct) in from_cache)
 
@@ -1409,10 +1410,11 @@ def count(args):
     """Perform a CQP query and return a count of the given words/attrs.
 
     The required parameters are
-     - corpus: the CWB corpus
+     - corpus: comma separated list of CWB corpora
      - cqp: the CQP query string
-     - groupby: comma separated list of positional attributes
-     - groupby_struct: comma separated list of structural attributes
+     One or more of:
+       - group_by: comma separated list of positional attributes
+       - group_by_struct: comma separated list of structural attributes
 
     The optional parameters are
      - within: only search for matches within the given s-attribute (e.g., within a sentence)
@@ -1431,8 +1433,8 @@ def count(args):
     """
     assert_key("cqp", args, r"", True)
     assert_key("corpus", args, IS_IDENT, True)
-    assert_key("groupby", args, IS_IDENT, False)
-    assert_key("groupby_struct", args, IS_IDENT, False)
+    assert_key("group_by", args, IS_IDENT, False)
+    assert_key("group_by_struct", args, IS_IDENT, False)
     assert_key("cut", args, IS_NUMBER)
     assert_key("ignore_case", args, IS_IDENT)
     assert_key("incremental", args, r"(true|false)")
@@ -1443,18 +1445,18 @@ def count(args):
 
     check_authentication(corpora)
 
-    groupby = args.get("groupby") or []
-    if isinstance(groupby, str):
-        groupby = sorted(set(groupby.split(QUERY_DELIM)))
+    group_by = args.get("group_by", args.get("groupby")) or []
+    if isinstance(group_by, str):
+        group_by = sorted(set(group_by.split(QUERY_DELIM)))
 
-    groupby_struct = args.get("groupby_struct") or []
-    if isinstance(groupby_struct, str):
-        groupby_struct = sorted(set(groupby_struct.split(QUERY_DELIM)))
+    group_by_struct = args.get("group_by_struct", args.get("groupby_struct")) or []
+    if isinstance(group_by_struct, str):
+        group_by_struct = sorted(set(group_by_struct.split(QUERY_DELIM)))
 
-    if not groupby and not groupby_struct:
-        groupby = ["word"]
+    if not group_by and not group_by_struct:
+        group_by = ["word"]
 
-    groupby = [(g, False) for g in groupby] + [(g, True) for g in groupby_struct]
+    group_by = [(g, False) for g in group_by] + [(g, True) for g in group_by_struct]
 
     ignore_case = args.get("ignore_case") or []
     if isinstance(ignore_case, str):
@@ -1466,8 +1468,8 @@ def count(args):
     relative_to_struct = args.get("relative_to_struct") or []
     if isinstance(relative_to_struct, str):
         relative_to_struct = sorted(set(relative_to_struct.split(QUERY_DELIM)))
-    assert all(r in groupby_struct for r in
-               relative_to_struct), "All 'relative_to_struct' values also need to be present in 'groupby_struct'."
+    assert all(r in group_by_struct for r in
+               relative_to_struct), "All 'relative_to_struct' values also need to be present in 'group_by_struct'."
 
     relative_to = [(r, True) for r in relative_to_struct]
 
@@ -1478,9 +1480,9 @@ def count(args):
     if isinstance(split, str):
         split = split.split(QUERY_DELIM)
 
-    strippointer = args.get("strippointer", "")
-    if isinstance(strippointer, str):
-        strippointer = strippointer.split(QUERY_DELIM)
+    strip_pointer = args.get("strip_pointer", "")
+    if isinstance(strip_pointer, str):
+        strip_pointer = strip_pointer.split(QUERY_DELIM)
 
     top = args.get("top", "")
     if isinstance(top, str):
@@ -1509,7 +1511,7 @@ def count(args):
     if args["cache"]:
         for corpus in corpora:
             corpus_checksum = get_hash((cqp,
-                                        groupby,
+                                        group_by,
                                         within[corpus],
                                         sorted(ignore_case),
                                         relative_to,
@@ -1537,7 +1539,7 @@ def count(args):
         relative_args = {
             "cqp": "[]",
             "corpus": args.get("corpus"),
-            "groupby_struct": relative_to_struct,
+            "group_by_struct": relative_to_struct,
             "split": split
         }
 
@@ -1565,7 +1567,7 @@ def count(args):
             result["corpora"][corpus][i + 1]["cqp"] = subcqp[i]
 
     with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-        future_query = dict((executor.submit(count_function, corpus=corpus, cqp=cqp, groupby=groupby,
+        future_query = dict((executor.submit(count_function, corpus=corpus, cqp=cqp, group_by=group_by,
                                              within=within[corpus], ignore_case=ignore_case,
                                              expand_prequeries=expand_prequeries,
                                              use_cache=args["cache"]), corpus)
@@ -1593,7 +1595,7 @@ def count(args):
                         continue
                     freq, ngram = line.lstrip().split(" ", 1)
 
-                    if len(groupby) > 1:
+                    if len(group_by) > 1:
                         ngram_groups = ngram.split("\t")
                     else:
                         ngram_groups = [ngram]
@@ -1603,12 +1605,12 @@ def count(args):
 
                     for i, ngram in enumerate(ngram_groups):
                         # Split value sets and treat each value as a hit
-                        if groupby[i][0] in split:
+                        if group_by[i][0] in split:
                             tokens = [t + "|" for t in ngram.split(
                                 "| ")]  # We can't split on just space due to spaces in annotations
                             tokens[-1] = tokens[-1][:-1]
-                            if groupby[i][0] in top:
-                                split_tokens = [[x for x in token.split("|") if x][:top[groupby[i][0]]]
+                            if group_by[i][0] in top:
+                                split_tokens = [[x for x in token.split("|") if x][:top[group_by[i][0]]]
                                                 if not token == "|" else ["|"] for token in tokens]
                             else:
                                 split_tokens = [[x for x in token.split("|") if x] if not token == "|" else [""]
@@ -1616,13 +1618,13 @@ def count(args):
                             ngrams = itertools.product(*split_tokens)
                             ngrams = tuple(x for x in ngrams)
                         else:
-                            if not groupby[i][1]:
+                            if not group_by[i][1]:
                                 ngrams = (tuple(ngram.split(" ")),)
                             else:
                                 ngrams = (ngram,)
 
                         # Remove multi word pointers
-                        if groupby[i][0] in strippointer:
+                        if group_by[i][0] in strip_pointer:
                             for j in range(len(ngrams)):
                                 for k in range(len(ngrams[j])):
                                     if ":" in ngrams[j][k]:
@@ -1632,7 +1634,7 @@ def count(args):
 
                         all_ngrams.append(ngrams)
 
-                        if relative_to and groupby[i] in relative_to:
+                        if relative_to and group_by[i] in relative_to:
                             relative_to_pos.append(i)
 
                     cross = list(itertools.product(*all_ngrams))
@@ -1684,7 +1686,7 @@ def count(args):
             for relabs in ("absolute", "relative"):
                 new_list = []
                 for ngram, freq in result["corpora"][corpus][query_no][relabs].items():
-                    row = {"value": {key[0]: ngram[i] for i, key in enumerate(groupby)},
+                    row = {"value": {key[0]: ngram[i] for i, key in enumerate(group_by)},
                            "freq": freq}
                     new_list.append(row)
                 result["corpora"][corpus][query_no][relabs] = new_list
@@ -1698,7 +1700,7 @@ def count(args):
         for relabs in ("absolute", "relative"):
             new_list = []
             for ngram, freq in total_stats[query_no][relabs].items():
-                row = {"value": dict((key[0], ngram[i]) for i, key in enumerate(groupby)),
+                row = {"value": dict((key[0], ngram[i]) for i, key in enumerate(group_by)),
                        "freq": freq}
                 new_list.append(row)
             total_stats[query_no][relabs] = new_list
@@ -1723,8 +1725,10 @@ def count_all(args):
     """Return a count of the given attrs.
 
     The required parameters are
-     - corpus: the CWB corpus
-     - groupby: positional or structural attributes
+     - corpus: comma separated list of CWB corpora
+     One or more of:
+       - group_by: comma separated list of positional attributes
+       - group_by_struct: comma separated list of structural attributes
 
     The optional parameters are
      - within: only search for matches within the given s-attribute (e.g., within a sentence)
@@ -1736,7 +1740,7 @@ def count_all(args):
        (default: false)
     """
     assert_key("corpus", args, IS_IDENT, True)
-    assert_key("groupby", args, IS_IDENT, True)
+    assert_key(("group_by", "group_by_struct", "groupby"), args, IS_IDENT, True)
     assert_key("cut", args, IS_NUMBER)
     assert_key("ignore_case", args, IS_IDENT)
     assert_key("incremental", args, r"(true|false)")
@@ -1856,9 +1860,9 @@ def count_time(args):
     strategy = int(args.get("strategy") or 1)
 
     if granularity in "hns":
-        groupby = [(v, True) for v in ("text_datefrom", "text_timefrom", "text_dateto", "text_timeto")]
+        group_by = [(v, True) for v in ("text_datefrom", "text_timefrom", "text_dateto", "text_timeto")]
     else:
-        groupby = [(v, True) for v in ("text_datefrom", "text_dateto")]
+        group_by = [(v, True) for v in ("text_datefrom", "text_dateto")]
 
     result = {"corpora": {}}
     corpora_sizes = {}
@@ -1872,7 +1876,7 @@ def count_time(args):
         yield {"progress_corpora": corpora}
 
     with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-        future_query = dict((executor.submit(count_query_worker, corpus=corpus, cqp=cqp, groupby=groupby,
+        future_query = dict((executor.submit(count_query_worker, corpus=corpus, cqp=cqp, group_by=group_by,
                                              within=within, use_cache=args["cache"]), corpus)
                             for corpus in corpora)
 
@@ -1999,7 +2003,7 @@ def count_time(args):
     yield result
 
 
-def count_query_worker(corpus, cqp, groupby, within, ignore_case=[], cut=None, expand_prequeries=True, use_cache=False):
+def count_query_worker(corpus, cqp, group_by, within, ignore_case=[], cut=None, expand_prequeries=True, use_cache=False):
     subcqp = None
     if isinstance(cqp[-1], list):
         subcqp = cqp[-1]
@@ -2007,7 +2011,7 @@ def count_query_worker(corpus, cqp, groupby, within, ignore_case=[], cut=None, e
 
     if use_cache:
         checksum = get_hash((cqp,
-                             groupby,
+                             group_by,
                              within,
                              sorted(ignore_case),
                              expand_prequeries))
@@ -2052,7 +2056,7 @@ def count_query_worker(corpus, cqp, groupby, within, ignore_case=[], cut=None, e
     has_target = any("@[" in x for x in cqp)
 
     cmd += ["""tabulate Last %s > "| sort | uniq -c | sort -nr";""" % ", ".join("%s %s%s" % (
-        "target" if has_target else ("match" if g[1] else "match .. matchend"), g[0], " %c" if g in ignore_case else "") for g in groupby)]
+        "target" if has_target else ("match" if g[1] else "match .. matchend"), g[0], " %c" if g in ignore_case else "") for g in group_by)]
 
     if subcqp:
         cmd += ["mainresult=Last;"]
@@ -2063,7 +2067,7 @@ def count_query_worker(corpus, cqp, groupby, within, ignore_case=[], cut=None, e
             cmd += ["mainresult;"]
             cmd += query_optimize(c, cqpparams_temp, find_match=True)[1]
             cmd += ["""tabulate Last %s > "| sort | uniq -c | sort -nr";""" % ", ".join(
-                "match .. matchend %s" % g[0] for g in groupby)]
+                "match .. matchend %s" % g[0] for g in group_by)]
 
     cmd += ["exit;"]
 
@@ -2099,18 +2103,18 @@ def count_query_worker(corpus, cqp, groupby, within, ignore_case=[], cut=None, e
     return lines, nr_hits, corpus_size
 
 
-def count_query_worker_simple(corpus, cqp, groupby, within=None, ignore_case=[], expand_prequeries=True,
+def count_query_worker_simple(corpus, cqp, group_by, within=None, ignore_case=[], expand_prequeries=True,
                               use_cache=False):
     """Worker for simple statistics queries which can be run using cwb-scan-corpus.
     Currently only used for searches on [] (any word)."""
 
-    lines = list(run_cwb_scan(corpus, [g[0] for g in groupby]))
+    lines = list(run_cwb_scan(corpus, [g[0] for g in group_by]))
     nr_hits = 0
 
     ic_index = []
     new_lines = {}
     if ignore_case:
-        ic_index = [i for i, g in enumerate(groupby) if g[0] in ignore_case]
+        ic_index = [i for i, g in enumerate(group_by) if g[0] in ignore_case]
 
     for i in range(len(lines)):
         c, v = lines[i].split("\t", 1)
@@ -2145,7 +2149,7 @@ def loglike(args):
      - set2_cqp: the second CQP query
      - set1_corpus: the corpora for the first query
      - set2_corpus: the corpora for the second query
-     - groupby: what positional or structural attribute to use for comparison
+     - group_by: what positional or structural attribute to use for comparison
 
     The optional parameters are
      - ignore_case: ignore case when comparing
@@ -2253,7 +2257,7 @@ def loglike(args):
     assert_key("set2_cqp", args, r"", True)
     assert_key("set1_corpus", args, r"", True)
     assert_key("set2_corpus", args, r"", True)
-    assert_key("groupby", args, IS_IDENT, True)
+    assert_key(("group_by", "groupby"), args, IS_IDENT, False)
     assert_key("ignore_case", args, IS_IDENT)
     assert_key("max", args, IS_NUMBER, False)
 
@@ -2339,7 +2343,7 @@ def lemgram_count(args):
      - lemgram: list of lemgrams
 
     The optional parameters are
-     - corpus: the CWB corpus/corpora
+     - corpus: comma separated list of CWB corpora
        (default: all corpora)
      - count: what to count (lemgram/prefix/suffix)
        (default: lemgram)
@@ -2406,7 +2410,7 @@ def timespan(args, no_combined_cache=False):
     The time information is retrieved from the database.
 
     The required parameters are
-     - corpus: the CWB corpus/corpora
+     - corpus: comma separated list of CWB corpora
 
     The optional parameters are
      - granularity: granularity of result (y = year, m = month, d = day, h = hour, n = minute, s = second)
@@ -2747,7 +2751,7 @@ def relations(args):
     """Calculate word picture data.
 
     The required parameters are
-     - corpus: the CWB corpus/corpora
+     - corpus: comma separated list of CWB corpora
      - word: a word or lemgram to lookup
 
     The optional parameters are
@@ -2776,7 +2780,7 @@ def relations(args):
     word = args.get("word")
     search_type = args.get("type", "")
     minfreq = args.get("min")
-    sortby = args.get("sortby") or "mi"
+    sort = args.get("sort") or "mi"
     maxresults = int(args.get("max") or 15)
     minfreqsql = " AND freq >= %s" % minfreq if minfreq else ""
 
@@ -2925,7 +2929,7 @@ def relations(args):
         f_rel_dep = sum(freq_rel_dep[(rel[1], rel[2])].values())
         rels[rel]["mi"] = rels[rel]["freq"] * math.log((f_rel * rels[rel]["freq"]) / (f_head_rel * f_rel_dep * 1.0), 2)
 
-    sortedrels = sorted(rels.items(), key=lambda x: (x[0][1], x[1][sortby]), reverse=True)
+    sortedrels = sorted(rels.items(), key=lambda x: (x[0][1], x[1][sort]), reverse=True)
 
     for rel in sortedrels:
         counter.setdefault((rel[0][1], "h"), 0)
@@ -2995,7 +2999,7 @@ def relations_sentences(args):
         shown_structs = shown_structs.split(QUERY_DELIM)
     shown_structs = set(shown_structs)
 
-    defaultcontext = args.get("defaultcontext") or "1 sentence"
+    default_context = args.get("default_context", args.get("defaultcontext")) or "1 sentence"
 
     querystarttime = time.time()
 
@@ -3063,7 +3067,7 @@ def relations_sentences(args):
              "start": "0",
              "end": str(end - start),
              "show_struct": ["sentence_id"] + list(shown_structs),
-             "defaultcontext": defaultcontext}
+             "default_context": default_context}
         if shown:
             q["show"] = shown
         result_temp = generator_to_dict(query(q))
@@ -3367,19 +3371,26 @@ def read_attributes(lines):
     return attrs
 
 
-def assert_key(key, form, regexp, required=False):
+def assert_key(key, attrs, regexp, required=False):
     """Check that the value of the attribute 'key' in the request data
     matches the specification 'regexp'. If 'required' is True, then
     the key has to be in the form.
     """
-    value = form.get(key, "")
+    if isinstance(key, (tuple, list)):
+        for k in key:
+            value = attrs.get(k)
+            if value is not None:
+                break
+    else:
+        value = attrs.get(key, "")
+        key = (key,)
     if value and not isinstance(value, list):
         value = [value]
     if required and not value:
-        raise KeyError("Key is required: %s" % key)
+        raise KeyError("Key is required: <%s>" % "|".join(key))
     if not all(re.match(regexp, x) for x in value):
         pattern = regexp.pattern if hasattr(regexp, "pattern") else regexp
-        raise ValueError("Value(s) for key %s do(es) not match /%s/: %s" % (key, pattern, value))
+        raise ValueError("Value(s) for key <%s> do(es) not match /%s/: %s" % ("|".join(key), pattern, value))
 
 
 @app.route("/authenticate", methods=["GET", "POST"])
