@@ -1528,8 +1528,7 @@ def count(args):
         if "debug" in args:
             debug["cache_coverage"] = "%d/%d" % (read_from_cache, len(corpora))
 
-    total_stats = [{"absolute": defaultdict(int),
-                    "relative": defaultdict(float),
+    total_stats = [{"rows": defaultdict(lambda: {"absolute": 0, "relative": 0.0}),
                     "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
 
     ns = Namespace()  # To make variables writable from nested functions
@@ -1546,12 +1545,12 @@ def count(args):
         relative_to_result = generator_to_dict(count(relative_args))
         relative_to_freqs = {"total": {}, "corpora": defaultdict(dict)}
 
-        for row in relative_to_result["total"]["absolute"]:
-            relative_to_freqs["total"][tuple(v for k, v in sorted(row["value"].items()))] = row["freq"]
+        for row in relative_to_result["total"]["rows"]:
+            relative_to_freqs["total"][tuple(v for k, v in sorted(row["value"].items()))] = row["absolute"]
 
         for corpus in relative_to_result["corpora"]:
-            for row in relative_to_result["corpora"][corpus]["absolute"]:
-                relative_to_freqs["corpora"][corpus][tuple(v for k, v in sorted(row["value"].items()))] = row["freq"]
+            for row in relative_to_result["corpora"][corpus]["rows"]:
+                relative_to_freqs["corpora"][corpus][tuple(v for k, v in sorted(row["value"].items()))] = row["absolute"]
 
     count_function = count_query_worker if not simple else count_query_worker_simple
 
@@ -1560,8 +1559,7 @@ def count(args):
         yield {"progress_corpora": list(c for c in corpora if c not in zero_hits)}
 
     for corpus in zero_hits:
-        result["corpora"][corpus] = [{"absolute": {},
-                                      "relative": {},
+        result["corpora"][corpus] = [{"rows": {},
                                       "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
         for i in range(len(subcqp)):
             result["corpora"][corpus][i + 1]["cqp"] = subcqp[i]
@@ -1581,8 +1579,7 @@ def count(args):
                 lines, nr_hits, corpus_size = future.result()
 
                 ns.total_size += corpus_size
-                corpus_stats = [{"absolute": defaultdict(int),
-                                 "relative": defaultdict(float),
+                corpus_stats = [{"rows": defaultdict(lambda: {"absolute": 0, "relative": 0.0}),
                                  "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
 
                 query_no = 0
@@ -1640,21 +1637,21 @@ def count(args):
                     cross = list(itertools.product(*all_ngrams))
 
                     for ngram in cross:
-                        corpus_stats[query_no]["absolute"][ngram] += int(freq)
+                        corpus_stats[query_no]["rows"][ngram]["absolute"] += int(freq)
                         corpus_stats[query_no]["sums"]["absolute"] += int(freq)
-                        total_stats[query_no]["absolute"][ngram] += int(freq)
+                        total_stats[query_no]["rows"][ngram]["absolute"] += int(freq)
                         total_stats[query_no]["sums"]["absolute"] += int(freq)
 
                         if relative_to:
                             relativeto_ngram = tuple(ngram[pos] for pos in relative_to_pos)
-                            corpus_stats[query_no]["relative"][ngram] += int(freq) / float(
+                            corpus_stats[query_no]["rows"][ngram]["relative"] += int(freq) / float(
                                 relative_to_freqs["corpora"][corpus][relativeto_ngram]) * 1000000
                             corpus_stats[query_no]["sums"]["relative"] += int(freq) / float(
                                 relative_to_freqs["corpora"][corpus][relativeto_ngram]) * 1000000
-                            total_stats[query_no]["relative"][ngram] += int(freq) / float(
+                            total_stats[query_no]["rows"][ngram]["relative"] += int(freq) / float(
                                 relative_to_freqs["total"][relativeto_ngram]) * 1000000
                         else:
-                            corpus_stats[query_no]["relative"][ngram] += int(freq) / float(corpus_size) * 1000000
+                            corpus_stats[query_no]["rows"][ngram]["relative"] += int(freq) / float(corpus_size) * 1000000
                             corpus_stats[query_no]["sums"]["relative"] += int(freq) / float(corpus_size) * 1000000
 
                 result["corpora"][corpus] = corpus_stats
@@ -1663,33 +1660,31 @@ def count(args):
                     yield {"progress_%d" % ns.progress_count: corpus}
                     ns.progress_count += 1
 
-    result["count"] = len(total_stats[0]["absolute"])
+    result["count"] = len(total_stats[0]["rows"])
 
     # Calculate relative numbers for the total
     for query_no in range(len(subcqp) + 1):
-        if end > -1 and (start > 0 or len(total_stats[0]["absolute"]) > (end - start) + 1):
+        if end > -1 and (start > 0 or len(total_stats[0]["rows"]) > (end - start) + 1):
             # Only a selected range of results requested
-            total_stats[query_no]["absolute"] = dict(
-                sorted(total_stats[query_no]["absolute"].items(), key=lambda x: x[1], reverse=True)[start:end + 1])
+            total_stats[query_no]["rows"] = dict(
+                sorted(total_stats[query_no]["rows"].items(), key=lambda x: x[1]["absolute"],
+                       reverse=True)[start:end + 1])
 
             for corpus in corpora:
-                result["corpora"][corpus][query_no]["absolute"] = {k: v for k, v in result["corpora"][corpus][query_no][
-                    "absolute"].items() if k in total_stats[query_no]["absolute"]}
-                result["corpora"][corpus][query_no]["relative"] = {k: v for k, v in result["corpora"][corpus][query_no][
-                    "relative"].items() if k in total_stats[query_no]["absolute"]}
+                result["corpora"][corpus][query_no]["rows"] = {k: v for k, v in result["corpora"][corpus][query_no][
+                    "rows"].items() if k in total_stats[query_no]["rows"]}
 
         if not relative_to:
-            for ngram, freq in total_stats[query_no]["absolute"].items():
-                total_stats[query_no]["relative"][ngram] = freq / float(ns.total_size) * 1000000
+            for ngram, vals in total_stats[query_no]["rows"].items():
+                total_stats[query_no]["rows"][ngram]["relative"] = vals["absolute"] / float(ns.total_size) * 1000000
 
         for corpus in corpora:
-            for relabs in ("absolute", "relative"):
-                new_list = []
-                for ngram, freq in result["corpora"][corpus][query_no][relabs].items():
-                    row = {"value": {key[0]: ngram[i] for i, key in enumerate(group_by)},
-                           "freq": freq}
-                    new_list.append(row)
-                result["corpora"][corpus][query_no][relabs] = new_list
+            new_list = []
+            for ngram, vals in result["corpora"][corpus][query_no]["rows"].items():
+                row = {"value": {key[0]: ngram[i] for i, key in enumerate(group_by)}}
+                row.update(vals)
+                new_list.append(row)
+            result["corpora"][corpus][query_no]["rows"] = new_list
 
         total_stats[query_no]["sums"]["relative"] = (total_stats[query_no]["sums"]["absolute"] / float(ns.total_size)
                                                      * 1000000 if ns.total_size > 0 else 0.0)
@@ -1697,13 +1692,12 @@ def count(args):
         if subcqp and query_no > 0:
             total_stats[query_no]["cqp"] = subcqp[query_no - 1]
 
-        for relabs in ("absolute", "relative"):
-            new_list = []
-            for ngram, freq in total_stats[query_no][relabs].items():
-                row = {"value": dict((key[0], ngram[i]) for i, key in enumerate(group_by)),
-                       "freq": freq}
-                new_list.append(row)
-            total_stats[query_no][relabs] = new_list
+        new_list = []
+        for ngram, vals in total_stats[query_no]["rows"].items():
+            row = {"value": dict((key[0], ngram[i]) for i, key in enumerate(group_by))}
+            row.update(vals)
+            new_list.append(row)
+        total_stats[query_no]["rows"] = new_list
 
     result["total"] = total_stats if len(total_stats) > 1 else total_stats[0]
 
