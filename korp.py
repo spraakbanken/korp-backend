@@ -249,7 +249,7 @@ def prevent_timeout(generator):
 ################################################################################
 
 def parse_corpora(args):
-    corpora = args.get("corpus")
+    corpora = args.get("corpus", [])
     if isinstance(corpora, str):
         corpora = corpora.upper().split(QUERY_DELIM)
     return sorted(set(corpora))
