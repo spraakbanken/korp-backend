@@ -3197,31 +3197,45 @@ def setup_cache():
 ################################################################################
 
 def parse_cqp(cqp):
-    """ Try to parse a CQP query, returning identified tokens and a
-    boolean indicating partial failure if True."""
-
+    """Try to parse a CQP query, returning identified tokens and a
+    boolean indicating partial failure if True.
+    """
     sections = []
     last_start = 0
     in_bracket = 0
     in_quote = False
     in_curly = False
+    escaping = False
     quote_type = ""
 
     for i in range(len(cqp)):
         c = cqp[i]
 
-        if c in '"\'':
-            if in_quote and quote_type == c and not cqp[i - 1] == "\\":
-                in_quote = False
-                if not in_bracket:
-                    sections.append([last_start, i])
+        if in_quote and not escaping and c == "\\":
+            # Next character is being escaped
+            escaping = True
+        elif escaping:
+            # Current character is being escaped
+            escaping = False
+        elif c in '"\'':
+            if in_quote and quote_type == c:
+                if i < len(cqp) - 1 and cqp[i + 1] == quote_type:
+                    # First character of a quote escaped by doubling
+                    escaping = True
+                else:
+                    # End of a quote
+                    in_quote = False
+                    if not in_bracket:
+                        sections.append([last_start, i])
             elif not in_quote:
+                # Beginning of a qoute
                 in_quote = True
                 quote_type = c
                 if not in_bracket:
                     last_start = i
         elif c == "[":
             if not in_bracket and not in_quote:
+                # Beginning of a token
                 last_start = i
                 in_bracket = True
                 if len(cqp) > i + 1 and cqp[i + 1] == ":":
@@ -3229,6 +3243,7 @@ def parse_cqp(cqp):
                     return [], True
         elif c == "]":
             if in_bracket and not in_quote:
+                # End of a token
                 sections.append([last_start, i])
                 in_bracket = False
         elif c == "{" and not in_bracket and not in_quote:
