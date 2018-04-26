@@ -2257,7 +2257,7 @@ def loglike(args):
     assert_key("set2_cqp", args, r"", True)
     assert_key("set1_corpus", args, r"", True)
     assert_key("set2_corpus", args, r"", True)
-    assert_key(("group_by", "groupby"), args, IS_IDENT, False)
+    assert_key(("group_by", "group_by_struct", "groupby"), args, IS_IDENT, True)
     assert_key("ignore_case", args, IS_IDENT)
     assert_key("max", args, IS_NUMBER, False)
 
@@ -2290,10 +2290,14 @@ def loglike(args):
             for corpus in cset:
                 sets[i]["total"] += count_result["corpora"][corpus]["sums"]["absolute"]
                 if len(cset) == 1:
-                    sets[i]["freq"] = dict((tuple((y[0], tuple(y[1])) for y in sorted(x["value"].items())), x["freq"])
+                    sets[i]["freq"] = dict((tuple(
+                        (y[0], y[1] if isinstance(y[1], tuple) else (y[1],)) for y in sorted(x["value"].items())),
+                                            x["freq"])
                                            for x in count_result["corpora"][corpus]["absolute"])
                 else:
-                    for w, f in ((tuple((y[0], tuple(y[1])) for y in sorted(x["value"].items())), x["freq"])
+                    for w, f in ((tuple(
+                            (y[0], y[1] if isinstance(y[1], tuple) else (y[1],)) for y in sorted(x["value"].items())),
+                                  x["freq"])
                                  for x in count_result["corpora"][corpus]["absolute"]):
                         sets[i]["freq"][w] += f
 
@@ -2307,10 +2311,10 @@ def loglike(args):
 
         sets = [{}, {}]
         for i, cset in enumerate((set1, set2)):
-            count_result_temp = count_result if same_cqp else count_result[i]
-            sets[i]["total"] = count_result_temp["total"]["sums"]["absolute"]
-            sets[i]["freq"] = dict((tuple((y[0], tuple(y[1])) for y in sorted(x["value"].items())), x["freq"])
-                                   for x in count_result_temp["total"]["absolute"])
+            sets[i]["total"] = count_result[i]["total"]["sums"]["absolute"]
+            sets[i]["freq"] = dict((tuple(
+                (y[0], y[1] if isinstance(y[1], tuple) else (y[1],)) for y in sorted(x["value"].items())), x["freq"])
+                                   for x in count_result[i]["total"]["absolute"])
 
     ll_list = compute_list(sets[0]["freq"], sets[0]["total"], sets[1]["freq"], sets[1]["total"])
     (ws, avg, mi, ma) = compute_ll_stats(ll_list, maxresults, sets)
@@ -3403,7 +3407,7 @@ def assert_key(key, attrs, regexp, required=False):
         value = [value]
     if required and not value:
         raise KeyError("Key is required: <%s>" % "|".join(key))
-    if not all(re.match(regexp, x) for x in value):
+    if value and not all(re.match(regexp, x) for x in value):
         pattern = regexp.pattern if hasattr(regexp, "pattern") else regexp
         raise ValueError("Value(s) for key <%s> do(es) not match /%s/: %s" % ("|".join(key), pattern, value))
 
