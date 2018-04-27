@@ -48,6 +48,7 @@ import traceback
 import functools
 import math
 import random
+import markdown
 import config
 try:
     import pylibmc
@@ -64,7 +65,10 @@ from flask_cors import CORS
 # Nothing needs to be changed in this file. Use config.py for configuration.
 
 # The version of this script
-KORP_VERSION = "7.0.5"
+KORP_VERSION = "7.1.0"
+
+# URL for Språkbanken's Korp API (used for examples in documentation)
+SB_API_URL = "https://ws.spraakbanken.gu.se/ws/korp/v7/"
 
 # Special symbols used by this script; they must NOT be in the corpus
 END_OF_LINE = "-::-EOL-::-"
@@ -102,7 +106,6 @@ def main_handler(generator):
      - indent: pretty-print the result with a specific indentation
      - debug: if set, return some extra information (for debugging)
     """
-
     @functools.wraps(generator)  # Copy original function's information, needed by Flask
     def decorated(args=None, *pargs, **kwargs):
         internal = args is not None
@@ -203,7 +206,6 @@ def main_handler(generator):
 
 def prevent_timeout(generator):
     """Decorator for long-running functions that might otherwise timeout."""
-
     @functools.wraps(generator)
     def decorated(args=None, *pargs, **kwargs):
         if args["internal"]:
@@ -287,7 +289,6 @@ def sleep(args):
         yield {"%d" % x: x}
 
 
-@app.route("/", methods=["GET", "POST"])
 @app.route("/info", methods=["GET", "POST"])
 @main_handler
 def info(args):
@@ -301,9 +302,7 @@ def info(args):
 
 
 def general_info(args):
-    """Return information about the available corpora.
-    """
-
+    """Return information about the available corpora."""
     if args["cache"]:
         with mc_pool.reserve() as mc:
             result = mc.get("%s:info" % cache_prefix())
@@ -334,8 +333,7 @@ def general_info(args):
 
 
 def corpus_info(args, no_combined_cache=False):
-    """Return information about a specific corpus or corpora.
-    """
+    """Return information about a specific corpus or corpora."""
     assert_key("corpus", args, IS_IDENT, True)
 
     corpora = parse_corpora(args)
@@ -464,29 +462,7 @@ def query_sample(args):
 @main_handler
 @prevent_timeout
 def query(args):
-    """Perform a CQP query and return a number of matches.
-
-    Each match contains position information and a list of the words and attributes in the match.
-
-    The required parameters are
-     - corpus: comma separated list of CWB corpora
-     - cqp: the CQP query string
-     - start, end: which result rows that should be returned
-
-    The optional parameters are
-     - context: how many words/sentences to the left/right should be returned
-       (default '10 words')
-     - show: add once for each corpus parameter (positional/strutural/alignment)
-       (default only show the 'word' parameter)
-     - show_struct: structural annotations for matched region. Multiple parameters possible.
-     - within: only search for matches within the given s-attribute (e.g., within a sentence)
-       (default: no within)
-     - cut: set cutoff threshold to reduce the size of the result
-       (default: no cutoff)
-     - sort: sort the results by keyword ('keyword'), left or right context ('left'/'right') or random ('random')
-       (default: no sorting)
-     - incremental: returns the result incrementally instead of all at once
-    """
+    """Perform a CQP query and return a number of matches."""
     assert_key("cqp", args, r"", True)
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("start", args, IS_NUMBER)
@@ -778,14 +754,14 @@ def optimize(args):
 
 
 def query_optimize(cqp, cqpparams, find_match=True, expand=True, free_search=False):
-    """ Optimize simple queries with multiple words by converting them to MU queries.
-        Optimization only works for queries with at least two tokens, or one token preceded
-        by one or more wildcards. The query also must use "within".
-        Return a tuple (return code, query)
-        0 = optimization successful
-        1 = optimization not needed (e.g. single word searches)
-        2 = optimization not possible (e.g. searches with repetition of non-wildcards)
-        """
+    """Optimize simple queries with multiple words by converting them to MU queries.
+    Optimization only works for queries with at least two tokens, or one token preceded
+    by one or more wildcards. The query also must use "within".
+    Return a tuple (return code, query)
+    0 = optimization successful
+    1 = optimization not needed (e.g. single word searches)
+    2 = optimization not possible (e.g. searches with repetition of non-wildcards)
+    """
     # Split query into tokens
     tokens, rest = parse_cqp(cqp)
     within = cqpparams.get("within")
@@ -1246,6 +1222,7 @@ def which_hits(corpora, stats, start, end):
 @main_handler
 @prevent_timeout
 def struct_values(args):
+    """Get all available values for one or more structural attributes."""
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("struct", args, re.compile(r"^[\w_\d,>]+$"), True)
     assert_key("incremental", args, r"(true|false)")
@@ -1415,30 +1392,7 @@ def struct_values(args):
 @main_handler
 @prevent_timeout
 def count(args):
-    """Perform a CQP query and return a count of the given words/attrs.
-
-    The required parameters are
-     - corpus: comma separated list of CWB corpora
-     - cqp: the CQP query string
-     One or more of:
-       - group_by: comma separated list of positional attributes
-       - group_by_struct: comma separated list of structural attributes
-
-    The optional parameters are
-     - within: only search for matches within the given s-attribute (e.g., within a sentence)
-       (default: no within)
-     - cut: set cutoff threshold to reduce the size of the result
-       (default: no cutoff)
-     - ignore_case: changes all values of the selected attribute to lower case
-     - incremental: incrementally report the progress while executing
-       (default: false)
-     - expand_prequeries: when using multiple queries, this determines whether
-       subsequent queries should be run on the containing sentences (or any other structural attribute
-       defined by 'within') from the previous query, or just the matches.
-       (default: true)
-     - relative_to_struct: calculate relative frequencies based on total number of tokens with the same value for
-       the structural annotations specified here, instead of relative to corpus size.
-    """
+    """Perform a CQP query and return a count of the given words/attributes."""
     assert_key("cqp", args, r"", True)
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("group_by", args, IS_IDENT, False)
@@ -1450,7 +1404,6 @@ def count(args):
     incremental = parse_bool(args, "incremental", False)
 
     corpora = parse_corpora(args)
-
     check_authentication(corpora)
 
     group_by = args.get("group_by", args.get("groupby")) or []
@@ -1734,23 +1687,7 @@ def count(args):
 @main_handler
 @prevent_timeout
 def count_all(args):
-    """Return a count of the given attrs.
-
-    The required parameters are
-     - corpus: comma separated list of CWB corpora
-     One or more of:
-       - group_by: comma separated list of positional attributes
-       - group_by_struct: comma separated list of structural attributes
-
-    The optional parameters are
-     - within: only search for matches within the given s-attribute (e.g., within a sentence)
-       (default: no within)
-     - cut: set cutoff threshold to reduce the size of the result
-       (default: no cutoff)
-     - ignore_case: changes all values of the selected attribute to lower case
-     - incremental: incrementally report the progress while executing
-       (default: false)
-    """
+    """Like /count but for every single value of the given attributes."""
     assert_key("corpus", args, IS_IDENT, True)
     assert_key(("group_by", "group_by_struct", "groupby"), args, IS_IDENT, True)
     assert_key("cut", args, IS_NUMBER)
@@ -1784,8 +1721,7 @@ def strptime(date):
 @main_handler
 @prevent_timeout
 def count_time(args):
-    """
-    """
+    """Count occurrences per time period."""
     assert_key("cqp", args, r"", True)
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("cut", args, IS_NUMBER)
@@ -2127,7 +2063,6 @@ def count_query_worker_simple(corpus, cqp, group_by, within=None, ignore_case=[]
                               use_cache=False):
     """Worker for simple statistics queries which can be run using cwb-scan-corpus.
     Currently only used for searches on [] (any word)."""
-
     lines = list(run_cwb_scan(corpus, [g[0] for g in group_by]))
     nr_hits = 0
 
@@ -2162,21 +2097,7 @@ def count_query_worker_simple(corpus, cqp, group_by, within=None, ignore_case=[]
 @main_handler
 @prevent_timeout
 def loglike(args):
-    """Run a log-likelihood comparison on two queries.
-
-    The required parameters are
-     - set1_cqp: the first CQP query
-     - set2_cqp: the second CQP query
-     - set1_corpus: the corpora for the first query
-     - set2_corpus: the corpora for the second query
-     - group_by: what positional or structural attribute to use for comparison
-
-    The optional parameters are
-     - ignore_case: ignore case when comparing
-     - max: maxium number of results per set
-       (default: 15)
-    """
-
+    """Do a log-likelihood comparison on two queries."""
     def expected(total, wordtotal, sumtotal):
         """ The expected is that the words are uniformely distributed over the corpora. """
         return wordtotal * (float(total) / sumtotal)
@@ -2361,23 +2282,12 @@ def loglike(args):
 @main_handler
 @prevent_timeout
 def lemgram_count(args):
-    """Return lemgram statistics per corpus.
-
-    The required parameters are
-     - lemgram: list of lemgrams
-
-    The optional parameters are
-     - corpus: comma separated list of CWB corpora
-       (default: all corpora)
-     - count: what to count (lemgram/prefix/suffix)
-       (default: lemgram)
-    """
+    """Return lemgram statistics per corpus."""
     assert_key("lemgram", args, r"", True)
     assert_key("corpus", args, IS_IDENT)
     assert_key("count", args, r"(lemgram|prefix|suffix)")
 
     corpora = parse_corpora(args)
-
     check_authentication(corpora)
 
     lemgram = args.get("lemgram")
@@ -2432,19 +2342,6 @@ def sql_escape(s):
 def timespan(args, no_combined_cache=False):
     """Calculate timespan information for corpora.
     The time information is retrieved from the database.
-
-    The required parameters are
-     - corpus: comma separated list of CWB corpora
-
-    The optional parameters are
-     - granularity: granularity of result (y = year, m = month, d = day, h = hour, n = minute, s = second)
-       (default: year)
-     - combined: include combined results
-       (default: true)
-     - per_corpus: include results per corpus
-       (default: true)
-     - from: from this date and time, on the format 20150513063500 or 2015-05-13 06:35:00 (times optional) (optional)
-     - to: to this date and time (optional)
     """
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("granularity", args, r"[ymdhnsYMDHNS]")
@@ -2772,22 +2669,7 @@ def timespan_calculator(timedata, granularity="y", combined=True, per_corpus=Tru
 @main_handler
 @prevent_timeout
 def relations(args):
-    """Calculate word picture data.
-
-    The required parameters are
-     - corpus: comma separated list of CWB corpora
-     - word: a word or lemgram to lookup
-
-    The optional parameters are
-     - min: cut off results with a frequency lower than this
-       (default: no cut-off)
-     - max: maximum number of results
-       (default: 15)
-     - type: type of search (word/lemgram)
-       (default: word)
-     - incremental: incrementally report the progress while executing
-       (default: false)
-    """
+    """Calculate word picture data."""
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("word", args, "", True)
     assert_key("type", args, r"(word|lemgram)", False)
@@ -2796,7 +2678,6 @@ def relations(args):
     assert_key("incremental", args, r"(true|false)")
 
     corpora = parse_corpora(args)
-
     check_authentication(corpora)
 
     incremental = parse_bool(args, "incremental", False)
@@ -2990,17 +2871,7 @@ def relations(args):
 @main_handler
 @prevent_timeout
 def relations_sentences(args):
-    """Execute a CQP query to find sentences with a given relation from a word picture.
-
-    The required parameters are
-     - source: source ID
-
-    The optional parameters are
-     - start, end: which result rows that should be returned
-     - show
-     - show_struct
-    """
-
+    """Execute a CQP query to find sentences with a given relation from a word picture."""
     assert_key("source", args, "", True)
     assert_key("start", args, IS_NUMBER, False)
     assert_key("end", args, IS_NUMBER, False)
@@ -3214,6 +3085,56 @@ def setup_cache():
             action_needed = True
 
     return action_needed
+
+
+################################################################################
+# DOCUMENTATION
+################################################################################
+
+@app.route("/")
+def documentation():
+    """Render API documentation."""
+    if not os.path.isfile("docs/api.md"):
+        return "API documentation missing."
+    with open("docs/api.md", encoding="UTF-8") as doc:
+        md_text = doc.read()
+
+    # Replace placeholders
+    md_text = md_text.replace("[SBURL]", SB_API_URL)
+    md_text = md_text.replace("[VERSION]", KORP_VERSION)
+
+    # Convert Markdown to HTML
+    md = markdown.Markdown(extensions=["markdown.extensions.toc",
+                                       "markdown.extensions.smarty",
+                                       "markdown.extensions.def_list"])
+    md_html = md.convert(md_text)
+    md_html = md_html.replace("<pre><code>", '<pre><code class="json">')
+
+    html = ["""<!doctype html>
+        <html>
+          <head>
+            <meta charset="utf-8">
+            <title>Korp API v%s</title>
+            <link href="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/styles/monokai-sublime.min.css"
+              rel="stylesheet">
+            <script src="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/highlight.min.js"></script>
+            <script>hljs.initHighlightingOnLoad();</script>
+            <link href="https://fonts.googleapis.com/css?family=Roboto" rel="stylesheet">
+            <link href="https://fonts.googleapis.com/css?family=Roboto+Slab" rel="stylesheet">
+            <link href="static/api.css" rel="stylesheet">
+          </head>
+          <body>
+            <div class="toc-wrapper">
+              <div class="header">
+                <img src="static/raven.png"><br>
+                Korp API <span>v%s</span>
+              </div>
+              %s
+            </div>
+           <div class="content">
+            """ % (KORP_VERSION, KORP_VERSION, md.toc), md_html, "</div></body></html>"]
+
+    return "\n".join(html)
 
 
 ################################################################################
