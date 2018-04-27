@@ -261,7 +261,7 @@ def parse_within(args):
     if args.get("within"):
         if ":" not in args.get("within"):
             raise ValueError("Malformed value for key 'within'.")
-        within.update(dict(x.split(":") for x in args.get("within").split(QUERY_DELIM)))
+        within.update({x.split(":")[0].upper(): x.split(":")[1] for x in args.get("within").split(QUERY_DELIM)})
     return within
 
 
@@ -537,7 +537,7 @@ def query(args):
         if cv:
             if ":" not in cv:
                 raise ValueError("Malformed value for key '%s'." % c)
-            contexts[c] = dict(x.split(":") for x in cv.split(QUERY_DELIM))
+            contexts[c] = {x.split(":")[0].upper(): x.split(":")[1] for x in cv.split(QUERY_DELIM)}
         else:
             contexts[c] = {}
 
