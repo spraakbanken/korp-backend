@@ -548,6 +548,9 @@ def query(args):
         else:
             context[corpus] = (contexts["context"].get(corpus, default_context),)
 
+    sort = args.get("sort")
+    sort_random_seed = args.get("random_seed")
+
     # Sort numbered CQP-queries numerically
     cqp, _ = parse_cqp_subcqp(args)
 
@@ -558,7 +561,9 @@ def query(args):
                    "show_structs": show_structs,
                    "expand_prequeries": expand_prequeries,
                    "cut": cut,
-                   "cqp": cqp
+                   "cqp": cqp,
+                   "sort": sort,
+                   "random_seed": sort_random_seed
                    }
 
     result = {"kwic": []}
