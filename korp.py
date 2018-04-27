@@ -554,6 +554,9 @@ def query(args):
     # Sort numbered CQP-queries numerically
     cqp, _ = parse_cqp_subcqp(args)
 
+    if len(cqp) > 1 and expand_prequeries and not all(within[c] for c in corpora):
+        raise ValueError("Multiple CQP queries requires 'within' or 'expand_prequeries=false'")
+
     # Parameters used for all queries
     queryparams = {"free_search": free_search,
                    "use_cache": use_cache,
@@ -1496,8 +1499,14 @@ def count(args):
         else:
             top = dict((x, 1) for x in top.split(QUERY_DELIM))
 
+    expand_prequeries = parse_bool(args, "expand_prequeries", True)
+
     # Sort numbered CQP-queries numerically
     cqp, subcqp = parse_cqp_subcqp(args)
+
+    if len(cqp) > 1 and expand_prequeries and not all(within[c] for c in corpora):
+        raise ValueError("Multiple CQP queries requires 'within' or 'expand_prequeries=false'")
+
     if subcqp:
         cqp.append(subcqp)
 
@@ -1505,8 +1514,6 @@ def count(args):
 
     if cqp == ["[]"]:
         simple = True
-
-    expand_prequeries = parse_bool(args, "expand_prequeries", True)
 
     result = {"corpora": {}}
     debug = {}
@@ -1793,9 +1800,14 @@ def count_time(args):
     corpora = parse_corpora(args)
     check_authentication(corpora)
     within = parse_within(args)
+    expand_prequeries = parse_bool(args, "expand_prequeries", True)
 
     # Sort numbered CQP-queries numerically
     cqp, subcqp = parse_cqp_subcqp(args)
+
+    if len(cqp) > 1 and expand_prequeries and not all(within[c] for c in corpora):
+        raise ValueError("Multiple CQP queries requires 'within' or 'expand_prequeries=false'")
+
     if subcqp:
         cqp.append(subcqp)
     granularity = (args.get("granularity") or "y").lower()
@@ -1882,7 +1894,9 @@ def count_time(args):
 
     with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
         future_query = dict((executor.submit(count_query_worker, corpus=corpus, cqp=cqp, group_by=group_by,
-                                             within=within, use_cache=args["cache"]), corpus)
+                                             within=within[corpus],
+                                             expand_prequeries=expand_prequeries,
+                                             use_cache=args["cache"]), corpus)
                             for corpus in corpora)
 
         for future in futures.as_completed(future_query):
@@ -2008,7 +2022,8 @@ def count_time(args):
     yield result
 
 
-def count_query_worker(corpus, cqp, group_by, within, ignore_case=[], cut=None, expand_prequeries=True, use_cache=False):
+def count_query_worker(corpus, cqp, group_by, within, ignore_case=[], cut=None, expand_prequeries=True,
+                       use_cache=False):
     subcqp = None
     if isinstance(cqp[-1], list):
         subcqp = cqp[-1]
