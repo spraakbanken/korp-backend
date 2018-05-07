@@ -24,16 +24,17 @@ The service responds with a JSON object.
 The parameters available for each command are presented in this documentation as a bulleted list, separated into
 required and optional parameters. A parameter marked with *[multi]* can take multiple values separated by commas.
 
-Many of the commands make use of the CQP query language. For further information about CQP, please refer to 
+Many of the commands make use of the CQP query language. For further information about CQP, please refer to
 the [CQP Query Language Tutorial](http://cwb.sourceforge.net/files/CQP_Tutorial.pdf).
 
 For every request the key `time` will always be included in the JSON object, indicating the execution time
 in seconds:
 
-    {
-      "time": 0.0125
-    }
-
+```json
+{
+  "time": 0.0125
+}
+```
 
 ### Global Options
 
@@ -60,12 +61,14 @@ Get information about available corpora, which corpora are protected, and CWB an
 
 #### Returns
 
-    {
-      "version": "[VERSION]",
-      "cqp-version": "<CQP version>",
-      "corpora": [<list of corpora on the server>],
-      "protected_corpora": [<list of which of the above corpora that are password protected>]
-    }
+```json
+{
+  "version": "[VERSION]",
+  "cqp-version": "<CQP version>",
+  "corpora": [<list of corpora on the server>],
+  "protected_corpora": [<list of which of the above corpora that are password protected>]
+}
+```
 
 #### Example
 
@@ -87,27 +90,29 @@ Fetch information about one or more corpora.
 
 #### Returns
 
-    {
-      "corpora": {
-        "<corpus>": {
-          "attrs": {
-            "p": [<list of positional attributes>],
-            "s": [<list of structural attributes>],
-            "a": [<list of align attributes, for linked corpora>]
-          },
-          "info": {
-            "Charset": "<character encoding of the corpus>",
-            "FirstDate": "<date and time of the oldest dated text in the corpus>",
-            "LastDate": "<date and time of the newest dated text in the corpus>",
-            "Size": <number of tokens in the corpus>,
-            "Sentences": <number of sentences in the corpus>,
-            "Updated": "<date when the corpus was last updated>"
-          }
-        }
+```json
+{
+  "corpora": {
+    "<corpus>": {
+      "attrs": {
+        "p": [<list of positional attributes>],
+        "s": [<list of structural attributes>],
+        "a": [<list of align attributes, for linked corpora>]
       },
-      "total_size": <total number of tokens in the above corpora>,
-      "total_sentences": <total number of sentences in the above corpora>
+      "info": {
+        "Charset": "<character encoding of the corpus>",
+        "FirstDate": "<date and time of the oldest dated text in the corpus>",
+        "LastDate": "<date and time of the newest dated text in the corpus>",
+        "Size": <number of tokens in the corpus>,
+        "Sentences": <number of sentences in the corpus>,
+        "Updated": "<date when the corpus was last updated>"
+      }
     }
+  },
+  "total_size": <total number of tokens in the above corpora>,
+  "total_sentences": <total number of sentences in the above corpora>
+}
+```
 
 #### Example
 
@@ -159,46 +164,48 @@ The positional attribute "word" will always be shown, even if omitted.
 
 #### Returns
 
+```json
+{
+  "hits": <total number of hits>,
+  "corpus_hits": {
+    "<corpus>": <number of hits>,
+    ...
+  },
+  "kwic": [
     {
-      "hits": <total number of hits>,
-      "corpus_hits": {
-        "<corpus>": <number of hits>,
+      "match": {
+        "start": <start position of the match within the context>,
+        "end": <end position of the match within the context>,
+        "position": <global corpus position of the match>
+      },
+      "structs": {
+        "<structural attribute>": "<value>",
         ...
       },
-      "kwic": [
+      "tokens": [
         {
-          "match": {
-            "start": <start position of the match within the context>,
-            "end": <end position of the match within the context>,
-            "position": <global corpus position of the match>
-          },
-          "structs": {
-            "<structural attribute>": "<value>",
-            ...
-          },
-          "tokens": [
-            {
-              "word": "<word form>",
-              "<positional attribute>": "<value>",
-              ...
-            },
-            ...
-          ],
-          <if aligned corpora>
-          "aligned": {
-            "<aligned corpus>": [<list of tokens>], ...
-          }
+          "word": "<word form>",
+          "<positional attribute>": "<value>",
+          ...
         },
         ...
-      ]
-    }
+      ],
+      <if aligned corpora>
+      "aligned": {
+        "<aligned corpus>": [<list of tokens>], ...
+      }
+    },
+    ...
+  ]
+}
+```
 
 If `in_order` is set to 'false', `"match"` will instead consist of a list of match objects, one per highlighted
 word.
 
 #### Examples
 
-> Query the corpus SUC3 and show the first 10 sentences matching the CQP query 
+> Query the corpus SUC3 and show the first 10 sentences matching the CQP query
 `"och" [] [pos="NN"]`, including part of speech and base form in the result:  
 > [`/query?corpus=SUC3&start=0&end=9&default_context=1+sentence&cqp="och"+[]+[pos="NN"]&show=msd,lemma`]([SBURL]query?corpus=SUC3&start=0&end=9&default_context=1+sentence&cqp=%22och%22+%5B%5D+%5Bpos=%22NN%22%5D&show=msd,lemma&indent=4)
 
@@ -271,83 +278,85 @@ If you want to base your statistics on one single token in a multi token query, 
 
 #### Returns
 
-    {
-      "corpora": {
-        "<corpus>": {
-          "absolute": [
-            {
-              "value": {
-                "<positional attribute>": [
-                  "<value for first token>",
-                  "<value for second token>",
-                  ...
-                ],
-                "<structural attribute>": "<value>",
-                ...
-              },
-              "freq": <absolute frequency>
-            },
+```json
+{
+  "corpora": {
+    "<corpus>": {
+      "absolute": [
+        {
+          "value": {
+            "<positional attribute>": [
+              "<value for first token>",
+              "<value for second token>",
+              ...
+            ],
+            "<structural attribute>": "<value>",
             ...
-          ], 
-          "relative": [
-            {
-              "value": {
-                "<positional attribute>": [
-                  "<value for first token>",
-                  "<value for second token>",
-                  ...
-                ],
-                "<structural attribute>": "<value>",
-                ...
-              },
-              "freq": <relative frequency>
-            },
+          },
+          "freq": <absolute frequency>
+        },
+        ...
+      ],
+      "relative": [
+        {
+          "value": {
+            "<positional attribute>": [
+              "<value for first token>",
+              "<value for second token>",
+              ...
+            ],
+            "<structural attribute>": "<value>",
+            ...
+          },
+          "freq": <relative frequency>
+        },
+        ...
+      ],
+      "sums": {
+        "absolute": <absolute sum>,
+        "relative": <relative sum>
+      }
+    },
+  },
+  "total": {
+    "absolute": [
+      {
+        "value": {
+          "<positional attribute>": [
+            "<value for first token>",
+            "<value for second token>",
             ...
           ],
-          "sums": {
-            "absolute": <absolute sum>, 
-            "relative": <relative sum>
-          }
+          "<structural attribute>": "<value>",
+          ...
         },
-      }, 
-      "total": {
-        "absolute": [
-          {
-            "value": {
-              "<positional attribute>": [
-                "<value for first token>",
-                "<value for second token>",
-                ...
-              ],
-              "<structural attribute>": "<value>",
-              ...
-            },
-            "freq": <absolute frequency>
-          },
-          ...
-        ], 
-        "relative": [
-          {
-            "value": {
-              "<positional attribute>": [
-                "<value for first token>",
-                "<value for second token>",
-                ...
-              ],
-              "<structural attribute>": "<value>",
-              ...
-            },
-            "freq": <relative frequency>
-          },
-          ...
-        ],
-        "sums": {
-          "absolute": <absolute sum>, 
-          "relative": <relative sum>
-        }
+        "freq": <absolute frequency>
       },
-      "count": <total number of different values>
+      ...
+    ],
+    "relative": [
+      {
+        "value": {
+          "<positional attribute>": [
+            "<value for first token>",
+            "<value for second token>",
+            ...
+          ],
+          "<structural attribute>": "<value>",
+          ...
+        },
+        "freq": <relative frequency>
+      },
+      ...
+    ],
+    "sums": {
+      "absolute": <absolute sum>,
+      "relative": <relative sum>
     }
+  },
+  "count": <total number of different values>
+}
+```
 
 When `subcqp#` parameters are used, `"<corpus>"` and `"total"` above will instead each contain a list, with the first
 item being the result of the main `cqp` query, and the following items the results of the `subcqp#` queries. The
@@ -420,11 +429,11 @@ The result is returned both per corpus, and a total.
 
 What should happen when you ask for time data with a granularity finer than that of the annotated material? Does a
 search limited to the period 2005-01-01 -- 2005-01-31 include material dated with only "2005"? The `strategy` parameter
-gives you some control over this, affecting both how `from` and `to` work, and what parts of the material contribute 
+gives you some control over this, affecting both how `from` and `to` work, and what parts of the material contribute
 to the results.
 
 The list below describes the three different strategies, and for each strategy the rules that decide what part of the
-material is included in the search, as well as what tokens contribute to the token count for each data point. 
+material is included in the search, as well as what tokens contribute to the token count for each data point.
 
 The term "result time span" below refers both to the `from` and `to` span given by the user, and the different time spans
 making up the data points in the result data, the size of which are determined by the `granularity` parameter.
@@ -437,7 +446,7 @@ is set to 'y', and "2015-01" representing the whole of January 2015 with `granul
 *Strategy 1*
 :   The material time span needs to be completely contained by the result time span, or the result time span needs to be
     completely contained by the material time span.  
-    `(t1 >= t1' AND t2 <= t2') OR (t1 <= t1' AND t2 >= t2')`  
+    `(t1 >= t1' AND t2 <= t2') OR (t1 <= t1' AND t2 >= t2')`
 
 *Strategy 2*
 :   All overlaps allowed between material time span and result time span.  
@@ -445,90 +454,94 @@ is set to 'y', and "2015-01" representing the whole of January 2015 with `granul
 
 *Strategy 3*
 :   The material time span is completely contained by the result time span.  
-    `t1 >= t1' AND t2 <= t2'`  
+    `t1 >= t1' AND t2 <= t2'`
 
 #### Returns
 
+```json
+{
+  "corpora": {
+    "<corpus>": [
+      {
+        "relative": {
+          "<date>": <relative frequency>,
+          ...
+        },
+        "sums": {
+          "relative": <sum, relative frequency>,
+          "absolute": <sum, absolute frequency>
+        },
+        "absolute": {
+          "<date>": <absolute frequency>,
+          ...
+        }
+      },
+      {
+        "cqp": "<sub-CQP query>",
+        "relative": {
+          "<date>": <relative frequency>,
+          ...
+        },
+        "sums": {
+          "relative": <sum, relative frequency>,
+          "absolute": <sum, absolute frequency>
+        },
+        "absolute": {
+          "<date>": <absolute frequency>,
+          ...
+        }
+      },
+      <more structures like the one above, one per sub-query>
+    ],
+    ...
+  },
+  "combined": [
     {
-      "corpora": {
-        "<corpus>": [
-          {
-            "relative": {
-              "<date>": <relative frequency>,
-              ...
-            },
-            "sums": {
-              "relative": <sum, relative frequency>,
-              "absolute": <sum, absolute frequency>
-            },
-            "absolute": {
-              "<date>": <absolute frequency>,
-              ...
-            }
-          },
-          {
-            "cqp": "<sub-CQP query>",
-            "relative": {
-              "<date>": <relative frequency>,
-              ...
-            },
-            "sums": {
-              "relative": <sum, relative frequency>,
-              "absolute": <sum, absolute frequency>
-            },
-            "absolute": {
-              "<date>": <absolute frequency>,
-              ...
-            }
-          },
-          <more structures like the one above, one per sub-query>
-        ],
+      "relative": {
+        "<date>": <relative frequency>,
         ...
       },
-      "combined": [
-        {
-          "relative": {
-            "<date>": <relative frequency>,
-            ...
-          },
-          "sums": {
-            "relative": <sum, relative frequency>,
-            "absolute": <sum, absolute frequency>
-          },
-          "absolute": {
-            "<date>": <absolute frequency>,
-            ...
-          }
-        },
-        {
-          "cqp": "<sub-CQP query>",
-          "relative": {
-            "<date>": <relative frequency>,
-            ...
-          },
-          "sums": {
-            "relative": <sum, relative frequency>,
-            "absolute": <sum, absolute frequency>
-          },
-          "absolute": {
-            "<date>": <absolute frequency>,
-            ...
-          }
-        },
-        <more structures like the one above, one per sub-query>
-      ]
-    }
+      "sums": {
+        "relative": <sum, relative frequency>,
+        "absolute": <sum, absolute frequency>
+      },
+      "absolute": {
+        "<date>": <absolute frequency>,
+        ...
+      }
+    },
+    {
+      "cqp": "<sub-CQP query>",
+      "relative": {
+        "<date>": <relative frequency>,
+        ...
+      },
+      "sums": {
+        "relative": <sum, relative frequency>,
+        "absolute": <sum, absolute frequency>
+      },
+      "absolute": {
+        "<date>": <absolute frequency>,
+        ...
+      }
+    },
+    <more structures like the one above, one per sub-query>
+  ]
+}
+```
 
 The data points in the result indicates the number of hits *from that point onward* until the next data point,
 meaning that the following data:
 
-    "2010": 100,
-    "2012": 50,
-    "2013": 0,
-    "2016": null
+```json
+"2010": 100,
+"2012": 50,
+"2013": 0,
+"2016": null
+```
 
 should be interpreted as 100 hits during 2010--2011, then 50 hits during 2012, zero hits 2013--2015,
-and finally from 2016 onwards we have no data at all. 
+and finally from 2016 onwards we have no data at all.
 
 #### Example
 
@@ -560,19 +573,21 @@ Show the distribution of all tokens in a corpus over time.
 
 #### Returns
 
-    {
-      "corpora": {
-        "<corpus>": {
-          "<date>": <token count>,
-          ...
-        },
-        ...
-      },
-      "combined": {
-        "<date>": <token count>,
-        ...
-      }
-    }
+```json
+{
+  "corpora": {
+    "<corpus>": {
+      "<date>": <token count>,
+      ...
+    },
+    ...
+  },
+  "combined": {
+    "<date>": <token count>,
+    ...
+  }
+}
+```
 
 #### Example
 
@@ -605,28 +620,30 @@ Compare the results of two different searches by using log-likelihood.
 
 #### Returns
 
-    {
-      "average": <average for log-likelihood>,
-      "loglike": {
-        "<value>": <log-likelihood value>,
-        ...
-      },
-      "set1": {
-        "<value>": <absolute frequency>,
-        ...
-      },
-      "set2": {
-        "<value>": <absolute frequency>,
-        ...
-      }
-    }
+```json
+{
+  "average": <average for log-likelihood>,
+  "loglike": {
+    "<value>": <log-likelihood value>,
+    ...
+  },
+  "set1": {
+    "<value>": <absolute frequency>,
+    ...
+  },
+  "set2": {
+    "<value>": <absolute frequency>,
+    ...
+  }
+}
+```
 
 A positive log-likelihood value indicates a relative increase in `set2` compared to `set1`, while a negative value
 indicates a relative decrease.
 
 #### Example
 
-> Compare the nouns of two different corpora:   
+> Compare the nouns of two different corpora:  
 > [`/loglike?set1_cqp=[pos="NN"]&set2_cqp=[pos="NN"]&group_by=word&max=10&set1_corpus=ROMI&set2_corpus=GP2012`]([SBURL]loglike?set1_cqp=[pos=%22NN%22]&set2_cqp=[pos=%22NN%22]&group_by=word&max=10&set1_corpus=ROMI&set2_corpus=GP2012&indent=4)
 
 
@@ -652,27 +669,29 @@ Get typical dependency relations for a given lemgram or word.
 
 #### Returns
 
+```json
+{
+  "relations": [
     {
-      "relations": [
-        {
-          "corpus": [
-            <list of corpora containing hits>
-          ], 
-          "dep": "<dependent lemgram or word>",
-          "depextra": "<dependent prefix>",
-          "deppos": "<dependent part of speech>",
-          "freq": <number of occurrences>,
-          "head": "<head lemgram or word>",
-          "headpos": "<head part of speech>",
-          "mi": <lexicographer's mutual information score>,
-          "rel": "<relation>",
-          "source": [
-            <list of IDs, for getting the source sentences>
-          ]
-        }, 
-        ...
+      "corpus": [
+        <list of corpora containing hits>
+      ],
+      "dep": "<dependent lemgram or word>",
+      "depextra": "<dependent prefix>",
+      "deppos": "<dependent part of speech>",
+      "freq": <number of occurrences>,
+      "head": "<head lemgram or word>",
+      "headpos": "<head part of speech>",
+      "mi": <lexicographer's mutual information score>,
+      "rel": "<relation>",
+      "source": [
+        <list of IDs, for getting the source sentences>
       ]
-    }
+    },
+    ...
+  ]
+}
+```
 
 #### Example
 
@@ -724,10 +743,12 @@ Return the number of occurrences of one or more lemgrams in one or more corpora.
 
 #### Returns
 
-    {
-      "<lemgram>": <number of occurrences>,
-      ...
-    }
+```json
+{
+  "<lemgram>": <number of occurrences>,
+  ...
+}
+```
 
 #### Example
 
@@ -763,47 +784,51 @@ hierarchies.
 
 Without `count` the result will contain lists:
 
-    {
-      "corpora": {
-        "<corpus>": {
-          "<attribute 1>": [
-            "<value>",
-            ...
-          ],
-          ...
-        },
+```json
+{
+  "corpora": {
+    "<corpus>": {
+      "<attribute 1>": [
+        "<value>",
         ...
-      },
-      "combined": {
-        "<attribute 1>": [
-          "<value>",
-          ...
-        ],
+      ],
       ...
-      }
-    }
+    },
+    ...
+  },
+  "combined": {
+    "<attribute 1>": [
+      "<value>",
+      ...
+    ],
+  ...
+  }
+}
+```
 
 With `count` the result will consist of objects:
 
-    {
-      "corpora": {
-        "<corpus>": {
-          "<attribute 1>": {
-            "<value>": <token count>,
-            ...
-          },
-          ...
-        },
+```json
+{
+  "corpora": {
+    "<corpus>": {
+      "<attribute 1>": {
+        "<value>": <token count>,
         ...
       },
-      "combined": {
-        "<attribute 1>": {
-          "<value>": <token count>,
-          ...
-        },
-        ...
-      }
-    }
+      ...
+    },
+    ...
+  },
+  "combined": {
+    "<attribute 1>": {
+      "<value>": <token count>,
+      ...
+    },
+    ...
+  }
+}
+```
 
 #### Example
 
@@ -828,10 +853,11 @@ Authenticate a user against an authentication system, if available.
 
 A list of protected corpora that the user has access to.
 
-    {
-      "corpora": [
-        "<corpus>",
-        ...
-      ]
-    }
-
+```json
+{
+  "corpora": [
+    "<corpus>",
+    ...
+  ]
+}
+```

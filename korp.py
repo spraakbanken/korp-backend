@@ -3106,9 +3106,9 @@ def documentation():
     # Convert Markdown to HTML
     md = markdown.Markdown(extensions=["markdown.extensions.toc",
                                        "markdown.extensions.smarty",
-                                       "markdown.extensions.def_list"])
+                                       "markdown.extensions.def_list",
+                                       "markdown.extensions.fenced_code"])
     md_html = md.convert(md_text)
-    md_html = md_html.replace("<pre><code>", '<pre><code class="json">')
 
     html = ["""<!doctype html>
         <html>
