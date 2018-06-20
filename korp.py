@@ -44,12 +44,19 @@ import urllib.error
 import base64
 import hashlib
 import itertools
-import pickle
 import traceback
 import functools
 import math
 import random
+import markdown
 import config
+try:
+    import pylibmc
+except ImportError:
+    print("Could not load pylibmc. Caching will be disabled.")
+    cache_disabled = True
+else:
+    cache_disabled = False
 from flask import Flask, request, Response, stream_with_context, copy_current_request_context
 from flask_mysqldb import MySQL
 from flask_cors import CORS
@@ -58,7 +65,10 @@ from flask_cors import CORS
 # Nothing needs to be changed in this file. Use config.py for configuration.
 
 # The version of this script
-KORP_VERSION = "7.0.4"
+KORP_VERSION = "7.1.1"
+
+# URL for Språkbanken's Korp API (used for examples in documentation)
+SB_API_URL = "https://ws.spraakbanken.gu.se/ws/korp/v7/"
 
 # Special symbols used by this script; they must NOT be in the corpus
 END_OF_LINE = "-::-EOL-::-"
@@ -86,10 +96,6 @@ app.config["MYSQL_USE_UNICODE"] = True
 app.config["MYSQL_CURSORCLASS"] = "DictCursor"
 mysql = MySQL(app)
 
-# Create cache dir if needed
-if config.CACHE_DIR and not os.path.exists(config.CACHE_DIR):
-    os.makedirs(config.CACHE_DIR)
-
 
 def main_handler(generator):
     """Decorator wrapping all WSGI endpoints, handling errors and formatting.
@@ -100,7 +106,6 @@ def main_handler(generator):
      - indent: pretty-print the result with a specific indentation
      - debug: if set, return some extra information (for debugging)
     """
-
     @functools.wraps(generator)  # Copy original function's information, needed by Flask
     def decorated(args=None, *pargs, **kwargs):
         internal = args is not None
@@ -113,8 +118,10 @@ def main_handler(generator):
         args["internal"] = internal
 
         if not isinstance(args.get("cache"), bool):
-            args["cache"] = bool(not args.get("cache", "").lower() == "false" and
-                                 config.CACHE_DIR and os.path.exists(config.CACHE_DIR))
+            args["cache"] = bool(not cache_disabled and
+                                 not args.get("cache", "").lower() == "false" and
+                                 config.CACHE_DIR and os.path.exists(config.CACHE_DIR) and
+                                 config.MEMCACHED_SERVERS)
 
         if internal:
             # Function is internally used
@@ -181,23 +188,24 @@ def main_handler(generator):
                 yield result
 
             starttime = time.time()
-            incremental = args.get("incremental", "").lower() == "true"
+            incremental = parse_bool(args, "incremental", False)
             callback = args.get("callback")
             indent = int(args.get("indent", 0))
 
             if incremental:
                 # Incremental response
-                return Response(stream_with_context(incremental_json(generator(args, *pargs, **kwargs))), mimetype="application/json")
+                return Response(stream_with_context(incremental_json(generator(args, *pargs, **kwargs))),
+                                mimetype="application/json")
             else:
                 # We still use a streaming response even when non-incremental, to prevent timeouts
-                return Response(stream_with_context(full_json(generator(args, *pargs, **kwargs))), mimetype="application/json")
+                return Response(stream_with_context(full_json(generator(args, *pargs, **kwargs))),
+                                mimetype="application/json")
 
     return decorated
 
 
 def prevent_timeout(generator):
     """Decorator for long-running functions that might otherwise timeout."""
-
     @functools.wraps(generator)
     def decorated(args=None, *pargs, **kwargs):
         if args["internal"]:
@@ -243,19 +251,19 @@ def prevent_timeout(generator):
 ################################################################################
 
 def parse_corpora(args):
-    corpora = args.get("corpus")
+    corpora = args.get("corpus", [])
     if isinstance(corpora, str):
         corpora = corpora.upper().split(QUERY_DELIM)
     return sorted(set(corpora))
 
 
 def parse_within(args):
-    within = defaultdict(lambda: args.get("defaultwithin"))
+    within = defaultdict(lambda: args.get("default_within", args.get("defaultwithin")))
 
     if args.get("within"):
         if ":" not in args.get("within"):
             raise ValueError("Malformed value for key 'within'.")
-        within.update(dict(x.split(":") for x in args.get("within").split(QUERY_DELIM)))
+        within.update({x.split(":")[0].upper(): x.split(":")[1] for x in args.get("within").split(QUERY_DELIM)})
     return within
 
 
@@ -281,7 +289,6 @@ def sleep(args):
         yield {"%d" % x: x}
 
 
-@app.route("/", methods=["GET", "POST"])
 @app.route("/info", methods=["GET", "POST"])
 @main_handler
 def info(args):
@@ -295,14 +302,11 @@ def info(args):
 
 
 def general_info(args):
-    """Return information about the available corpora.
-    """
-
+    """Return information about the available corpora."""
     if args["cache"]:
-        cache_filename = os.path.join(config.CACHE_DIR, "info")
-        if os.path.isfile(cache_filename):
-            with open(cache_filename, "r") as cachefile:
-                result = json.load(cachefile)
+        with mc_pool.reserve() as mc:
+            result = mc.get("%s:info" % cache_prefix())
+        if result:
             if "debug" in args:
                 result.setdefault("DEBUG", {})
                 result["DEBUG"]["cache_read"] = True
@@ -319,23 +323,17 @@ def general_info(args):
     result = {"version": KORP_VERSION, "cqp-version": version, "corpora": list(corpora), "protected_corpora": protected}
 
     if args["cache"]:
-        if not os.path.exists(cache_filename):
-            cache_filename_temp = "%s.%s" % (cache_filename, str(uuid.uuid4()))
-
-            with open(cache_filename_temp, "w") as cachefile:
-                json.dump(result, cachefile)
-            os.rename(cache_filename_temp, cache_filename)
-
-            if "debug" in args:
-                result.setdefault("DEBUG", {})
-                result["DEBUG"]["cache_saved"] = True
+        with mc_pool.reserve() as mc:
+            added = mc.add("%s:info" % cache_prefix(), result)
+        if added and "debug" in args:
+            result.setdefault("DEBUG", {})
+            result["DEBUG"]["cache_saved"] = True
 
     return result
 
 
 def corpus_info(args, no_combined_cache=False):
-    """Return information about a specific corpus or corpora.
-    """
+    """Return information about a specific corpus or corpora."""
     assert_key("corpus", args, IS_IDENT, True)
 
     corpora = parse_corpora(args)
@@ -344,10 +342,10 @@ def corpus_info(args, no_combined_cache=False):
     if args["cache"]:
         checksum_combined = get_hash((sorted(corpora),))
         save_cache = []
-        cache_filename = os.path.join(config.CACHE_DIR, "info_" + checksum_combined)
-        if os.path.exists(cache_filename):
-            with open(cache_filename, "r") as f:
-                result = json.load(f)
+        combined_cache_key = "%s:info_%s" % (cache_prefix(), checksum_combined)
+        with mc_pool.reserve() as mc:
+            result = mc.get(combined_cache_key)
+        if result:
             if "debug" in args:
                 result.setdefault("DEBUG", {})
                 result["DEBUG"]["cache_read"] = True
@@ -363,10 +361,10 @@ def corpus_info(args, no_combined_cache=False):
     for corpus in corpora:
         # Check if corpus is cached
         if args["cache"]:
-            cache_filename = os.path.join(config.CACHE_DIR, "%s:info" % corpus)
-            if os.path.exists(cache_filename):
-                with open(cache_filename, "r") as f:
-                    result["corpora"][corpus] = json.load(f)
+            with mc_pool.reserve() as mc:
+                corpus_result = mc.get("%s:info" % cache_prefix(corpus))
+            if corpus_result:
+                result["corpora"][corpus] = corpus_result
             else:
                 save_cache.append(corpus)
         if corpus not in result["corpora"]:
@@ -409,28 +407,23 @@ def corpus_info(args, no_combined_cache=False):
         result["corpora"][corpus] = {"attrs": attrs, "info": info}
         if args["cache"]:
             if corpus in save_cache:
-                cache_filename = os.path.join(config.CACHE_DIR, "%s:info" % corpus)
-                cache_filename_temp = "%s.%s" % (cache_filename, str(uuid.uuid4()))
-                with open(cache_filename_temp, "w") as f:
-                    json.dump(result["corpora"][corpus], f)
-                os.rename(cache_filename_temp, cache_filename)
+                with mc_pool.reserve() as mc:
+                    mc.add("%s:info" % cache_prefix(corpus), result["corpora"][corpus])
 
     result["total_size"] = total_size
     result["total_sentences"] = total_sentences
 
     if args["cache"] and not no_combined_cache:
         # Cache whole query
-        cache_filename = os.path.join(config.CACHE_DIR, "info_" + checksum_combined)
-        if not os.path.exists(cache_filename):
-            cache_filename_temp = "%s.%s" % (cache_filename, str(uuid.uuid4()))
-
-            with open(cache_filename_temp, "w") as f:
-                json.dump(result, f)
-            os.rename(cache_filename_temp, cache_filename)
-
-            if "debug" in args:
-                result.setdefault("DEBUG", {})
-                result["DEBUG"]["cache_saved"] = True
+        with mc_pool.reserve() as mc:
+            try:
+                saved = mc.add(combined_cache_key, result)
+            except pylibmc.TooBig:
+                pass
+            else:
+                if saved and "debug" in args:
+                    result.setdefault("DEBUG", {})
+                    result["DEBUG"]["cache_saved"] = True
 
     return result
 
@@ -469,29 +462,7 @@ def query_sample(args):
 @main_handler
 @prevent_timeout
 def query(args):
-    """Perform a CQP query and return a number of matches.
-
-    Each match contains position information and a list of the words and attributes in the match.
-
-    The required parameters are
-     - corpus: the CWB corpus. More than one parameter can be used.
-     - cqp: the CQP query string
-     - start, end: which result rows that should be returned
-
-    The optional parameters are
-     - context: how many words/sentences to the left/right should be returned
-       (default '10 words')
-     - show: add once for each corpus parameter (positional/strutural/alignment)
-       (default only show the 'word' parameter)
-     - show_struct: structural annotations for matched region. Multiple parameters possible.
-     - within: only search for matches within the given s-attribute (e.g., within a sentence)
-       (default: no within)
-     - cut: set cutoff threshold to reduce the size of the result
-       (default: no cutoff)
-     - sort: sort the results by keyword ('keyword'), left or right context ('left'/'right') or random ('random')
-       (default: no sorting)
-     - incremental: returns the result incrementally instead of all at once
-    """
+    """Perform a CQP query and return a number of matches."""
     assert_key("cqp", args, r"", True)
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("start", args, IS_NUMBER)
@@ -504,8 +475,8 @@ def query(args):
     assert_key("sort", args, r"")
     assert_key("incremental", args, r"(true|false)")
 
-    incremental = args.get("incremental", "").lower() == "true"
-    free_search = args.get("in_order", "").lower() == "false"
+    incremental = parse_bool(args, "incremental", False)
+    free_search = not parse_bool(args, "in_order", True)
     use_cache = args["cache"]
     cut = args.get("cut")
 
@@ -523,7 +494,7 @@ def query(args):
         show_structs = show_structs.split(QUERY_DELIM)
     show_structs = set(show_structs)
 
-    expand_prequeries = not args.get("expand_prequeries", "").lower() == "false"
+    expand_prequeries = parse_bool(args, "expand_prequeries", True)
 
     start, end = int(args.get("start") or 0), int(args.get("end") or 9)
 
@@ -532,29 +503,35 @@ def query(args):
 
     within = parse_within(args)
 
-    # Parse "context"/"leftcontext"/"rightcontext"/"defaultcontext"
-    defaultcontext = args.get("defaultcontext") or "10 words"
-    context = defaultdict(lambda: (defaultcontext,))
+    # Parse "context"/"left_context"/"right_context"/"default_context"
+    default_context = args.get("default_context", args.get("defaultcontext")) or "10 words"
+    context = defaultdict(lambda: (default_context,))
     contexts = {}
 
-    for c in ("leftcontext", "rightcontext", "context"):
+    for c in ("left_context", "right_context", "context"):
         cv = args.get(c, "")
         if cv:
             if ":" not in cv:
                 raise ValueError("Malformed value for key '%s'." % c)
-            contexts[c] = dict(x.split(":") for x in cv.split(QUERY_DELIM))
+            contexts[c] = {x.split(":")[0].upper(): x.split(":")[1] for x in cv.split(QUERY_DELIM)}
         else:
             contexts[c] = {}
 
     for corpus in set(k for v in contexts.values() for k in v.keys()):
-        if corpus in contexts["leftcontext"] or corpus in contexts["rightcontext"]:
-            context[corpus] = (contexts["leftcontext"].get(corpus, defaultcontext),
-                               contexts["rightcontext"].get(corpus, defaultcontext))
+        if corpus in contexts["left_context"] or corpus in contexts["right_context"]:
+            context[corpus] = (contexts["left_context"].get(corpus, default_context),
+                               contexts["right_context"].get(corpus, default_context))
         else:
-            context[corpus] = (contexts["context"].get(corpus, defaultcontext),)
+            context[corpus] = (contexts["context"].get(corpus, default_context),)
+
+    sort = args.get("sort")
+    sort_random_seed = args.get("random_seed")
 
     # Sort numbered CQP-queries numerically
     cqp, _ = parse_cqp_subcqp(args)
+
+    if len(cqp) > 1 and expand_prequeries and not all(within[c] for c in corpora):
+        raise ValueError("Multiple CQP queries requires 'within' or 'expand_prequeries=false'")
 
     # Parameters used for all queries
     queryparams = {"free_search": free_search,
@@ -563,12 +540,14 @@ def query(args):
                    "show_structs": show_structs,
                    "expand_prequeries": expand_prequeries,
                    "cut": cut,
-                   "cqp": cqp
+                   "cqp": cqp,
+                   "sort": sort,
+                   "random_seed": sort_random_seed
                    }
 
     result = {"kwic": []}
 
-    # Checksum for whole query, used to verify 'querydata' from the client
+    # Checksum for whole query, used to verify 'query_data' from the client
     checksum = get_hash((sorted(corpora),
                          cqp,
                          sorted(within.items()),
@@ -585,39 +564,38 @@ def query(args):
     statistics = {}
 
     saved_statistics = {}
-    querydata = args.get("querydata")
+    query_data = args.get("query_data", args.get("querydata"))
 
-    if querydata:
+    if query_data:
         try:
-            querydata = zlib.decompress(base64.b64decode(
-                querydata.replace("\\n", "\n").replace("-", "+").replace("_", "/"))).decode("UTF-8")
+            query_data = zlib.decompress(base64.b64decode(
+                query_data.replace("\\n", "\n").replace("-", "+").replace("_", "/"))).decode("UTF-8")
         except:
             if "debug" in args:
-                debug["querydata_unparseable"] = True
+                debug["query_data_unparseable"] = True
         else:
             if "debug" in args:
-                debug["querydata_read"] = True
-            saved_checksum, stats_temp = querydata.split(";", 1)
+                debug["query_data_read"] = True
+            saved_checksum, stats_temp = query_data.split(";", 1)
             if saved_checksum == checksum:
                 for pair in stats_temp.split(";"):
                     corpus, hits = pair.split(":")
                     saved_statistics[corpus] = int(hits)
             elif "debug" in args:
-                debug["querydata_checksum_mismatch"] = True
+                debug["query_data_checksum_mismatch"] = True
 
     if use_cache and not saved_statistics:
-        # Querydata parsing failed or was missing, so look for cached hits instead
+        # Query data parsing failed or was missing, so look for cached hits instead
         for corpus in corpora:
             corpus_checksum = get_hash((cqp,
                                         within[corpus],
                                         cut,
                                         expand_prequeries,
                                         free_search))
-
-            cache_hits_filename = os.path.join(config.CACHE_DIR, "%s:query_size_%s" % (corpus, corpus_checksum))
-            if os.path.isfile(cache_hits_filename):
-                with open(cache_hits_filename, "r") as cache_hits:
-                    saved_statistics[corpus] = int(cache_hits.read())
+            with mc_pool.reserve() as mc:
+                cached_corpus_hits = mc.get("%s:query_size_%s" % (cache_prefix(corpus.split("|")[0]), corpus_checksum))
+            if cached_corpus_hits is not None:
+                saved_statistics[corpus] = cached_corpus_hits
 
     ns.start_local = start
     ns.end_local = end
@@ -748,9 +726,10 @@ def query(args):
     result["hits"] = ns.total_hits
     result["corpus_hits"] = statistics
     result["corpus_order"] = corpora
-    result["querydata"] = binascii.b2a_base64(zlib.compress(
+    result["query_data"] = binascii.b2a_base64(zlib.compress(
         bytes(checksum + ";" + ";".join("%s:%d" % (c, h) for c, h in statistics.items()),
               "utf-8"))).decode("utf-8").replace("+", "-").replace("/", "_")
+    result["querydata"] = result["query_data"]  # For backward compatibility
 
     if debug:
         result["DEBUG"] = debug
@@ -767,7 +746,7 @@ def optimize(args):
     if args.get("cut"):
         cqpparams["cut"] = args["cut"]
 
-    free_search = args.get("in_order", "").lower() == "false"
+    free_search = not parse_bool(args, "in_order", True)
 
     cqp = args["cqp"]
     result = {"cqp": query_optimize(cqp, cqpparams, find_match=False, expand=False, free_search=free_search)}
@@ -775,14 +754,14 @@ def optimize(args):
 
 
 def query_optimize(cqp, cqpparams, find_match=True, expand=True, free_search=False):
-    """ Optimize simple queries with multiple words by converting them to MU queries.
-        Optimization only works for queries with at least two tokens, or one token preceded
-        by one or more wildcards. The query also must use "within".
-        Return a tuple (return code, query)
-        0 = optimization successful
-        1 = optimization not needed (e.g. single word searches)
-        2 = optimization not possible (e.g. searches with repetition of non-wildcards)
-        """
+    """Optimize simple queries with multiple words by converting them to MU queries.
+    Optimization only works for queries with at least two tokens, or one token preceded
+    by one or more wildcards. The query also must use "within".
+    Return a tuple (return code, query)
+    0 = optimization successful
+    1 = optimization not needed (e.g. single word searches)
+    2 = optimization not possible (e.g. searches with repetition of non-wildcards)
+    """
     # Split query into tokens
     tokens, rest = parse_cqp(cqp)
     within = cqpparams.get("within")
@@ -889,17 +868,15 @@ def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, sh
         cache_query = "query_data_%s" % checksum
         cache_query_temp = cache_query + "_" + unique_id
 
-        cache_filename = os.path.join(config.CACHE_DIR, "%s:query_data_%s" % (corpus, checksum))
+        cache_filename = os.path.join(config.CACHE_DIR, "%s:query_data_%s" % (corpus.split("|")[0], checksum))
         cache_filename_temp = cache_filename + "_" + unique_id
 
-        cache_size_filename = os.path.join(config.CACHE_DIR, "%s:query_size_%s" % (corpus, checksum))
-        cache_size_filename_temp = cache_size_filename + "." + unique_id
+        cache_size_key = "%s:query_size_%s" % (cache_prefix(corpus.split("|")[0]), checksum)
 
-        is_cached = os.path.isfile(cache_filename) and os.path.isfile(cache_size_filename)
-        if is_cached:
-            with open(cache_size_filename, "r") as f:
-                cache_hits = f.read()
-        cached_no_hits = is_cached and int(cache_hits) == 0
+        with mc_pool.reserve() as mc:
+            cache_hits = mc.get(cache_size_key)
+        is_cached = cache_hits is not None and os.path.isfile(cache_filename)
+        cached_no_hits = cache_hits == 0
     else:
         is_cached = False
 
@@ -970,6 +947,8 @@ def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, sh
         # This exact query has been done before. Read corpus positions from cache.
         if not cached_no_hits:
             cmd += ["Last = %s;" % cache_query]
+            # Touch cache file to delay its removal
+            os.utime(cache_filename)
     else:
         for i, c in enumerate(cqp):
             cqpparams_temp = cqpparams.copy()
@@ -1042,12 +1021,10 @@ def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, sh
     nr_hits = next(lines)
     nr_hits = 0 if nr_hits == END_OF_LINE else int(nr_hits)
 
-    if use_cache and not is_cached:
+    if use_cache and not is_cached and not cached_no_hits:
         # Save number of hits
-        with open(cache_size_filename_temp, "w") as f:
-            f.write("%d\n" % nr_hits)
-
-        os.rename(cache_size_filename_temp, cache_size_filename)
+        with mc_pool.reserve() as mc:
+            mc.add(cache_size_key, nr_hits)
 
         try:
             os.rename(cache_filename_temp, cache_filename)
@@ -1245,16 +1222,17 @@ def which_hits(corpora, stats, start, end):
 @main_handler
 @prevent_timeout
 def struct_values(args):
+    """Get all available values for one or more structural attributes."""
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("struct", args, re.compile(r"^[\w_\d,>]+$"), True)
     assert_key("incremental", args, r"(true|false)")
 
-    incremental = args.get("incremental", "").lower() == "true"
+    incremental = parse_bool(args, "incremental", False)
+    include_count = parse_bool(args, "count", False)
 
-    stats = args.get("count", "").lower() == "true"
-
+    per_corpus = parse_bool(args, "per_corpus", True)
+    combined = parse_bool(args, "combined", True)
     corpora = parse_corpora(args)
-
     check_authentication(corpora)
 
     structs = args.get("struct")
@@ -1267,7 +1245,7 @@ def struct_values(args):
 
     ns = Namespace()  # To make variables writable from nested functions
 
-    result = {"corpora": defaultdict(dict)}
+    result = {"corpora": defaultdict(dict), "combined": {}}
     total_stats = defaultdict(set)
 
     from_cache = set()  # Keep track of what has been read from cache
@@ -1276,119 +1254,132 @@ def struct_values(args):
         all_cache = True
         for corpus in corpora:
             for struct in structs:
-                checksum_data = (corpus, struct, split, stats)
-                checksum = get_hash(checksum_data)
-
-                cache_filename = os.path.join(config.CACHE_DIR, "%s:struct_values_%s" % (corpus, checksum))
-                if os.path.exists(cache_filename):
-                    with open(cache_filename, "r") as f:
-                        data = json.load(f)
+                checksum = get_hash((corpus, struct, split, include_count))
+                with mc_pool.reserve() as mc:
+                    data = mc.get("%s:struct_values_%s" % (cache_prefix(corpus), checksum))
+                if data is not None:
                     result["corpora"].setdefault(corpus, {})
-                    if data:
-                        result["corpora"][corpus][struct] = data
+                    result["corpora"][corpus][struct] = data
                     if "debug" in args:
                         result.setdefault("DEBUG", {"caches_read": []})
                         result["DEBUG"]["caches_read"].append("%s:%s" % (corpus, struct))
                     from_cache.add((corpus, struct))
                 else:
                     all_cache = False
+    else:
+        all_cache = False
 
-        if all_cache:
-            result["combined"] = {}
-            yield result
-            return
+    if not all_cache:
+        ns.progress_count = 0
+        if incremental:
+            yield ({"progress_corpora": list(corpora)})
 
-    ns.progress_count = 0
-    if incremental:
-        yield ({"progress_corpora": list(corpora)})
+        with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
+            future_query = dict((executor.submit(count_query_worker_simple, corpus, cqp=None,
+                                                 group_by=[(s, True) for s in struct.split(">")],
+                                                 use_cache=args["cache"]), (corpus, struct))
+                                for corpus in corpora for struct in structs if not (corpus, struct) in from_cache)
 
-    with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-        future_query = dict((executor.submit(count_query_worker_simple, corpus, cqp=None,
-                                             groupby=[(s, True) for s in struct.split(">")],
-                                             use_cache=args["cache"]), (corpus, struct))
-                            for corpus in corpora for struct in structs if not (corpus, struct) in from_cache)
+            for future in futures.as_completed(future_query):
+                corpus, struct = future_query[future]
+                if future.exception() is not None:
+                    raise CQPError(future.exception())
+                else:
+                    lines, nr_hits, corpus_size = future.result()
 
-        for future in futures.as_completed(future_query):
-            corpus, struct = future_query[future]
-            if future.exception() is not None:
-                raise CQPError(future.exception())
-            else:
-                lines, nr_hits, corpus_size = future.result()
+                    corpus_stats = {} if include_count else set()
+                    vals_dict = {}
+                    struct_list = struct.split(">")
 
-                corpus_stats = {} if stats else set()
-                vals_dict = {}
-                struct_list = struct.split(">")
+                    for line in lines:
+                        freq, val = line.lstrip().split(" ", 1)
 
-                for line in lines:
-                    freq, val = line.lstrip().split(" ", 1)
+                        if ">" in struct:
+                            vals = val.split("\t")
+
+                            if split:
+                                vals = [[x for x in n.split("|") if x] if struct_list[i] in split and n else [n] for
+                                        i, n in enumerate(vals)]
+                                vals_prod = itertools.product(*vals)
+                            else:
+                                vals_prod = [vals]
+
+                            for val in vals_prod:
+                                prev = vals_dict
+                                for i, n in enumerate(val):
+                                    if include_count and i == len(val) - 1:
+                                        prev.setdefault(n, 0)
+                                        prev[n] += int(freq)
+                                        break
+                                    elif not include_count and i == len(val) - 1:
+                                        prev.append(n)
+                                        break
+                                    elif not include_count and i == len(val) - 2:
+                                        prev.setdefault(n, [])
+                                    else:
+                                        prev.setdefault(n, {})
+                                    prev = prev[n]
+                        else:
+                            if struct in split:
+                                vals = [x for x in val.split("|") if x] if val else [""]
+                            else:
+                                vals = [val]
+                            for val in vals:
+                                if include_count:
+                                    corpus_stats[val] = int(freq)
+                                else:
+                                    corpus_stats.add(val)
 
                     if ">" in struct:
-                        vals = val.split("\t")
+                        result["corpora"][corpus][struct] = vals_dict
+                    elif corpus_stats:
+                        result["corpora"][corpus][struct] = corpus_stats if include_count else sorted(corpus_stats)
 
-                        if split:
-                            vals = [[x for x in n.split("|") if x] if struct_list[i] in split and n else [n] for
-                                    i, n in enumerate(vals)]
-                            vals_prod = itertools.product(*vals)
-                        else:
-                            vals_prod = [vals]
+                    if incremental:
+                        yield {"progress_%d" % ns.progress_count: corpus}
+                        ns.progress_count += 1
 
-                        for val in vals_prod:
-                            prev = vals_dict
-                            for i, n in enumerate(val):
-                                if stats and i == len(val) - 1:
-                                    prev.setdefault(n, 0)
-                                    prev[n] += int(freq)
-                                    break
-                                elif not stats and i == len(val) - 1:
-                                    prev.append(n)
-                                    break
-                                elif not stats and i == len(val) - 2:
-                                    prev.setdefault(n, [])
-                                else:
-                                    prev.setdefault(n, {})
-                                prev = prev[n]
-                    else:
-                        if struct in split:
-                            vals = [x for x in val.split("|") if x] if val else [""]
-                        else:
-                            vals = [val]
-                        for val in vals:
-                            if stats:
-                                corpus_stats[val] = int(freq)
-                            else:
-                                corpus_stats.add(val)
+    def merge(d1, d2):
+        merged = deepcopy(d1)
+        for key in d2:
+            if key in d1:
+                if isinstance(d1[key], dict) and isinstance(d2[key], dict):
+                    merged[key] = merge(d1[key], d2[key])
+                elif isinstance(d1[key], int):
+                    merged[key] += d2[key]
+                elif isinstance(d1[key], list):
+                    merged[key].extend(d2[key])
+                    merged[key] = sorted(set(merged[key]))
+            else:
+                merged[key] = d2[key]
+        return merged
 
-                if ">" in struct:
-                    result["corpora"][corpus][struct] = vals_dict
-                elif corpus_stats:
-                    result["corpora"][corpus][struct] = corpus_stats if stats else sorted(corpus_stats)
+    if combined:
+        for corpus in result["corpora"]:
+            result["combined"] = merge(result["combined"], result["corpora"][corpus])
+    else:
+        del result["combined"]
 
-                if incremental:
-                    yield {"progress_%d" % ns.progress_count: corpus}
-                    ns.progress_count += 1
-
-    result["combined"] = {}
-
-    if args["cache"]:
-        unique_id = str(uuid.uuid4())
-
+    if args["cache"] and not all_cache:
         for corpus in corpora:
             for struct in structs:
                 if (corpus, struct) in from_cache:
                     continue
-                checksum_data = (corpus, struct, split, stats)
-                checksum = get_hash(checksum_data)
-                cache_filename = os.path.join(config.CACHE_DIR, "%s:struct_values_%s" % (corpus, checksum))
-                cache_filename_temp = cache_filename + "." + unique_id
+                checksum = get_hash((corpus, struct, split, include_count))
+                cache_key = "%s:struct_values_%s" % (cache_prefix(corpus), checksum)
+                try:
+                    with mc_pool.reserve() as mc:
+                        mc.add(cache_key, result["corpora"][corpus].get(struct, {}))
+                except pylibmc.TooBig:
+                    pass
+                else:
+                    if "debug" in args:
+                        result.setdefault("DEBUG", {})
+                        result["DEBUG"].setdefault("caches_saved", [])
+                        result["DEBUG"]["caches_saved"].append("%s:%s" % (corpus, struct))
 
-                with open(cache_filename_temp, "w") as f:
-                    json.dump(result["corpora"][corpus].get(struct, []), f)
-                os.rename(cache_filename_temp, cache_filename)
-
-                if "debug" in args:
-                    result.setdefault("DEBUG", {})
-                    result["DEBUG"].setdefault("caches_saved", [])
-                    result["DEBUG"]["caches_saved"].append("%s:%s" % (corpus, struct))
+    if not per_corpus:
+        del result["corpora"]
 
     yield result
 
@@ -1401,52 +1392,32 @@ def struct_values(args):
 @main_handler
 @prevent_timeout
 def count(args):
-    """Perform a CQP query and return a count of the given words/attrs.
-
-    The required parameters are
-     - corpus: the CWB corpus
-     - cqp: the CQP query string
-     - groupby: comma separated list of positional attributes
-     - groupby_struct: comma separated list of structural attributes
-
-    The optional parameters are
-     - within: only search for matches within the given s-attribute (e.g., within a sentence)
-       (default: no within)
-     - cut: set cutoff threshold to reduce the size of the result
-       (default: no cutoff)
-     - ignore_case: changes all values of the selected attribute to lower case
-     - incremental: incrementally report the progress while executing
-       (default: false)
-     - expand_prequeries: when using multiple queries, this determines whether
-       subsequent queries should be run on the containing sentences (or any other structural attribute
-       defined by 'within') from the previous query, or just the matches.
-       (default: true)
-    """
+    """Perform a CQP query and return a count of the given words/attributes."""
     assert_key("cqp", args, r"", True)
     assert_key("corpus", args, IS_IDENT, True)
-    assert_key("groupby", args, IS_IDENT, False)
-    assert_key("groupby_struct", args, IS_IDENT, False)
+    assert_key("group_by", args, IS_IDENT, False)
+    assert_key("group_by_struct", args, IS_IDENT, False)
     assert_key("cut", args, IS_NUMBER)
     assert_key("ignore_case", args, IS_IDENT)
     assert_key("incremental", args, r"(true|false)")
 
-    incremental = args.get("incremental", "").lower() == "true"
+    incremental = parse_bool(args, "incremental", False)
 
     corpora = parse_corpora(args)
-
     check_authentication(corpora)
 
-    groupby = args.get("groupby") or []
-    if isinstance(groupby, str):
-        groupby = groupby.split(QUERY_DELIM)
+    group_by = args.get("group_by", args.get("groupby")) or []
+    if isinstance(group_by, str):
+        group_by = sorted(set(group_by.split(QUERY_DELIM)))
 
-    groupby_struct = args.get("groupby_struct") or []
-    if isinstance(groupby_struct, str):
-        groupby_struct = groupby_struct.split(QUERY_DELIM)
+    group_by_struct = args.get("group_by_struct", args.get("groupby_struct")) or []
+    if isinstance(group_by_struct, str):
+        group_by_struct = sorted(set(group_by_struct.split(QUERY_DELIM)))
 
-    assert groupby or groupby_struct, "Either 'groupby' or 'groupby_struct' needs to be specified."
+    if not group_by and not group_by_struct:
+        group_by = ["word"]
 
-    groupby = [(g, False) for g in groupby] + [(g, True) for g in groupby_struct]
+    group_by = [(g, False) for g in group_by] + [(g, True) for g in group_by_struct]
 
     ignore_case = args.get("ignore_case") or []
     if isinstance(ignore_case, str):
@@ -1455,16 +1426,24 @@ def count(args):
 
     within = parse_within(args)
 
+    relative_to_struct = args.get("relative_to_struct") or []
+    if isinstance(relative_to_struct, str):
+        relative_to_struct = sorted(set(relative_to_struct.split(QUERY_DELIM)))
+    assert all(r in group_by_struct for r in
+               relative_to_struct), "All 'relative_to_struct' values also need to be present in 'group_by_struct'."
+
+    relative_to = [(r, True) for r in relative_to_struct]
+
     start = int(args.get("start") or 0)
     end = int(args.get("end") or -1)
 
-    split = args.get("split", "")
+    split = args.get("split") or []
     if isinstance(split, str):
         split = split.split(QUERY_DELIM)
 
-    strippointer = args.get("strippointer", "")
-    if isinstance(strippointer, str):
-        strippointer = strippointer.split(QUERY_DELIM)
+    strip_pointer = args.get("strip_pointer", "")
+    if isinstance(strip_pointer, str):
+        strip_pointer = strip_pointer.split(QUERY_DELIM)
 
     top = args.get("top", "")
     if isinstance(top, str):
@@ -1473,17 +1452,21 @@ def count(args):
         else:
             top = dict((x, 1) for x in top.split(QUERY_DELIM))
 
+    expand_prequeries = parse_bool(args, "expand_prequeries", True)
+
     # Sort numbered CQP-queries numerically
     cqp, subcqp = parse_cqp_subcqp(args)
+
+    if len(cqp) > 1 and expand_prequeries and not all(within[c] for c in corpora):
+        raise ValueError("Multiple CQP queries requires 'within' or 'expand_prequeries=false'")
+
     if subcqp:
         cqp.append(subcqp)
 
-    simple = args.get("simple", "").lower() == "true"
+    simple = parse_bool(args, "simple", False)
 
     if cqp == ["[]"]:
         simple = True
-
-    expand_prequeries = not args.get("expand_prequeries", "").lower() == "false"
 
     result = {"corpora": {}}
     debug = {}
@@ -1493,17 +1476,18 @@ def count(args):
     if args["cache"]:
         for corpus in corpora:
             corpus_checksum = get_hash((cqp,
-                                        groupby,
+                                        group_by,
                                         within[corpus],
                                         sorted(ignore_case),
+                                        relative_to,
                                         expand_prequeries))
 
-            cache_hits_filename = os.path.join(config.CACHE_DIR, "%s:count_size_%s" % (corpus, corpus_checksum))
-            if os.path.isfile(cache_hits_filename):
-                with open(cache_hits_filename, "r") as f:
-                    nr_hits, _ = f.read().split(";", 1)
+            with mc_pool.reserve() as mc:
+                cached_size = mc.get("%s:count_size_%s" % (cache_prefix(corpus), corpus_checksum))
+            if cached_size is not None:
+                nr_hits = cached_size[0]
                 read_from_cache += 1
-                if nr_hits == "0":
+                if nr_hits == 0:
                     zero_hits.append(corpus)
 
         if "debug" in args:
@@ -1515,6 +1499,24 @@ def count(args):
 
     ns = Namespace()  # To make variables writable from nested functions
     ns.total_size = 0
+
+    if relative_to:
+        relative_args = {
+            "cqp": "[]",
+            "corpus": args.get("corpus"),
+            "group_by_struct": relative_to_struct,
+            "split": split
+        }
+
+        relative_to_result = generator_to_dict(count(relative_args))
+        relative_to_freqs = {"total": {}, "corpora": defaultdict(dict)}
+
+        for row in relative_to_result["total"]["absolute"]:
+            relative_to_freqs["total"][tuple(v for k, v in sorted(row["value"].items()))] = row["freq"]
+
+        for corpus in relative_to_result["corpora"]:
+            for row in relative_to_result["corpora"][corpus]["absolute"]:
+                relative_to_freqs["corpora"][corpus][tuple(v for k, v in sorted(row["value"].items()))] = row["freq"]
 
     count_function = count_query_worker if not simple else count_query_worker_simple
 
@@ -1530,7 +1532,7 @@ def count(args):
             result["corpora"][corpus][i + 1]["cqp"] = subcqp[i]
 
     with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-        future_query = dict((executor.submit(count_function, corpus=corpus, cqp=cqp, groupby=groupby,
+        future_query = dict((executor.submit(count_function, corpus=corpus, cqp=cqp, group_by=group_by,
                                              within=within[corpus], ignore_case=ignore_case,
                                              expand_prequeries=expand_prequeries,
                                              use_cache=args["cache"]), corpus)
@@ -1558,21 +1560,22 @@ def count(args):
                         continue
                     freq, ngram = line.lstrip().split(" ", 1)
 
-                    if len(groupby) > 1:
+                    if len(group_by) > 1:
                         ngram_groups = ngram.split("\t")
                     else:
                         ngram_groups = [ngram]
 
                     all_ngrams = []
+                    relative_to_pos = []
 
                     for i, ngram in enumerate(ngram_groups):
                         # Split value sets and treat each value as a hit
-                        if groupby[i][0] in split:
+                        if group_by[i][0] in split:
                             tokens = [t + "|" for t in ngram.split(
                                 "| ")]  # We can't split on just space due to spaces in annotations
                             tokens[-1] = tokens[-1][:-1]
-                            if groupby[i][0] in top:
-                                split_tokens = [[x for x in token.split("|") if x][:top[groupby[i][0]]]
+                            if group_by[i][0] in top:
+                                split_tokens = [[x for x in token.split("|") if x][:top[group_by[i][0]]]
                                                 if not token == "|" else ["|"] for token in tokens]
                             else:
                                 split_tokens = [[x for x in token.split("|") if x] if not token == "|" else [""]
@@ -1580,13 +1583,13 @@ def count(args):
                             ngrams = itertools.product(*split_tokens)
                             ngrams = tuple(x for x in ngrams)
                         else:
-                            if not groupby[i][1]:
+                            if not group_by[i][1]:
                                 ngrams = (tuple(ngram.split(" ")),)
                             else:
                                 ngrams = (ngram,)
 
                         # Remove multi word pointers
-                        if groupby[i][0] in strippointer:
+                        if group_by[i][0] in strip_pointer:
                             for j in range(len(ngrams)):
                                 for k in range(len(ngrams[j])):
                                     if ":" in ngrams[j][k]:
@@ -1596,15 +1599,28 @@ def count(args):
 
                         all_ngrams.append(ngrams)
 
+                        if relative_to and group_by[i] in relative_to:
+                            relative_to_pos.append(i)
+
                     cross = list(itertools.product(*all_ngrams))
 
                     for ngram in cross:
                         corpus_stats[query_no]["absolute"][ngram] += int(freq)
-                        corpus_stats[query_no]["relative"][ngram] += int(freq) / float(corpus_size) * 1000000
                         corpus_stats[query_no]["sums"]["absolute"] += int(freq)
-                        corpus_stats[query_no]["sums"]["relative"] += int(freq) / float(corpus_size) * 1000000
                         total_stats[query_no]["absolute"][ngram] += int(freq)
                         total_stats[query_no]["sums"]["absolute"] += int(freq)
+
+                        if relative_to:
+                            relativeto_ngram = tuple(ngram[pos] for pos in relative_to_pos)
+                            corpus_stats[query_no]["relative"][ngram] += int(freq) / float(
+                                relative_to_freqs["corpora"][corpus][relativeto_ngram]) * 1000000
+                            corpus_stats[query_no]["sums"]["relative"] += int(freq) / float(
+                                relative_to_freqs["corpora"][corpus][relativeto_ngram]) * 1000000
+                            total_stats[query_no]["relative"][ngram] += int(freq) / float(
+                                relative_to_freqs["total"][relativeto_ngram]) * 1000000
+                        else:
+                            corpus_stats[query_no]["relative"][ngram] += int(freq) / float(corpus_size) * 1000000
+                            corpus_stats[query_no]["sums"]["relative"] += int(freq) / float(corpus_size) * 1000000
 
                 result["corpora"][corpus] = corpus_stats
 
@@ -1618,24 +1634,16 @@ def count(args):
     for query_no in range(len(subcqp) + 1):
         if end > -1 and (start > 0 or len(total_stats[0]["absolute"]) > (end - start) + 1):
             # Only a selected range of results requested
-            total_absolute = sorted(total_stats[query_no]["absolute"].items(), key=lambda x: x[1],
-                                    reverse=True)[start:end + 1]
-            for ngram, freq in total_absolute:
-                total_stats[query_no]["relative"][ngram] = freq / float(ns.total_size) * 1000000
+            total_stats[query_no]["absolute"] = dict(
+                sorted(total_stats[query_no]["absolute"].items(), key=lambda x: x[1], reverse=True)[start:end + 1])
 
-                for corpus in corpora:
-                    new_corpus_part = {"absolute": {}, "relative": {},
-                                       "sums": result["corpora"][corpus][query_no]["sums"]}
-                    if ngram in result["corpora"][corpus][query_no]["absolute"]:
-                        new_corpus_part["absolute"][ngram] = result["corpora"][corpus][query_no]["absolute"][ngram]
-                    if ngram in result["corpora"][corpus][query_no]["relative"]:
-                        new_corpus_part["relative"][ngram] = result["corpora"][corpus][query_no]["relative"][ngram]
+            for corpus in corpora:
+                result["corpora"][corpus][query_no]["absolute"] = {k: v for k, v in result["corpora"][corpus][query_no][
+                    "absolute"].items() if k in total_stats[query_no]["absolute"]}
+                result["corpora"][corpus][query_no]["relative"] = {k: v for k, v in result["corpora"][corpus][query_no][
+                    "relative"].items() if k in total_stats[query_no]["absolute"]}
 
-                result["corpora"][corpus][query_no] = new_corpus_part
-
-            total_stats[query_no]["absolute"] = dict(total_absolute)
-        else:
-            # Complete results requested
+        if not relative_to:
             for ngram, freq in total_stats[query_no]["absolute"].items():
                 total_stats[query_no]["relative"][ngram] = freq / float(ns.total_size) * 1000000
 
@@ -1643,7 +1651,7 @@ def count(args):
             for relabs in ("absolute", "relative"):
                 new_list = []
                 for ngram, freq in result["corpora"][corpus][query_no][relabs].items():
-                    row = {"value": dict((key[0], ngram[i]) for i, key in enumerate(groupby)),
+                    row = {"value": {key[0]: ngram[i] for i, key in enumerate(group_by)},
                            "freq": freq}
                     new_list.append(row)
                 result["corpora"][corpus][query_no][relabs] = new_list
@@ -1657,7 +1665,7 @@ def count(args):
         for relabs in ("absolute", "relative"):
             new_list = []
             for ngram, freq in total_stats[query_no][relabs].items():
-                row = {"value": dict((key[0], ngram[i]) for i, key in enumerate(groupby)),
+                row = {"value": dict((key[0], ngram[i]) for i, key in enumerate(group_by)),
                        "freq": freq}
                 new_list.append(row)
             total_stats[query_no][relabs] = new_list
@@ -1679,23 +1687,9 @@ def count(args):
 @main_handler
 @prevent_timeout
 def count_all(args):
-    """Return a count of the given attrs.
-
-    The required parameters are
-     - corpus: the CWB corpus
-     - groupby: positional or structural attributes
-
-    The optional parameters are
-     - within: only search for matches within the given s-attribute (e.g., within a sentence)
-       (default: no within)
-     - cut: set cutoff threshold to reduce the size of the result
-       (default: no cutoff)
-     - ignore_case: changes all values of the selected attribute to lower case
-     - incremental: incrementally report the progress while executing
-       (default: false)
-    """
+    """Like /count but for every single value of the given attributes."""
     assert_key("corpus", args, IS_IDENT, True)
-    assert_key("groupby", args, IS_IDENT, True)
+    assert_key(("group_by", "group_by_struct", "groupby"), args, IS_IDENT, True)
     assert_key("cut", args, IS_NUMBER)
     assert_key("ignore_case", args, IS_IDENT)
     assert_key("incremental", args, r"(true|false)")
@@ -1727,8 +1721,7 @@ def strptime(date):
 @main_handler
 @prevent_timeout
 def count_time(args):
-    """
-    """
+    """Count occurrences per time period."""
     assert_key("cqp", args, r"", True)
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("cut", args, IS_NUMBER)
@@ -1738,14 +1731,19 @@ def count_time(args):
     assert_key("to", args, r"^\d{14}$")
     assert_key("strategy", args, r"^[123]$")
 
-    incremental = args.get("incremental", "").lower() == "true"
+    incremental = parse_bool(args, "incremental", False)
 
     corpora = parse_corpora(args)
     check_authentication(corpora)
     within = parse_within(args)
+    expand_prequeries = parse_bool(args, "expand_prequeries", True)
 
     # Sort numbered CQP-queries numerically
     cqp, subcqp = parse_cqp_subcqp(args)
+
+    if len(cqp) > 1 and expand_prequeries and not all(within[c] for c in corpora):
+        raise ValueError("Multiple CQP queries requires 'within' or 'expand_prequeries=false'")
+
     if subcqp:
         cqp.append(subcqp)
     granularity = (args.get("granularity") or "y").lower()
@@ -1815,9 +1813,9 @@ def count_time(args):
     strategy = int(args.get("strategy") or 1)
 
     if granularity in "hns":
-        groupby = [(v, True) for v in ("text_datefrom", "text_timefrom", "text_dateto", "text_timeto")]
+        group_by = [(v, True) for v in ("text_datefrom", "text_timefrom", "text_dateto", "text_timeto")]
     else:
-        groupby = [(v, True) for v in ("text_datefrom", "text_dateto")]
+        group_by = [(v, True) for v in ("text_datefrom", "text_dateto")]
 
     result = {"corpora": {}}
     corpora_sizes = {}
@@ -1831,8 +1829,10 @@ def count_time(args):
         yield {"progress_corpora": corpora}
 
     with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
-        future_query = dict((executor.submit(count_query_worker, corpus=corpus, cqp=cqp, groupby=groupby,
-                                             within=within, use_cache=args["cache"]), corpus)
+        future_query = dict((executor.submit(count_query_worker, corpus=corpus, cqp=cqp, group_by=group_by,
+                                             within=within[corpus],
+                                             expand_prequeries=expand_prequeries,
+                                             use_cache=args["cache"]), corpus)
                             for corpus in corpora)
 
         for future in futures.as_completed(future_query):
@@ -1958,7 +1958,8 @@ def count_time(args):
     yield result
 
 
-def count_query_worker(corpus, cqp, groupby, within, ignore_case=[], cut=None, expand_prequeries=True, use_cache=False):
+def count_query_worker(corpus, cqp, group_by, within, ignore_case=[], cut=None, expand_prequeries=True,
+                       use_cache=False):
     subcqp = None
     if isinstance(cqp[-1], list):
         subcqp = cqp[-1]
@@ -1966,29 +1967,24 @@ def count_query_worker(corpus, cqp, groupby, within, ignore_case=[], cut=None, e
 
     if use_cache:
         checksum = get_hash((cqp,
-                             groupby,
+                             subcqp,
+                             group_by,
                              within,
                              sorted(ignore_case),
                              expand_prequeries))
+        cache_key = "%s:count_data_%s" % (cache_prefix(corpus), checksum)
+        cache_size_key = "%s:count_size_%s" % (cache_prefix(corpus), checksum)
 
-        unique_id = str(uuid.uuid4())
+        with mc_pool.reserve() as mc:
+            cached_size = mc.get(cache_size_key)
+            if cached_size is not None:
+                corpus_hits, corpus_size = cached_size
+                if corpus_hits == 0:
+                    return [END_OF_LINE] * len(subcqp) if subcqp else [], corpus_hits, corpus_size
 
-        cache_filename = os.path.join(config.CACHE_DIR, "%s:count_%s" % (corpus, checksum))
-        cache_filename_temp = cache_filename + "." + unique_id
-
-        cache_size_filename = os.path.join(config.CACHE_DIR, "%s:count_size_%s" % (corpus, checksum))
-        cache_size_filename_temp = cache_size_filename + "." + unique_id
-
-        is_cached = os.path.isfile(cache_filename) and os.path.isfile(cache_size_filename)
-        if is_cached:
-            with open(cache_size_filename, "r") as f:
-                corpus_hits, corpus_size = (int(v) for v in f.read().split(";", 1))
-            if corpus_hits == 0:
-                return [END_OF_LINE] * len(subcqp) if subcqp else [], corpus_hits, corpus_size
-            with open(cache_filename, "rb") as f:
-                return pickle.load(f), corpus_hits, corpus_size
-    else:
-        is_cached = False
+                cached_result = mc.get(cache_key)
+                if cached_result is not None:
+                    return cached_result, corpus_hits, corpus_size
 
     do_optimize = True
     cqpparams = {"within": within,
@@ -2017,7 +2013,7 @@ def count_query_worker(corpus, cqp, groupby, within, ignore_case=[], cut=None, e
     has_target = any("@[" in x for x in cqp)
 
     cmd += ["""tabulate Last %s > "| sort | uniq -c | sort -nr";""" % ", ".join("%s %s%s" % (
-        "target" if has_target else ("match" if g[1] else "match .. matchend"), g[0], " %c" if g in ignore_case else "") for g in groupby)]
+        "target" if has_target else ("match" if g[1] else "match .. matchend"), g[0], " %c" if g in ignore_case else "") for g in group_by)]
 
     if subcqp:
         cmd += ["mainresult=Last;"]
@@ -2028,7 +2024,7 @@ def count_query_worker(corpus, cqp, groupby, within, ignore_case=[], cut=None, e
             cmd += ["mainresult;"]
             cmd += query_optimize(c, cqpparams_temp, find_match=True)[1]
             cmd += ["""tabulate Last %s > "| sort | uniq -c | sort -nr";""" % ", ".join(
-                "match .. matchend %s" % g[0] for g in groupby)]
+                "match .. matchend %s" % g[0] for g in group_by)]
 
     cmd += ["exit;"]
 
@@ -2048,32 +2044,33 @@ def count_query_worker(corpus, cqp, groupby, within, ignore_case=[], cut=None, e
         elif line == END_OF_LINE:
             break
 
-    if use_cache and not is_cached:
-        with open(cache_size_filename_temp, "w") as f:
-            f.write("%d;%d" % (nr_hits, corpus_size))
-        os.rename(cache_size_filename_temp, cache_size_filename)
+    if use_cache:
+        with mc_pool.reserve() as mc:
+            mc.add(cache_size_key, (nr_hits, corpus_size))
 
         # Only save actual data if number of lines doesn't exceed the limit
         if nr_hits <= config.CACHE_MAX_STATS:
             lines = tuple(lines)
-            with open(cache_filename_temp, "wb") as f:
-                pickle.dump(lines, f, protocol=-1)
-            os.rename(cache_filename_temp, cache_filename)
+            with mc_pool.reserve() as mc:
+                try:
+                    mc.add(cache_key, lines)
+                except pylibmc.TooBig:
+                    pass
 
     return lines, nr_hits, corpus_size
 
 
-def count_query_worker_simple(corpus, cqp, groupby, within=None, ignore_case=[], expand_prequeries=True, use_cache=False):
+def count_query_worker_simple(corpus, cqp, group_by, within=None, ignore_case=[], expand_prequeries=True,
+                              use_cache=False):
     """Worker for simple statistics queries which can be run using cwb-scan-corpus.
     Currently only used for searches on [] (any word)."""
-
-    lines = list(run_cwb_scan(corpus, [g[0] for g in groupby]))
+    lines = list(run_cwb_scan(corpus, [g[0] for g in group_by]))
     nr_hits = 0
 
     ic_index = []
     new_lines = {}
     if ignore_case:
-        ic_index = [i for i, g in enumerate(groupby) if g[0] in ignore_case]
+        ic_index = [i for i, g in enumerate(group_by) if g[0] in ignore_case]
 
     for i in range(len(lines)):
         c, v = lines[i].split("\t", 1)
@@ -2101,21 +2098,7 @@ def count_query_worker_simple(corpus, cqp, groupby, within=None, ignore_case=[],
 @main_handler
 @prevent_timeout
 def loglike(args):
-    """Run a log-likelihood comparison on two queries.
-
-    The required parameters are
-     - set1_cqp: the first CQP query
-     - set2_cqp: the second CQP query
-     - set1_corpus: the corpora for the first query
-     - set2_corpus: the corpora for the second query
-     - groupby: what positional or structural attribute to use for comparison
-
-    The optional parameters are
-     - ignore_case: ignore case when comparing
-     - max: maxium number of results per set
-       (default: 15)
-    """
-
+    """Do a log-likelihood comparison on two queries."""
     def expected(total, wordtotal, sumtotal):
         """ The expected is that the words are uniformely distributed over the corpora. """
         return wordtotal * (float(total) / sumtotal)
@@ -2216,7 +2199,7 @@ def loglike(args):
     assert_key("set2_cqp", args, r"", True)
     assert_key("set1_corpus", args, r"", True)
     assert_key("set2_corpus", args, r"", True)
-    assert_key("groupby", args, IS_IDENT, True)
+    assert_key(("group_by", "group_by_struct", "groupby"), args, IS_IDENT, True)
     assert_key("ignore_case", args, IS_IDENT)
     assert_key("max", args, IS_NUMBER, False)
 
@@ -2249,10 +2232,14 @@ def loglike(args):
             for corpus in cset:
                 sets[i]["total"] += count_result["corpora"][corpus]["sums"]["absolute"]
                 if len(cset) == 1:
-                    sets[i]["freq"] = dict((tuple((y[0], tuple(y[1])) for y in sorted(x["value"].items())), x["freq"])
+                    sets[i]["freq"] = dict((tuple(
+                        (y[0], y[1] if isinstance(y[1], tuple) else (y[1],)) for y in sorted(x["value"].items())),
+                                            x["freq"])
                                            for x in count_result["corpora"][corpus]["absolute"])
                 else:
-                    for w, f in ((tuple((y[0], tuple(y[1])) for y in sorted(x["value"].items())), x["freq"])
+                    for w, f in ((tuple(
+                            (y[0], y[1] if isinstance(y[1], tuple) else (y[1],)) for y in sorted(x["value"].items())),
+                                  x["freq"])
                                  for x in count_result["corpora"][corpus]["absolute"]):
                         sets[i]["freq"][w] += f
 
@@ -2266,10 +2253,10 @@ def loglike(args):
 
         sets = [{}, {}]
         for i, cset in enumerate((set1, set2)):
-            count_result_temp = count_result if same_cqp else count_result[i]
-            sets[i]["total"] = count_result_temp["total"]["sums"]["absolute"]
-            sets[i]["freq"] = dict((tuple((y[0], tuple(y[1])) for y in sorted(x["value"].items())), x["freq"])
-                                   for x in count_result_temp["total"]["absolute"])
+            sets[i]["total"] = count_result[i]["total"]["sums"]["absolute"]
+            sets[i]["freq"] = dict((tuple(
+                (y[0], y[1] if isinstance(y[1], tuple) else (y[1],)) for y in sorted(x["value"].items())), x["freq"])
+                                   for x in count_result[i]["total"]["absolute"])
 
     ll_list = compute_list(sets[0]["freq"], sets[0]["total"], sets[1]["freq"], sets[1]["total"])
     (ws, avg, mi, ma) = compute_ll_stats(ll_list, maxresults, sets)
@@ -2296,23 +2283,12 @@ def loglike(args):
 @main_handler
 @prevent_timeout
 def lemgram_count(args):
-    """Return lemgram statistics per corpus.
-
-    The required parameters are
-     - lemgram: list of lemgrams
-
-    The optional parameters are
-     - corpus: the CWB corpus/corpora
-       (default: all corpora)
-     - count: what to count (lemgram/prefix/suffix)
-       (default: lemgram)
-    """
+    """Return lemgram statistics per corpus."""
     assert_key("lemgram", args, r"", True)
     assert_key("corpus", args, IS_IDENT)
     assert_key("count", args, r"(lemgram|prefix|suffix)")
 
     corpora = parse_corpora(args)
-
     check_authentication(corpora)
 
     lemgram = args.get("lemgram")
@@ -2367,19 +2343,6 @@ def sql_escape(s):
 def timespan(args, no_combined_cache=False):
     """Calculate timespan information for corpora.
     The time information is retrieved from the database.
-
-    The required parameters are
-     - corpus: the CWB corpus/corpora
-
-    The optional parameters are
-     - granularity: granularity of result (y = year, m = month, d = day, h = hour, n = minute, s = second)
-       (default: year)
-     - combined: include combined results
-       (default: true)
-     - per_corpus: include results per corpus
-       (default: true)
-     - from: from this date and time, on the format 20150513063500 or 2015-05-13 06:35:00 (times optional) (optional)
-     - to: to this date and time (optional)
     """
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("granularity", args, r"[ymdhnsYMDHNS]")
@@ -2393,8 +2356,8 @@ def timespan(args, no_combined_cache=False):
     # check_authentication(corpora)
 
     granularity = (args.get("granularity") or "y").lower()
-    combined = (not args.get("combined", "").lower() == "false")
-    per_corpus = (not args.get("per_corpus", "").lower() == "false")
+    combined = parse_bool(args, "combined", True)
+    per_corpus = parse_bool(args, "per_corpus", True)
     strategy = int(args.get("strategy") or 1)
     fromdate = args.get("from")
     todate = args.get("to")
@@ -2416,10 +2379,10 @@ def timespan(args, no_combined_cache=False):
                                       fromdate,
                                       todate,
                                       sorted(corpora)))
-        cache_filename_combined = os.path.join(config.CACHE_DIR, "timespan_%s" % (get_hash(combined_checksum)))
-        if os.path.isfile(cache_filename_combined):
-            with open(cache_filename_combined, "rb") as f:
-                result = pickle.load(f)
+        cache_combined_key = "%s:timespan_%s" % (cache_prefix(), get_hash(combined_checksum))
+        with mc_pool.reserve() as mc:
+            result = mc.get(cache_combined_key)
+        if result is not None:
             if "debug" in args:
                 result.setdefault("DEBUG", {})
                 result["DEBUG"]["cache_read"] = True
@@ -2429,11 +2392,12 @@ def timespan(args, no_combined_cache=False):
         # Look for per-corpus caches
         for corpus in corpora:
             corpus_checksum = get_hash((fromdate, todate, granularity, strategy))
-            cache_filename = os.path.join(config.CACHE_DIR, "%s:timespan_%s" % (corpus, corpus_checksum))
+            cache_key = "%s:timespan_%s" % (cache_prefix(corpus), corpus_checksum)
+            with mc_pool.reserve() as mc:
+                corpus_cached_data = mc.get(cache_key)
 
-            if os.path.isfile(cache_filename):
-                with open(cache_filename, "rb") as f:
-                    cached_data.extend(pickle.load(f))
+            if corpus_cached_data is not None:
+                cached_data.extend(corpus_cached_data)
                 corpora_rest.remove(corpus)
 
     ns = {}
@@ -2477,16 +2441,14 @@ def timespan(args, no_combined_cache=False):
             cursor = tuple()
 
         if args["cache"]:
-            unique_id = str(uuid.uuid4())
-
             def save_cache(corpus, data):
                 corpus_checksum = get_hash((fromdate, todate, granularity, strategy))
-                cache_filename = os.path.join(config.CACHE_DIR, "%s:timespan_%s" % (corpus, corpus_checksum))
-                cache_filename_temp = cache_filename + "." + unique_id
-                if not os.path.isfile(cache_filename_temp):
-                    with open(cache_filename_temp, "wb") as f:
-                        pickle.dump(data, f, protocol=-1)
-                    os.rename(cache_filename_temp, cache_filename)
+                cache_key = "%s:timespan_%s" % (cache_prefix(corpus), corpus_checksum)
+                with mc_pool.reserve() as mc:
+                    try:
+                        mc.add(cache_key, data)
+                    except pylibmc.TooBig:
+                        pass
 
             corpus = None
             corpus_data = []
@@ -2510,10 +2472,11 @@ def timespan(args, no_combined_cache=False):
 
     if args["cache"] and not no_combined_cache:
         # Save cache for whole query
-        cache_filename_combined_temp = "%s.%s" % (cache_filename_combined, unique_id)
-        with open(cache_filename_combined_temp, "wb") as f:
-            pickle.dump(ns["result"], f, protocol=-1)
-        os.rename(cache_filename_combined_temp, cache_filename_combined)
+        with mc_pool.reserve() as mc:
+            try:
+                mc.add(cache_combined_key, ns["result"])
+            except pylibmc.TooBig:
+                pass
 
     yield ns["result"]
 
@@ -2707,22 +2670,7 @@ def timespan_calculator(timedata, granularity="y", combined=True, per_corpus=Tru
 @main_handler
 @prevent_timeout
 def relations(args):
-    """Calculate word picture data.
-
-    The required parameters are
-     - corpus: the CWB corpus/corpora
-     - word: a word or lemgram to lookup
-
-    The optional parameters are
-     - min: cut off results with a frequency lower than this
-       (default: no cut-off)
-     - max: maximum number of results
-       (default: 15)
-     - type: type of search (word/lemgram)
-       (default: word)
-     - incremental: incrementally report the progress while executing
-       (default: false)
-    """
+    """Calculate word picture data."""
     assert_key("corpus", args, IS_IDENT, True)
     assert_key("word", args, "", True)
     assert_key("type", args, r"(word|lemgram)", False)
@@ -2731,15 +2679,14 @@ def relations(args):
     assert_key("incremental", args, r"(true|false)")
 
     corpora = parse_corpora(args)
-
     check_authentication(corpora)
 
-    incremental = args.get("incremental", "").lower() == "true"
+    incremental = parse_bool(args, "incremental", False)
 
     word = args.get("word")
     search_type = args.get("type", "")
     minfreq = args.get("min")
-    sortby = args.get("sortby") or "mi"
+    sort = args.get("sort") or "mi"
     maxresults = int(args.get("max") or 15)
     minfreqsql = " AND freq >= %s" % minfreq if minfreq else ""
 
@@ -2766,10 +2713,10 @@ def relations(args):
                 corpus_checksum = get_hash((word,
                                             search_type,
                                             minfreq))
-                cache_filename = os.path.join(config.CACHE_DIR, "%s:relations_%s" % (corpus, corpus_checksum))
-                if os.path.isfile(cache_filename):
-                    with open(cache_filename, "rb") as f:
-                        relations_data.extend(pickle.load(f))
+                with mc_pool.reserve() as mc:
+                    cached_data = mc.get("%s:relations_%s" % (cache_prefix(corpus), corpus_checksum))
+                if cached_data is not None:
+                    relations_data.extend(cached_data)
                     corpora_rest.remove(corpus)
 
         selects = []
@@ -2843,16 +2790,14 @@ def relations(args):
     do_caching = False
     corpus = None
     corpus_data = []
-    unique_id = str(uuid.uuid4())
 
     def save_cache(corpus, data):
         corpus_checksum = get_hash((word, search_type, minfreq))
-        cache_filename = os.path.join(config.CACHE_DIR, "%s:relations_%s" % (corpus, corpus_checksum))
-        cache_filename_temp = cache_filename + "." + unique_id
-        if not os.path.isfile(cache_filename_temp):
-            with open(cache_filename_temp, "wb") as f:
-                pickle.dump(data, f, protocol=-1)
-            os.rename(cache_filename_temp, cache_filename)
+        with mc_pool.reserve() as mc:
+            try:
+                mc.add("%s:relations_%s" % (cache_prefix(corpus), corpus_checksum), data)
+            except pylibmc.TooBig:
+                pass
 
     for row in itertools.chain(relations_data, (None,), cursor_result):
         if row is None and args["cache"]:
@@ -2890,7 +2835,7 @@ def relations(args):
         f_rel_dep = sum(freq_rel_dep[(rel[1], rel[2])].values())
         rels[rel]["mi"] = rels[rel]["freq"] * math.log((f_rel * rels[rel]["freq"]) / (f_head_rel * f_rel_dep * 1.0), 2)
 
-    sortedrels = sorted(rels.items(), key=lambda x: (x[0][1], x[1][sortby]), reverse=True)
+    sortedrels = sorted(rels.items(), key=lambda x: (x[0][1], x[1][sort]), reverse=True)
 
     for rel in sortedrels:
         counter.setdefault((rel[0][1], "h"), 0)
@@ -2927,17 +2872,7 @@ def relations(args):
 @main_handler
 @prevent_timeout
 def relations_sentences(args):
-    """Execute a CQP query to find sentences with a given relation from a word picture.
-
-    The required parameters are
-     - source: source ID
-
-    The optional parameters are
-     - start, end: which result rows that should be returned
-     - show
-     - show_struct
-    """
-
+    """Execute a CQP query to find sentences with a given relation from a word picture."""
     assert_key("source", args, "", True)
     assert_key("start", args, IS_NUMBER, False)
     assert_key("end", args, IS_NUMBER, False)
@@ -2960,7 +2895,7 @@ def relations_sentences(args):
         shown_structs = shown_structs.split(QUERY_DELIM)
     shown_structs = set(shown_structs)
 
-    defaultcontext = args.get("defaultcontext") or "1 sentence"
+    default_context = args.get("default_context", args.get("defaultcontext")) or "1 sentence"
 
     querystarttime = time.time()
 
@@ -3007,7 +2942,8 @@ def relations_sentences(args):
         querytime = time.time() - querystarttime
         corpora_dict = {}
         for row in cursor:
-            corpora_dict.setdefault(row["corpus"], {}).setdefault(row["sentence"], []).append((row["start"], row["end"]))
+            corpora_dict.setdefault(row["corpus"], {}).setdefault(row["sentence"], []).append(
+                (row["start"], row["end"]))
 
         cursor.close()
 
@@ -3027,7 +2963,7 @@ def relations_sentences(args):
              "start": "0",
              "end": str(end - start),
              "show_struct": ["sentence_id"] + list(shown_structs),
-             "defaultcontext": defaultcontext}
+             "default_context": default_context}
         if shown:
             q["show"] = shown
         result_temp = generator_to_dict(query(q))
@@ -3066,39 +3002,140 @@ def relations_sentences(args):
 
 @app.route("/cache", methods=["GET", "POST"])
 @main_handler
+@prevent_timeout
 def cache_handler(args):
-    if not config.CACHE_DIR:
+    """Check for updated corpora and invalidate caches where needed. Also remove old disk cache."""
+    if not config.CACHE_DIR or not config.MEMCACHED_SERVERS or cache_disabled:
         return {}
 
     result = {}
 
-    if "clean" in args:
+    # Set up caching if needed
+    initial_setup = setup_cache()
+
+    if initial_setup:
+        result["initial_setup"] = True
+    else:
+        result = {"multi_invalidated": False,
+                  "corpora_invalidated": 0,
+                  "files_removed": 0}
         now = time.time()
 
         # Get modification time of corpus registry files
-        corpora = dict((os.path.basename(f).upper(), os.path.getmtime(f)) for f in
-                       glob.glob(os.path.join(config.CWB_REGISTRY, "*")))
-        last_update = max(corpora.values())
-        removed = 0
-        for corpus in corpora:
-            # Remove cache for updated corpora and old query data
-            for cachefile in glob.glob(os.path.join(config.CACHE_DIR, "%s:*" % corpus)):
-                cachefiletime = os.path.getmtime(cachefile)
-                if cachefiletime < corpora[corpus] or \
-                        (":query_data_" in cachefile and cachefiletime < (now - 20 * 60)):
-                    os.remove(cachefile)
-                    removed += 1
+        corpora = get_corpus_timestamps()
 
-        # Remove combined info and timespan caches older than the last updated corpus
-        for cachefile in itertools.chain(glob.glob(os.path.join(config.CACHE_DIR, "info*")),
-                                         glob.glob(os.path.join(config.CACHE_DIR, "timespan_*"))):
-            if os.path.getmtime(cachefile) < last_update:
+        with mc_pool.reserve() as mc:
+            # Invalidate cache for updated corpora
+            for corpus in corpora:
+                if mc.get("%s:last_update" % corpus, 0) < corpora[corpus]:
+                    mc.set("%s:version" % corpus, mc.get("%s:version" % corpus, 0) + 1)
+                    mc.set("%s:last_update" % corpus, corpora[corpus])
+                    result["corpora_invalidated"] += 1
+
+                    # Remove outdated query data
+                    for cachefile in glob.glob(os.path.join(config.CACHE_DIR, "%s:*" % corpus)):
+                        if os.path.getmtime(cachefile) < corpora[corpus]:
+                            os.remove(cachefile)
+                            result["files_removed"] += 1
+
+            # If any corpus has been updated or added, increase version to invalidate all combined caches
+            if result["corpora_invalidated"]:
+                mc.set("multi:version", mc.get("multi:version", 0) + 1)
+                result["multi_invalidated"] = True
+
+        # Remove old query data
+        for cachefile in glob.glob(os.path.join(config.CACHE_DIR, "*:query_data_*")):
+            if os.path.getmtime(cachefile) < (now - config.CACHE_LIFESPAN * 60):
                 os.remove(cachefile)
-                removed += 1
-
-        result["removed"] = removed
-
+                result["files_removed"] += 1
     yield result
+
+
+def cache_prefix(corpus="multi"):
+    with mc_pool.reserve() as mc:
+        return "%s:%d" % (corpus, mc.get("%s:version" % corpus, 0))
+
+
+def get_corpus_timestamps():
+    """Get modification time of corpus registry files."""
+    corpora = dict((os.path.basename(f).upper(), os.path.getmtime(f)) for f in
+                   glob.glob(os.path.join(config.CWB_REGISTRY, "*")))
+    return corpora
+
+
+def setup_cache():
+    """Setup disk cache and Memcached if needed."""
+    if cache_disabled:
+        return False
+
+    action_needed = False
+
+    # Create cache dir if needed
+    if config.CACHE_DIR and not os.path.exists(config.CACHE_DIR):
+        os.makedirs(config.CACHE_DIR)
+        action_needed = True
+
+    # Set up Memcached if needed
+    with mc_pool.reserve() as mc:
+        if "multi:version" not in mc:
+            corpora = get_corpus_timestamps()
+            mc.set("multi:version", 1)
+            for corpus in corpora:
+                mc.set("%s:version" % corpus, 1)
+                mc.set("%s:last_update" % corpus, corpora[corpus])
+            action_needed = True
+
+    return action_needed
+
+
+################################################################################
+# DOCUMENTATION
+################################################################################
+
+@app.route("/")
+def documentation():
+    """Render API documentation."""
+    if not os.path.isfile("docs/api.md"):
+        return "API documentation missing."
+    with open("docs/api.md", encoding="UTF-8") as doc:
+        md_text = doc.read()
+
+    # Replace placeholders
+    md_text = md_text.replace("[SBURL]", SB_API_URL)
+    md_text = md_text.replace("[VERSION]", KORP_VERSION)
+
+    # Convert Markdown to HTML
+    md = markdown.Markdown(extensions=["markdown.extensions.toc",
+                                       "markdown.extensions.smarty",
+                                       "markdown.extensions.def_list",
+                                       "markdown.extensions.fenced_code"])
+    md_html = md.convert(md_text)
+
+    html = ["""<!doctype html>
+        <html>
+          <head>
+            <meta charset="utf-8">
+            <title>Korp API v%s</title>
+            <link href="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/styles/monokai-sublime.min.css"
+              rel="stylesheet">
+            <script src="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/highlight.min.js"></script>
+            <script>hljs.initHighlightingOnLoad();</script>
+            <link href="https://fonts.googleapis.com/css?family=Roboto" rel="stylesheet">
+            <link href="https://fonts.googleapis.com/css?family=Roboto+Slab" rel="stylesheet">
+            <link href="static/api.css" rel="stylesheet">
+          </head>
+          <body>
+            <div class="toc-wrapper">
+              <div class="header">
+                <img src="static/raven.png"><br>
+                Korp API <span>v%s</span>
+              </div>
+              %s
+            </div>
+           <div class="content">
+            """ % (KORP_VERSION, KORP_VERSION, md.toc), md_html, "</div></body></html>"]
+
+    return "\n".join(html)
 
 
 ################################################################################
@@ -3106,31 +3143,45 @@ def cache_handler(args):
 ################################################################################
 
 def parse_cqp(cqp):
-    """ Try to parse a CQP query, returning identified tokens and a
-    boolean indicating partial failure if True."""
-
+    """Try to parse a CQP query, returning identified tokens and a
+    boolean indicating partial failure if True.
+    """
     sections = []
     last_start = 0
     in_bracket = 0
     in_quote = False
     in_curly = False
+    escaping = False
     quote_type = ""
 
     for i in range(len(cqp)):
         c = cqp[i]
 
-        if c in '"\'':
-            if in_quote and quote_type == c and not cqp[i - 1] == "\\":
-                in_quote = False
-                if not in_bracket:
-                    sections.append([last_start, i])
+        if in_quote and not escaping and c == "\\":
+            # Next character is being escaped
+            escaping = True
+        elif escaping:
+            # Current character is being escaped
+            escaping = False
+        elif c in '"\'':
+            if in_quote and quote_type == c:
+                if i < len(cqp) - 1 and cqp[i + 1] == quote_type:
+                    # First character of a quote escaped by doubling
+                    escaping = True
+                else:
+                    # End of a quote
+                    in_quote = False
+                    if not in_bracket:
+                        sections.append([last_start, i])
             elif not in_quote:
+                # Beginning of a qoute
                 in_quote = True
                 quote_type = c
                 if not in_bracket:
                     last_start = i
         elif c == "[":
             if not in_bracket and not in_quote:
+                # Beginning of a token
                 last_start = i
                 in_bracket = True
                 if len(cqp) > i + 1 and cqp[i + 1] == ":":
@@ -3138,6 +3189,7 @@ def parse_cqp(cqp):
                     return [], True
         elif c == "]":
             if in_bracket and not in_quote:
+                # End of a token
                 sections.append([last_start, i])
                 in_bracket = False
         elif c == "{" and not in_bracket and not in_quote:
@@ -3241,7 +3293,8 @@ def run_cqp(command, encoding=None, executable=config.CQP_EXECUTABLE, registry=c
             yield line
 
 
-def run_cwb_scan(corpus, attrs, encoding=config.CQP_ENCODING, executable=config.CWB_SCAN_EXECUTABLE, registry=config.CWB_REGISTRY):
+def run_cwb_scan(corpus, attrs, encoding=config.CQP_ENCODING, executable=config.CWB_SCAN_EXECUTABLE,
+                 registry=config.CWB_REGISTRY):
     """Call the cwb-scan-corpus binary with the given arguments.
     Yield one result line at the time, disregarding empty lines.
     If there is an error, raise a CQPError exception.
@@ -3279,26 +3332,32 @@ def read_attributes(lines):
     return attrs
 
 
-def assert_key(key, form, regexp, required=False):
+def assert_key(key, attrs, regexp, required=False):
     """Check that the value of the attribute 'key' in the request data
     matches the specification 'regexp'. If 'required' is True, then
     the key has to be in the form.
     """
-    value = form.get(key, "")
+    if isinstance(key, (tuple, list)):
+        for k in key:
+            value = attrs.get(k)
+            if value is not None:
+                break
+    else:
+        value = attrs.get(key, "")
+        key = (key,)
     if value and not isinstance(value, list):
         value = [value]
     if required and not value:
-        raise KeyError("Key is required: %s" % key)
-    if not all(re.match(regexp, x) for x in value):
+        raise KeyError("Key is required: <%s>" % "|".join(key))
+    if value and not all(re.match(regexp, x) for x in value):
         pattern = regexp.pattern if hasattr(regexp, "pattern") else regexp
-        raise ValueError("Value(s) for key %s do(es) not match /%s/: %s" % (key, pattern, value))
+        raise ValueError("Value(s) for key <%s> do(es) not match /%s/: %s" % ("|".join(key), pattern, value))
 
 
 @app.route("/authenticate", methods=["GET", "POST"])
 @main_handler
 def authenticate(_=None):
-    """Authenticate a user against an authentication server.
-    """
+    """Authenticate a user against an authentication server."""
 
     auth_data = request.authorization
 
@@ -3359,10 +3418,31 @@ def generator_to_dict(generator):
     return d
 
 
+def parse_bool(args, key, default=True):
+    if default:
+        return args.get(key, "").lower() != "false"
+    else:
+        return args.get(key, "").lower() == "true"
+
+
 class CustomTracebackException(Exception):
     def __init__(self, exception):
         self.exception = exception
 
+
+# Set up Memcached client pool
+if config.MEMCACHED_SERVERS and not cache_disabled:
+    mc_client = pylibmc.Client(config.MEMCACHED_SERVERS)
+    mc_pool = pylibmc.ClientPool(mc_client, config.MEMCACHED_POOL_SIZE or 1)
+    with mc_pool.reserve() as mc:
+        try:
+            mc.get("test_connection")
+        except:
+            print("Could not connect to Memcached. Caching will be disabled.")
+            cache_disabled = True
+
+# Set up caching
+setup_cache()
 
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "dev":
