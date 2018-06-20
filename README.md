@@ -122,3 +122,7 @@ While Memcached handles removing old cache by itself, you will still have to tel
 when one or more corpora are updated or added. This, and cleaning up the disk cache, is easily done by accessing the
 `/cache` endpoint. It might be a good idea to set up a cronjob or similar to regularly do this, making the cache
 maintenance fully automatic.
+
+## API documentation
+
+The API documentation is available by accessing the backend without any arguments, or in [docs/api.md](docs/api.md).
