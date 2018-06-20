@@ -65,7 +65,7 @@ from flask_cors import CORS
 # Nothing needs to be changed in this file. Use config.py for configuration.
 
 # The version of this script
-KORP_VERSION = "7.1.0"
+KORP_VERSION = "7.1.1"
 
 # URL for Språkbanken's Korp API (used for examples in documentation)
 SB_API_URL = "https://ws.spraakbanken.gu.se/ws/korp/v7/"
@@ -1967,6 +1967,7 @@ def count_query_worker(corpus, cqp, group_by, within, ignore_case=[], cut=None, 
 
     if use_cache:
         checksum = get_hash((cqp,
+                             subcqp,
                              group_by,
                              within,
                              sorted(ignore_case),
