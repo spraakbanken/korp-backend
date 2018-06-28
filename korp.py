@@ -384,7 +384,9 @@ def corpus_info(args, no_combined_cache=False):
     for corpus in corpora:
         if corpus in result["corpora"]:
             total_size += int(result["corpora"][corpus]["info"]["Size"])
-            total_sentences += int(result["corpora"][corpus]["info"].get("Sentences", 0))
+            sentences = result["corpora"][corpus]["info"].get("Sentences", "")
+            if sentences.isdigit():
+                total_sentences += int(sentences)
             continue
 
         # Read attributes
