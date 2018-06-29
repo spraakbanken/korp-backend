@@ -3234,7 +3234,7 @@ def make_query(cqp):
 
 
 def translate_undef(s):
-    """Translate None to '__UNDEF__'."""
+    """Translate '__UNDEF__' to None."""
     return None if s == "__UNDEF__" else s
 
 
