@@ -384,7 +384,9 @@ def corpus_info(args, no_combined_cache=False):
     for corpus in corpora:
         if corpus in result["corpora"]:
             total_size += int(result["corpora"][corpus]["info"]["Size"])
-            total_sentences += int(result["corpora"][corpus]["info"].get("Sentences", 0))
+            sentences = result["corpora"][corpus]["info"].get("Sentences", "")
+            if sentences.isdigit():
+                total_sentences += int(sentences)
             continue
 
         # Read attributes
@@ -3226,7 +3228,7 @@ def make_query(cqp):
 
 
 def translate_undef(s):
-    """Translate None to '__UNDEF__'."""
+    """Translate '__UNDEF__' to None."""
     return None if s == "__UNDEF__" else s
 
 
