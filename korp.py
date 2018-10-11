@@ -2230,13 +2230,13 @@ def loglike(args):
                 if len(cset) == 1:
                     sets[i]["freq"] = dict((tuple(
                         (y[0], y[1] if isinstance(y[1], tuple) else (y[1],)) for y in sorted(x["value"].items())),
-                                            x["freq"])
-                                           for x in count_result["corpora"][corpus]["absolute"])
+                                            x["absolute"])
+                                           for x in count_result["corpora"][corpus]["rows"])
                 else:
                     for w, f in ((tuple(
                             (y[0], y[1] if isinstance(y[1], tuple) else (y[1],)) for y in sorted(x["value"].items())),
-                                  x["freq"])
-                                 for x in count_result["corpora"][corpus]["absolute"]):
+                                  x["absolute"])
+                                 for x in count_result["corpora"][corpus]["rows"]):
                         sets[i]["freq"][w] += f
 
     else:
@@ -2251,8 +2251,8 @@ def loglike(args):
         for i, cset in enumerate((set1, set2)):
             sets[i]["total"] = count_result[i]["total"]["sums"]["absolute"]
             sets[i]["freq"] = dict((tuple(
-                (y[0], y[1] if isinstance(y[1], tuple) else (y[1],)) for y in sorted(x["value"].items())), x["freq"])
-                                   for x in count_result[i]["total"]["absolute"])
+                (y[0], y[1] if isinstance(y[1], tuple) else (y[1],)) for y in sorted(x["value"].items())), x["absolute"])
+                                   for x in count_result[i]["total"]["rows"])
 
     ll_list = compute_list(sets[0]["freq"], sets[0]["total"], sets[1]["freq"], sets[1]["total"])
     (ws, avg, mi, ma) = compute_ll_stats(ll_list, maxresults, sets)
