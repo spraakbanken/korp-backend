@@ -245,7 +245,7 @@ calculated. The relative frequency is given as *hits per 1 million tokens*.
     - **group_by** -- Positional attribute by which the hits should be grouped. (default: 'word' if neither
       **group_by** nor **group_by_struct** is defined) *[multi]*
     - **group_by_struct** -- Structural attribute by which the hits should be grouped. The value for
-      for the *first* token of the hit will be used. *[multi]*
+      the *first* token of the hit will be used. *[multi]*
     - **default_within** -- Prevent search from crossing boundaries of the given structural attribute.
     - **within** -- As above, but for specific corpora, overriding the default. Specified using the format
         'corpus:attribute'. *[multi]*
