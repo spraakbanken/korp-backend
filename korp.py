@@ -2195,7 +2195,8 @@ def loglike(args):
     assert_key("set2_cqp", args, r"", True)
     assert_key("set1_corpus", args, r"", True)
     assert_key("set2_corpus", args, r"", True)
-    assert_key(("group_by", "group_by_struct", "groupby"), args, IS_IDENT, True)
+    assert_key("group_by", args, IS_IDENT, False)
+    assert_key("group_by_struct", args, IS_IDENT, False)
     assert_key("ignore_case", args, IS_IDENT)
     assert_key("max", args, IS_NUMBER, False)
 
