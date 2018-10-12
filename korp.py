@@ -258,7 +258,7 @@ def parse_corpora(args):
 
 
 def parse_within(args):
-    within = defaultdict(lambda: args.get("default_within", args.get("defaultwithin")))
+    within = defaultdict(lambda: args.get("default_within"))
 
     if args.get("within"):
         if ":" not in args.get("within"):
@@ -506,7 +506,7 @@ def query(args):
     within = parse_within(args)
 
     # Parse "context"/"left_context"/"right_context"/"default_context"
-    default_context = args.get("default_context", args.get("defaultcontext")) or "10 words"
+    default_context = args.get("default_context") or "10 words"
     context = defaultdict(lambda: (default_context,))
     contexts = {}
 
@@ -566,7 +566,7 @@ def query(args):
     statistics = {}
 
     saved_statistics = {}
-    query_data = args.get("query_data", args.get("querydata"))
+    query_data = args.get("query_data")
 
     if query_data:
         try:
@@ -731,7 +731,6 @@ def query(args):
     result["query_data"] = binascii.b2a_base64(zlib.compress(
         bytes(checksum + ";" + ";".join("%s:%d" % (c, h) for c, h in statistics.items()),
               "utf-8"))).decode("utf-8").replace("+", "-").replace("/", "_")
-    result["querydata"] = result["query_data"]  # For backward compatibility
 
     if debug:
         result["DEBUG"] = debug
@@ -1408,11 +1407,11 @@ def count(args):
     corpora = parse_corpora(args)
     check_authentication(corpora)
 
-    group_by = args.get("group_by", args.get("groupby")) or []
+    group_by = args.get("group_by") or []
     if isinstance(group_by, str):
         group_by = sorted(set(group_by.split(QUERY_DELIM)))
 
-    group_by_struct = args.get("group_by_struct", args.get("groupby_struct")) or []
+    group_by_struct = args.get("group_by_struct") or []
     if isinstance(group_by_struct, str):
         group_by_struct = sorted(set(group_by_struct.split(QUERY_DELIM)))
 
@@ -1685,7 +1684,7 @@ def count(args):
 def count_all(args):
     """Like /count but for every single value of the given attributes."""
     assert_key("corpus", args, IS_IDENT, True)
-    assert_key(("group_by", "group_by_struct", "groupby"), args, IS_IDENT, True)
+    assert_key(("group_by", "group_by_struct"), args, IS_IDENT, True)
     assert_key("cut", args, IS_NUMBER)
     assert_key("ignore_case", args, IS_IDENT)
     assert_key("incremental", args, r"(true|false)")
@@ -2892,7 +2891,7 @@ def relations_sentences(args):
         shown_structs = shown_structs.split(QUERY_DELIM)
     shown_structs = set(shown_structs)
 
-    default_context = args.get("default_context", args.get("defaultcontext")) or "1 sentence"
+    default_context = args.get("default_context") or "1 sentence"
 
     querystarttime = time.time()
 
