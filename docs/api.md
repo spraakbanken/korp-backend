@@ -673,9 +673,6 @@ Get typical dependency relations for a given lemgram or word.
 {
   "relations": [
     {
-      "corpus": [
-        <list of corpora containing hits>
-      ],
       "dep": "<dependent lemgram or word>",
       "depextra": "<dependent prefix>",
       "deppos": "<dependent part of speech>",

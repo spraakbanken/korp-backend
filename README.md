@@ -36,12 +36,12 @@ You will need the latest [beta version of CWB](http://cwb.sourceforge.net/beta.p
 
 Check out the latest version of the source code using Subversion by running the following command in a terminal:
 
-    $ svn co https://cwb.svn.sourceforge.net/svnroot/cwb/cwb/trunk cwb
+    $ svn co http://svn.code.sf.net/p/cwb/code/cwb/trunk cwb
 
 Refer to the INSTALL text file for instructions on how to build and install on your system. The source code comes with
-a bunch of install scripts, so if you're lucky all you have to do is run one of them. For example on Ubuntu:
+a bunch of install scripts, so if you're lucky all you have to do is run one of them. For example:
 
-    $ sudo ./install-scripts/cwb-install-ubuntu
+    $ sudo ./install-scripts/install-linux
 
 Once CWB is installed, by default you will find it under `/usr/local/cwb-X.X.X/bin` (where `X.X.X` is the version
 number). Confirm that the installation was successful by running:
