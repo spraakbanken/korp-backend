@@ -320,7 +320,7 @@ def general_info(args):
         with open(config.PROTECTED_FILE) as infile:
             protected = [x.strip() for x in infile.readlines()]
 
-    result = {"version": KORP_VERSION, "cqp-version": version, "corpora": list(corpora), "protected_corpora": protected}
+    result = {"version": KORP_VERSION, "cqp_version": version, "corpora": list(corpora), "protected_corpora": protected}
 
     if args["cache"]:
         with mc_pool.reserve() as mc:
