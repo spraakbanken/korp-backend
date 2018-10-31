@@ -65,10 +65,10 @@ from flask_cors import CORS
 # Nothing needs to be changed in this file. Use config.py for configuration.
 
 # The version of this script
-KORP_VERSION = "7.1.1"
+KORP_VERSION = "8.0.0"
 
 # URL for Språkbanken's Korp API (used for examples in documentation)
-SB_API_URL = "https://ws.spraakbanken.gu.se/ws/korp/v7/"
+SB_API_URL = "https://ws.spraakbanken.gu.se/ws/korp/v8/"
 
 # Special symbols used by this script; they must NOT be in the corpus
 END_OF_LINE = "-::-EOL-::-"
