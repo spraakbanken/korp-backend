@@ -164,7 +164,7 @@ def main_handler(generator):
                     yield ")"
 
             def full_json(ff):
-                """Yield full JSON at end, but keep returning newlines to prevent timeout."""
+                """Yield full JSON at the end, but until then keep returning newlines to prevent timeout."""
                 result = {}
 
                 try:
