@@ -292,17 +292,7 @@ def sleep(args):
 @app.route("/info", methods=["GET", "POST"])
 @main_handler
 def info(args):
-    """Return information, either about a specific corpus
-    or general information about the available corpora.
-    """
-    if args.get("corpus"):
-        yield corpus_info(args)
-    else:
-        yield general_info(args)
-
-
-def general_info(args):
-    """Return information about the available corpora."""
+    """Get version information about list of available corpora."""
     if args["cache"]:
         with mc_pool.reserve() as mc:
             result = mc.get("%s:info" % cache_prefix())
@@ -310,7 +300,8 @@ def general_info(args):
             if "debug" in args:
                 result.setdefault("DEBUG", {})
                 result["DEBUG"]["cache_read"] = True
-            return result
+            yield result
+            return
 
     corpora = run_cqp("show corpora;")
     version = next(corpora)
@@ -329,11 +320,13 @@ def general_info(args):
             result.setdefault("DEBUG", {})
             result["DEBUG"]["cache_saved"] = True
 
-    return result
+    yield result
 
 
+@app.route("/corpus_info", methods=["GET", "POST"])
+@main_handler
 def corpus_info(args, no_combined_cache=False):
-    """Return information about a specific corpus or corpora."""
+    """Get information about a specific corpus or corpora."""
     assert_key("corpus", args, IS_IDENT, True)
 
     corpora = parse_corpora(args)
@@ -350,7 +343,8 @@ def corpus_info(args, no_combined_cache=False):
                 result.setdefault("DEBUG", {})
                 result["DEBUG"]["cache_read"] = True
                 result["DEBUG"]["checksum"] = checksum_combined
-            return result
+            yield result
+            return
 
     result = {"corpora": {}}
     total_size = 0
@@ -426,8 +420,7 @@ def corpus_info(args, no_combined_cache=False):
                 if saved and "debug" in args:
                     result.setdefault("DEBUG", {})
                     result["DEBUG"]["cache_saved"] = True
-
-    return result
+    yield result
 
 
 ################################################################################
@@ -1754,7 +1747,7 @@ def count_time(args):
             raise ValueError("When using 'from' or 'to', both need to be specified.")
 
     # Get date range of selected corpora
-    corpus_data = corpus_info({"corpus": QUERY_DELIM.join(corpora), "cache": args["cache"]}, no_combined_cache=True)
+    corpus_data = generator_to_dict(corpus_info({"corpus": QUERY_DELIM.join(corpora), "cache": args["cache"]}, no_combined_cache=True))
     corpora_copy = corpora.copy()
 
     if fromdate and todate:
