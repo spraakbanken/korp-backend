@@ -37,7 +37,7 @@ info:
     name: MIT
     url: https://opensource.org/licenses/MIT
   x-logo:
-    url: https://ws.spraakbanken.gu.se/ws/korp/v8/static/bird_black.png
+    url: https://ws.spraakbanken.gu.se/ws/korp/v8/static/raven_black.png
     altText: Logo
     
 servers: 
