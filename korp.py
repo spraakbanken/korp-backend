@@ -1502,10 +1502,10 @@ def count(args):
         }
 
         relative_to_result = generator_to_dict(count(relative_args))
-        relative_to_freqs = {"total": {}, "corpora": defaultdict(dict)}
+        relative_to_freqs = {"combined": {}, "corpora": defaultdict(dict)}
 
-        for row in relative_to_result["total"]["rows"]:
-            relative_to_freqs["total"][tuple(v for k, v in sorted(row["value"].items()))] = row["absolute"]
+        for row in relative_to_result["combined"]["rows"]:
+            relative_to_freqs["combined"][tuple(v for k, v in sorted(row["value"].items()))] = row["absolute"]
 
         for corpus in relative_to_result["corpora"]:
             for row in relative_to_result["corpora"][corpus]["rows"]:
@@ -1608,7 +1608,7 @@ def count(args):
                             corpus_stats[query_no]["sums"]["relative"] += int(freq) / float(
                                 relative_to_freqs["corpora"][corpus][relativeto_ngram]) * 1000000
                             total_stats[query_no]["rows"][ngram]["relative"] += int(freq) / float(
-                                relative_to_freqs["total"][relativeto_ngram]) * 1000000
+                                relative_to_freqs["combined"][relativeto_ngram]) * 1000000
                         else:
                             corpus_stats[query_no]["rows"][ngram]["relative"] += int(freq) / float(corpus_size) * 1000000
                             corpus_stats[query_no]["sums"]["relative"] += int(freq) / float(corpus_size) * 1000000
@@ -1658,7 +1658,7 @@ def count(args):
             new_list.append(row)
         total_stats[query_no]["rows"] = new_list
 
-    result["total"] = total_stats if len(total_stats) > 1 else total_stats[0]
+    result["combined"] = total_stats if len(total_stats) > 1 else total_stats[0]
 
     if not subcqp:
         for corpus in corpora:
@@ -2242,10 +2242,10 @@ def loglike(args):
 
         sets = [{}, {}]
         for i, cset in enumerate((set1, set2)):
-            sets[i]["total"] = count_result[i]["total"]["sums"]["absolute"]
+            sets[i]["total"] = count_result[i]["combined"]["sums"]["absolute"]
             sets[i]["freq"] = dict((tuple(
                 (y[0], y[1] if isinstance(y[1], tuple) else (y[1],)) for y in sorted(x["value"].items())), x["absolute"])
-                                   for x in count_result[i]["total"]["rows"])
+                                   for x in count_result[i]["combined"]["rows"])
 
     ll_list = compute_list(sets[0]["freq"], sets[0]["total"], sets[1]["freq"], sets[1]["total"])
     (ws, avg, mi, ma) = compute_ll_stats(ll_list, maxresults, sets)
