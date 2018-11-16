@@ -48,7 +48,6 @@ import traceback
 import functools
 import math
 import random
-import markdown
 import config
 try:
     import pylibmc
@@ -66,9 +65,6 @@ from flask_cors import CORS
 
 # The version of this script
 KORP_VERSION = "8.0.0"
-
-# URL for Språkbanken's Korp API (used for examples in documentation)
-SB_API_URL = "https://ws.spraakbanken.gu.se/ws/korp/v8/"
 
 # Special symbols used by this script; they must NOT be in the corpus
 END_OF_LINE = "-::-EOL-::-"
@@ -289,6 +285,7 @@ def sleep(args):
         yield {"%d" % x: x}
 
 
+@app.route("/")
 @app.route("/info", methods=["GET", "POST"])
 @main_handler
 def info(args):
@@ -3075,56 +3072,6 @@ def setup_cache():
             action_needed = True
 
     return action_needed
-
-
-################################################################################
-# DOCUMENTATION
-################################################################################
-
-@app.route("/")
-def documentation():
-    """Render API documentation."""
-    if not os.path.isfile("docs/api.md"):
-        return "API documentation missing."
-    with open("docs/api.md", encoding="UTF-8") as doc:
-        md_text = doc.read()
-
-    # Replace placeholders
-    md_text = md_text.replace("[SBURL]", SB_API_URL)
-    md_text = md_text.replace("[VERSION]", KORP_VERSION)
-
-    # Convert Markdown to HTML
-    md = markdown.Markdown(extensions=["markdown.extensions.toc",
-                                       "markdown.extensions.smarty",
-                                       "markdown.extensions.def_list",
-                                       "markdown.extensions.fenced_code"])
-    md_html = md.convert(md_text)
-
-    html = ["""<!doctype html>
-        <html>
-          <head>
-            <meta charset="utf-8">
-            <title>Korp API v%s</title>
-            <link href="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/styles/monokai-sublime.min.css"
-              rel="stylesheet">
-            <script src="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/highlight.min.js"></script>
-            <script>hljs.initHighlightingOnLoad();</script>
-            <link href="https://fonts.googleapis.com/css?family=Roboto" rel="stylesheet">
-            <link href="https://fonts.googleapis.com/css?family=Roboto+Slab" rel="stylesheet">
-            <link href="static/api.css" rel="stylesheet">
-          </head>
-          <body>
-            <div class="toc-wrapper">
-              <div class="header">
-                <img src="static/raven.png"><br>
-                Korp API <span>v%s</span>
-              </div>
-              %s
-            </div>
-           <div class="content">
-            """ % (KORP_VERSION, KORP_VERSION, md.toc), md_html, "</div></body></html>"]
-
-    return "\n".join(html)
 
 
 ################################################################################
