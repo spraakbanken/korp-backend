@@ -1998,7 +1998,7 @@ def count_query_worker(corpus, cqp, group_by, within, ignore_case=[], cut=None, 
     has_target = any("@[" in x for x in cqp)
 
     cmd += ["""tabulate Last %s > "| sort | uniq -c | sort -nr";""" % ", ".join("%s %s%s" % (
-        "target" if has_target else ("match" if g[1] else "match .. matchend"), g[0], " %c" if g in ignore_case else "") for g in group_by)]
+        "target" if has_target else ("match" if g[1] else "match .. matchend"), g[0], " %c" if g[0] in ignore_case else "") for g in group_by)]
 
     if subcqp:
         cmd += ["mainresult=Last;"]
