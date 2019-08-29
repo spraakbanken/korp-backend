@@ -26,7 +26,7 @@ reload(subprocess)
 
 from concurrent import futures
 from concurrent.futures import ThreadPoolExecutor
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from dateutil.relativedelta import relativedelta
 from copy import deepcopy
 import datetime
@@ -1084,7 +1084,7 @@ def query_parse_lines(corpus, lines, attrs, show, show_structs, free_matches=Fal
         words = line.split()
         tokens = []
         n = 0
-        structs = defaultdict(list)
+        structs = {}
         struct = None
         struct_value = []
 
@@ -1098,7 +1098,9 @@ def query_parse_lines(corpus, lines, attrs, show, show_structs, free_matches=Fal
                         continue
 
                     struct_v, word = word.split(">", 1)
-                    structs["open"].append(struct + " " + " ".join(struct_value + [struct_v]))
+                    struct_tag, struct_attr = struct.split("_", 1)
+                    structs.setdefault("open", OrderedDict()).setdefault(struct_tag, {})
+                    structs["open"][struct_tag][struct_attr] = " ".join(struct_value + [struct_v])
                     struct = None
                     struct_value = []
 
@@ -1120,7 +1122,7 @@ def query_parse_lines(corpus, lines, attrs, show, show_structs, free_matches=Fal
                     elif ">" in word and word[1:word.find(">")] in s_attrs:
                         # We have found a structural attribute without a value (<s>)
                         struct, word = word[1:].split(">", 1)
-                        structs["open"].append(struct)
+                        structs.setdefault("open", OrderedDict()).setdefault(struct, {})
                         struct = None
                     else:
                         # What we've found is not a structural attribute
@@ -1139,15 +1141,21 @@ def query_parse_lines(corpus, lines, attrs, show, show_structs, free_matches=Fal
                         break
                     elif struct in s_attrs:
                         word = tempword
-                        structs["close"].insert(0, struct)
+                        structs.setdefault("close", [])
+                        struct = struct.split("_")[0]
+                        if not struct in structs["close"]:
+                            structs["close"].insert(0, struct)
                         struct = None
 
                 # What's left is the word with its p-attrs
                 values = word.rsplit("/", nr_splits)
                 token = dict((attr, translate_undef(val)) for (attr, val) in zip(p_attrs, values))
                 if structs:
+                    # Convert OrderedDict into list
+                    if "open" in structs:
+                        structs["open"] = [{k: structs["open"][k]} for k in structs["open"]]
                     token["structs"] = structs
-                    structs = defaultdict(list)
+                    structs = {}
                 tokens.append(token)
 
                 n += 1
