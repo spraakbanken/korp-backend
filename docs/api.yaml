@@ -1,0 +1,1253 @@
+openapi: 3.0.2
+info: 
+  title: Korp API
+  version: 8.0.0
+  description: |
+    # Introduction
+    
+    Korp is a tool for searching in text corpora, developed at [Språkbanken](https://spraakbanken.gu.se/eng).
+    The Korp API is used by the [Korp frontend](https://github.com/spraakbanken/korp-frontend), but can also be used
+    independently. This documentation will give you an overview of all the
+    available commands, which in some cases include functionality not yet available in the Korp frontend.
+    
+    The [source code](https://github.com/spraakbanken/korp-backend) is made available under the MIT license
+    on GitHub.
+    
+    Most examples in this documentation will link to Språkbanken's instance of the Korp backend, to
+    take advantage of its corpora.
+    
+    ## The Basics of a Query
+    
+    Queries to the web service are made using HTTP GET requests:
+    
+    > `/command?parameter=value&...`
+    
+    Note that while the API documentation only lists GET requests, it is also possible to use POST requests (both regular
+    form data and JSON), with the same result. This may be needed if your query exceeds the maximum URL length.
+    
+    The service responds with a JSON object.
+    
+    Many of the commands make use of the CQP query language. For further information about CQP, please refer to
+    the [CQP Query Language Tutorial](http://cwb.sourceforge.net/files/CQP_Tutorial.pdf).
+  contact:
+    name: Språkbanken
+    url: https://spraakbanken.gu.se/
+    email: sb-info@svenska.gu.se
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  x-logo:
+    url: https://ws.spraakbanken.gu.se/ws/korp/v8/static/raven_black.png
+    altText: Logo
+    
+servers: 
+  - url: https://ws.spraakbanken.gu.se/ws/korp/v8
+
+tags:
+  - name: Information
+  - name: Concordance
+  - name: Statistics
+  - name: Word Picture
+  - name: Misc
+
+paths:
+  /info:
+    get:
+      summary: General Information
+      description: |
+        Get information about available corpora, which corpora are protected, and CWB and API version.
+        
+        ### Example
+        
+        [`/info`](https://ws.spraakbanken.gu.se/ws/korp/v8/info?indent=4)
+      tags:
+        - Information
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+                    description: API version.
+                    example: 8.0.0
+                  cqp_version:
+                    type: string
+                    description: CQP version.
+                    example: 3.2.1
+                  corpora:
+                    type: array
+                    description: List of corpora on the server.
+                    items:
+                      type: string
+                    example:
+                        - NOVELS
+                        - BLOGS2018
+                  protected_corpora:
+                    type: array
+                    description: List of which of the above corpora that are password protected.
+                    items:
+                      type: string
+                    example:
+                        - CLASSIFIED
+                        - MYDIARY
+                  time:
+                    $ref: '#/components/schemas/Time'
+  /corpus_info:
+    get:
+      summary: Corpus Information
+      description: |
+        Fetch information about one or more corpora.
+        
+        ### Example
+        
+        [`/corpus_info?corpus=ROMI,PAROLE`](https://ws.spraakbanken.gu.se/ws/korp/v8/corpus_info?corpus=ROMI,PAROLE&indent=4)
+      parameters:
+        - $ref: '#/components/parameters/Corpus'
+      tags:
+        - Information
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  corpora:
+                    type: object
+                    description: List of corpora.
+                    additionalProperties:
+                      type: object
+                      properties:
+                        attrs:
+                          type: object
+                          properties:
+                            p:
+                              type: array
+                              description: List of positional attributes.
+                              items:
+                                type: string
+                                description: Positional attribute.
+                                example: [baseform, pos]
+                            s:
+                              type: array
+                              description: List of structural attributes.
+                              items:
+                                type: string
+                                description: Structural attribute.
+                                example: [text_author, text_title]
+                            a:
+                              type: array
+                              description: List of align attributes, for linked corpora.
+                              items:
+                                type: string
+                                description: Align attribute.
+                                example: [link_n]
+                        info:
+                          type: object
+                          description: Miscellaneous information about the corpus given by Corpus Workbench, including any key-value pairs from the corresponding `.info` file.
+                          properties:
+                            Charset:
+                              type: string
+                              description: Character encoding of the corpus.
+                              example: utf8
+                            FirstDate:
+                              type: string
+                              description: Date and time of the oldest dated text in the corpus.
+                              example: '1976-01-01 00:00:00'
+                            LastDate:
+                              type: string
+                              description: Date and time of the newest dated text in the corpus.
+                              example: '1990-12-31 23:59:59'
+                            Size:
+                              type: string
+                              description: Number of tokens in the corpus.
+                              example: '2531038'
+                            Sentences:
+                              type: string
+                              description: Number of sentences in the corpus.
+                              example: '83643'
+                            Updated:
+                              type: string
+                              description: Date when the corpus was last updated.
+                              example: '2018-05-13'
+                          additionalProperties:
+                            type: string
+                          required:
+                                - Charset
+                                - Size
+                  total_size:
+                    type: integer
+                    description: Total number of tokens in the above corpora.
+                    example: 82762958
+                  total_sentences:
+                    type: integer
+                    description: Total number of sentences in the above corpora.
+                    example: 326556
+                  time:
+                    $ref: '#/components/schemas/Time'
+  /query:
+    get:
+      summary: Concordance
+      description: |
+        Do a concordance search in one or more corpora.
+        
+        ### Examples
+
+        Query the corpus SUC3 and show the first 10 sentences matching the CQP query `"och" [] [pos="NN"]`, including part of speech and base form in the result:  
+        [`/query?corpus=SUC3&start=0&end=9&default_context=1+sentence&cqp="och"+[]+[pos="NN"]&show=msd,lemma`](https://ws.spraakbanken.gu.se/ws/korp/v8/query?corpus=SUC3&start=0&end=9&default_context=1+sentence&cqp=%22och%22+%5B%5D+%5Bpos=%22NN%22%5D&show=msd,lemma&indent=4)
+        
+        Query the parallel corpus SALTNLD-SV and show part of speech + the linked Dutch sentence:  
+        [`/query?corpus=SALTNLD-SV&start=0&end=9&context=1+link&cqp="och"+[]+[pos="NN"]&show=saltnld-nl`](https://ws.spraakbanken.gu.se/ws/korp/v8/query?corpus=SALTNLD-SV&start=0&end=9&default_context=1+link&cqp=%22och%22+%5B%5D+%5Bpos=%22NN%22%5D&show=saltnld-nl&indent=4)
+      tags:
+        - Concordance
+      parameters:
+        - $ref: '#/components/parameters/Corpus'
+        - $ref: '#/components/parameters/CQP'
+        - $ref: '#/components/parameters/Start'
+        - $ref: '#/components/parameters/End'
+        - name: default_context
+          description: Context to show, e.g. ‘1 sentence’.
+          in: query
+          schema:
+            type: string
+            default: '10 words'
+            example: '1 sentence'
+        - name: context
+          description: Context to show for specific corpora, overriding the default. Specified using the format 'corpus:context'.
+          in: query
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+            example: ['ROMI:1 sentence', 'SUC3:10 words']
+        - $ref: '#/components/parameters/Show'
+        - $ref: '#/components/parameters/ShowStruct'
+        - $ref: '#/components/parameters/DefaultWithin'
+        - $ref: '#/components/parameters/Within'
+        - name: in_order
+          description: By default the order of the tokens in your query matters, and will only match tokens in that particular order. By setting this parameter to 'false' the order of the tokens will no longer matter, and every occurrence of each matched token will be highlighted. Requires **default_within** or **within**.
+          in: query
+          schema:
+            type: boolean
+            default: true
+        - name: sort
+          description: |
+            Sort the results *within each corpus*. The available options are:
+            * `keyword` - Sort by match
+            * `left` - Sort by left context
+            * `right` - Sort by right context
+            * `random` - Random order
+            * `any positional attribute` - Sort by given attribute
+            
+            By default no sorting is performed.
+          in: query
+          schema:
+            type: string
+        - name: random_seed
+          description: Numerical value for reproducible random order, used together with `sort=random` but not required.
+          in: query
+          schema:
+            type: integer
+            example: 984326587
+        - name: cut
+          description: Limit total number of hits per corpus to this number. The default is no limit.
+          in: query
+          schema:
+            type: integer
+            example: 25
+        - $ref: '#/components/parameters/CQPn'
+        - $ref: '#/components/parameters/ExpandPrequeries'
+        - $ref: '#/components/parameters/Incremental'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hits:
+                    type: integer
+                    description: Total number of hits.
+                    example: 1422
+                  corpus_hits:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                    example:
+                     ROMI: 1135
+                     SUC3: 287
+                  kwic:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        match:
+                          description: Specifies the position of the match in the context. If `in_order` is set to `false`, `match` will consist of a list of match objects, one per highlighted word.
+                          oneOf:
+                            - $ref: '#/components/schemas/Match'
+                            - type: array
+                              items:
+                                $ref: '#/components/schemas/Match'
+                        structs:
+                          type: object
+                          description: Structural attributes.
+                          additionalProperties:
+                            type: string
+                          example:
+                            text_author: Söderberg, Hjalmar
+                            text_title: Doktor Glas
+                        tokens:
+                          description: List of tokens with associated annotations.
+                          type: array
+                          items:
+                            type: object
+                            additionalProperties:
+                              type: string
+                            required:
+                                  - word
+                            example:
+                              word: cat
+                              pos: NN
+                        aligned:
+                          description: Hits from aligned corpora if available, otherwise omitted.
+                          type: object
+                          additionalProperties:
+                            type: array
+                            items:
+                              type: object
+                            description: List of tokens.
+                  time:
+                    $ref: '#/components/schemas/Time'
+  /query_sample:
+    get:
+      summary: Sample Concordance
+      description: |
+        Same as regular concordance, but does a sequential search in the selected corpora in random order until at least one hit is found, then aborts. The result will be randomly sorted. Use this to get one or more random sample sentences.
+        
+        Takes the same parameters as `/query`, but `sort` will always be set to `random`. Response format is the same.
+      tags:
+        - Concordance
+      responses:
+        '200':
+          description: OK
+  /count:
+    get:
+      summary: Statistics
+      description: |
+        Given a CQP query, calculate the frequency for one or more attributes. Both absolute and relative frequency are calculated. The relative frequency is given as *hits per 1 million tokens*.
+        
+        For instances when you want to calculate statistics for *every* token in one or several corpora, the `/count_all` command should be used instead since it is optimized for that kind of query.
+        
+        If you want to base your statistics on one single token in a multi token query, prefix that token with an `@`, e.g. `[pos = "JJ"] @[pos = "NN"]`.
+        
+        When `subcqp#` parameters are used, `"<corpus>"` and `"total"` above will instead each contain a list, with the first item being the result of the main `cqp` query, and the following items the results of the `subcqp#` queries. The `subcqp#` results will each have an additional key, `"cqp"`, containing the CQP query for that particular subquery.
+        
+        ### Example
+        
+        Get frequencies for the different word forms of the lemgram `ge..vb.1`:  
+        [`/count?corpus=ROMI&cqp=[lex+contains+"ge..vb.1"]&group_by=word&ignore_case=word`](https://ws.spraakbanken.gu.se/ws/korp/v8/count?corpus=ROMI&cqp=[lex+contains+%22ge..vb.1%22]&group_by=word&ignore_case=word&indent=4)
+      tags:
+        - Statistics
+      parameters:
+        - $ref: '#/components/parameters/Corpus'
+        - $ref: '#/components/parameters/CQP'
+        - $ref: '#/components/parameters/GroupBy'
+        - $ref: '#/components/parameters/GroupByStruct'
+        - $ref: '#/components/parameters/DefaultWithin'
+        - $ref: '#/components/parameters/Within'
+        - $ref: '#/components/parameters/IgnoreCase'
+        - name: relative_to_struct
+          description: Calculate relative frequencies based on total number of tokens with the same value for the structural annotations specified here, instead of relative to corpus size.
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+          example: [text_author]
+          explode: false
+        - name: split
+          description: Attributes that should be split (used for sets).
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+          example: [baseform, sense]
+          explode: false
+        - name: top
+          description: "Preserve only the first *n* annotations in a set. Format: 'annotation:n'. If *:n* is omitted only the first value will be preserved. Must be used together with `split`."
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+          example: ['sense:3']
+          explode: false
+        - $ref: '#/components/parameters/CQPn'
+        - $ref: '#/components/parameters/ExpandPrequeries'
+        - $ref: '#/components/parameters/SubCQPn'
+        - name: start
+          description: Start row; used for pagination.
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: end
+          description: End row; used for pagination. By default no limit.
+          in: query
+          schema:
+            type: integer
+          example: 25
+        - $ref: '#/components/parameters/IncrementalProgress'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  corpora:
+                    type: object
+                    description: Statistics per corpus. An object with corpus names as keys, and either objects or arrays of objects as values depending on whether the `subcqp#` parameter is used. When `subcqp#` is used, each value consists of an array with the first item being the result of the main `cqp` query (or the last `cqp#` query), and the following items the results of the `subcqp#` queries. The `subcqp#` results will each have an additional key, `cqp`, containing the CQP query for that particular subquery.
+                    additionalProperties:
+                      oneOf:
+                        - $ref: '#/paths/~1count/get/responses/200/content/application~1json/schema/properties/combined/oneOf/0'
+                        - type: array
+                          items:
+                            $ref: '#/paths/~1count/get/responses/200/content/application~1json/schema/properties/combined/oneOf/0'
+                  combined:
+                    description: Combined statistics for all corpora. Either an object or an array of objects depending on whether the `subcqp#` parameter is used. When `subcqp#` is used, this will consist of an array with the first item being the result of the main `cqp` query (or the last `cqp#` query), and the following items the results of the `subcqp#` queries. The `subcqp#` results will each have an additional key, `cqp`, containing the CQP query for that particular subquery.
+                    oneOf:
+                      - type: object
+                        properties:
+                          sums:
+                            type: object
+                            properties:
+                              absolute:
+                                type: integer
+                                example: 598
+                              relative:
+                                type: number
+                                example: 13.765536
+                          rows:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                absolute:
+                                  description: Absolute frequency.
+                                  type: integer
+                                  example: 598
+                                relative:
+                                  description: Relative frequency.
+                                  type: number
+                                  example: 13.765536
+                                value:
+                                  description: An object with annotations as keys. Structural annotations are given as strings, while positional are given as arrays of strings, one string per word in the match.
+                                  type: object
+                                  additionalProperties:
+                                    anyOf:
+                                      - type: string
+                                      - type: array
+                                        items:
+                                          type: string
+                      - type: array
+                        items:
+                          $ref: '#/paths/~1count/get/responses/200/content/application~1json/schema/properties/combined/oneOf/0'
+                  count:
+                    type: integer
+                    description: Total number of different values.
+                    example: 241
+                  time:
+                    $ref: '#/components/schemas/Time'
+  /count_all:
+    get:
+      summary: Complete Statistics
+      description: |
+        Same as regular statistics (`/count`) but without specifying `cqp`, resulting in a complete list of every value of the given attributes.
+
+        Takes the same parameters as `/count`, except it doesn't use `cqp`. Response format is the same.
+        
+        ### Example
+        
+        Get statistics for all parts of speech in one corpus:  
+        [/count_all?corpus=ROMI&group_by=pos](https://ws.spraakbanken.gu.se/ws/korp/v8/count_all?corpus=ROMI&group_by=pos&indent=4)
+      tags:
+        - Statistics
+      responses:
+        '200':
+          description: OK
+  /count_time:
+    get:
+      summary: Statistics Over Time
+      description: |
+        Show the change in frequency of one or more search results over time.
+        
+        **Interpreting the results**
+        
+        The data points in the result indicates the number of hits *from that point onward* until the next data point, meaning that the following data:
+
+        ```json
+        "2010": 100,
+        "2012": 50,
+        "2013": 0,
+        "2016": null
+        ```
+        
+        should be interpreted as 100 hits during 2010–2011, then 50 hits during 2012, zero hits 2013–2015, and finally from 2016 onwards we have no data at all.
+        
+        **Strategies**
+
+        What should happen when you ask for time data with a granularity finer than that of the annotated material? Does a search limited to the period 2005-01-01 -- 2005-01-31 include material dated with only "2005"? The `strategy` parameter gives you some control over this, affecting both how `from` and `to` work, and what parts of the material contribute to the results.
+
+        The list below describes the three different strategies, and for each strategy the rules that decide what part of the material is included in the search, as well as what tokens contribute to the token count for each data point.
+
+        The term "result time span" below refers both to the `from` and `to` span given by the user, and the different time spans making up the data points in the result data, the size of which are determined by the `granularity` parameter. For example the data point "2015" representing the whole of year 2015 when `granularity` is set to 'y', and "2015-01" representing the whole of January 2015 with `granularity` set to 'm'.
+
+        `t1` and `t2` represents the *from* and *to* dates for an annotated part of the material, and `t1'` and `t2'` is the *from* and *to* of "result time span" described above.
+
+        *Strategy 1*  
+        The material time span needs to be completely contained by the result time span, or the result time span needs to be
+        completely contained by the material time span.  
+        `(t1 >= t1' AND t2 <= t2') OR (t1 <= t1' AND t2 >= t2')`
+        
+        *Strategy 2*  
+        All overlaps allowed between material time span and result time span.  
+        `t1 <= t2' AND t2 >= t1'`
+        
+        *Strategy 3*  
+        The material time span is completely contained by the result time span.  
+        `t1 >= t1' AND t2 <= t2'`
+        
+        ### Example
+        
+        Show how the use of "tsunami" and "flodvåg" ("tidal wave") has changed over time in the Swedish newspaper Göteborgs-Posten:  
+        [`/count_time?cqp=[lex+contains+"tsunami\.\.nn\.1|flodvåg\.\.nn\.1"]&corpus=GP2001,GP2002,GP2003,GP2004,GP2005,GP2006,GP2007,GP2008,GP2009,GP2010,GP2011,GP2012&subcqp0=[lex+contains+'tsunami\.\.nn\.1']&subcqp1=[lex+contains+'flodvåg\.\.nn\.1']`](https://ws.spraakbanken.gu.se/ws/korp/v8/count_time?cqp=%5Blex+contains+%22tsunami%5C.%5C.nn%5C.1%7Cflodv%C3%A5g%5C.%5C.nn%5C.1%22%5D&corpus=GP2001%2CGP2002%2CGP2003%2CGP2004%2CGP2005%2CGP2006%2CGP2007%2CGP2008%2CGP2009%2CGP2010%2CGP2011%2CGP2012&subcqp0=%5Blex+contains+'tsunami%5C.%5C.nn%5C.1'%5D&subcqp1=%5Blex+contains+'flodv%C3%A5g%5C.%5C.nn%5C.1'%5D&indent=4)
+      tags:
+        - Statistics
+      parameters:
+        - $ref: '#/components/parameters/Corpus'
+        - $ref: '#/components/parameters/CQP'
+        - $ref: '#/components/parameters/DefaultWithin'
+        - $ref: '#/components/parameters/Within'
+        - $ref: '#/components/parameters/SubCQPn'
+        - $ref: '#/components/parameters/Granularity'
+        - $ref: '#/components/parameters/TimeFrom'
+        - $ref: '#/components/parameters/TimeTo'
+        - name: strategy
+          description:  Time matching strategy. One of 1 (default), 2 or 3. See section about strategies for explanation.
+          in: query
+          schema:
+            type: integer
+            enum: [1, 2, 3]
+            default: 1
+        - $ref: '#/components/parameters/CQPn'
+        - $ref: '#/components/parameters/ExpandPrequeries'
+        - $ref: '#/components/parameters/IncrementalProgress'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  corpora:
+                    type: object
+                    description: Time statistics per corpus. An object with corpus names as keys, and either objects or arrays of objects as values depending on whether the `subcqp#` parameter is used. When `subcqp#` is used, each value consists of an array with the first item being the result of the main `cqp` query (or the last `cqp#` query), and the following items the results of the `subcqp#` queries. The `subcqp#` results will each have an additional key, `cqp`, containing the CQP query for that particular subquery.
+                    additionalProperties:
+                      oneOf:
+                        - $ref: '#/paths/~1count_time/get/responses/200/content/application~1json/schema/properties/combined/oneOf/0'
+                        - type: array
+                          items:
+                            $ref: '#/paths/~1count_time/get/responses/200/content/application~1json/schema/properties/combined/oneOf/0'
+                  combined:
+                    description: Combined time statistics for all corpora. Either an object or an array of objects depending on whether the `subcqp#` parameter is used. When `subcqp#` is used, each value consists of an array with the first item being the result of the main `cqp` query (or the last `cqp#` query), and the following items the results of the `subcqp#` queries. The `subcqp#` results will each have an additional key, `cqp`, containing the CQP query for that particular subquery.
+                    oneOf:
+                      - type: object
+                        properties:
+                          absolute:
+                            description: Absolute frequency per time period.
+                            type: object
+                            additionalProperties:
+                              type: integer
+                              nullable: true
+                            example:
+                              2017: 354
+                              2018: 115
+                              2019: null
+                          relative:
+                            description: Relative frequency per time period.
+                            type: object
+                            additionalProperties:
+                              type: number
+                              nullable: true
+                            example:
+                              2017: 65.265
+                              2018: 87.521
+                              2019: null
+                          sums:
+                            type: object
+                            properties:
+                              absolute:
+                                description: Absolute frequency sum.
+                                type: integer
+                                example: 469
+                              relative:
+                                description: Relative frequency sum.
+                                type: number
+                                example: 152.786
+                      - type: array
+                        items:
+                          $ref: '#/paths/~1count_time/get/responses/200/content/application~1json/schema/properties/combined/oneOf/0'
+                  time:
+                    $ref: '#/components/schemas/Time'
+  /timespan:
+    get:
+      summary: Distribution Over Time
+      description: |
+        Show the distribution of all tokens in a corpus over time.
+        
+        ### Example
+
+        Show distribution of tokens in the Swedish Party Programs and Election Manifestos corpus over time:  
+        [/timespan?corpus=VIVILL](https://ws.spraakbanken.gu.se/ws/korp/v8/timespan?corpus=VIVILL&indent=4)
+      tags:
+        - Statistics
+      parameters:
+        - $ref: '#/components/parameters/Corpus'
+        - $ref: '#/components/parameters/Granularity'
+        - $ref: '#/components/parameters/TimeFrom'
+        - $ref: '#/components/parameters/TimeTo'
+        - name: strategy
+          description:  Time matching strategy. One of 1 (default), 2 or 3. See section about strategies for the `/count_time` endpoint for explanation.
+          in: query
+          schema:
+            type: integer
+            enum: [1, 2, 3]
+            default: 1
+        - name: per_corpus
+          description: Include per-corpus results.
+          schema:
+            type: boolean
+            default: true
+          in: query
+        - name: combined
+          description: Include combined results.
+          schema:
+            type: boolean
+            default: true
+          in: query
+        - $ref: '#/components/parameters/IncrementalProgress'
+      responses:
+        '200':
+          description: OK
+          content:
+            applicatoin/json:
+              schema:
+                type: object
+                properties:
+                  corpora:
+                    type: object
+                    description: An object with corpus names as keys and time statistics objects as values.
+                    additionalProperties:
+                      description: Number of tokens per time period.
+                      type: object
+                      additionalProperties:
+                        type: integer
+                    example:
+                      ROMI:
+                        2017: 15366
+                        2018: 7437
+                  combined:
+                    type: object
+                    description: Number of tokens per time period.
+                    additionalProperties:
+                      type: integer
+                    example:
+                      2017: 15366
+                      2018: 7437
+                  time:
+                    $ref: '#/components/schemas/Time'
+  /loglike:
+    get:
+      summary: Log-Likelihood Comparison
+      description: |
+        Compare the results of two different searches by using log-likelihood.
+        
+        A positive log-likelihood value indicates a relative increase in `set2` compared to `set1`, while a negative value indicates a relative decrease.
+        
+        ### Example
+        
+        Compare the nouns of two different corpora:  
+        [`/loglike?set1_cqp=[pos="NN"]&set2_cqp=[pos="NN"]&group_by=word&max=10&set1_corpus=ROMI&set2_corpus=GP2012`](https://ws.spraakbanken.gu.se/ws/korp/v8/loglike?set1_cqp=[pos=%22NN%22]&set2_cqp=[pos=%22NN%22]&group_by=word&max=10&set1_corpus=ROMI&set2_corpus=GP2012&indent=4)
+
+      tags:
+        - Misc
+      parameters:
+        - name: set1_cqp
+          description: CQP query for query 1.
+          required: true
+          in: query
+          schema:
+            type: string
+        - name: set2_cqp
+          description: CQP query for query 2.
+          required: true
+          in: query
+          schema:
+            type: string
+        - name: set1_corpus
+          description: Corpus name for query 1.
+          required: true
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+            example: [ROMI, SUC3]
+          explode: false
+        - name: set2_corpus
+          description: Corpus name for query 2.
+          required: true
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+            example: [ROMI, SUC3]
+          explode: false
+        - $ref: '#/components/parameters/GroupBy'
+        - $ref: '#/components/parameters/GroupByStruct'
+        - $ref: '#/components/parameters/IgnoreCase'
+        - name: max
+          description: Max numer of results per set.
+          in: query
+          schema:
+            type: integer
+            default: 15
+            example: 50
+        - $ref: '#/components/parameters/IncrementalProgress'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  average:
+                    type: number
+                    description: Log-likelihood average.
+                    example: −0,655
+                  loglike:
+                    type: object
+                    description: Log-likelihood values.
+                    additionalProperties:
+                      type: number
+                    example:
+                      cat: -5.43
+                      dog: 4.12
+                  set1:
+                    type: object
+                    description: Absolute frequency for the values in set 1.
+                    additionalProperties:
+                      type: integer
+                    example:
+                      cat: 447
+                      dog: 808
+                  set2:
+                    type: object
+                    description: Absolute frequency for the values in set 2.
+                    additionalProperties:
+                      type: integer
+                    example:
+                      cat: 254
+                      dog: 614
+                  time:
+                    $ref: '#/components/schemas/Time'
+  /relations:
+    get:
+      summary: Word Picture
+      description: |
+        Get typical dependency relations for a given lemgram or word.
+        
+        ### Example
+        
+        Get dependency relations for the lemgram ge..vb.1:  
+        [`/relations?word=ge..vb.1&type=lemgram&corpus=ROMI`](https://ws.spraakbanken.gu.se/ws/korp/v8/relations?word=ge..vb.1&type=lemgram&corpus=ROMI&indent=4)
+
+      tags:
+        - Word Picture
+      parameters:
+        - $ref: '#/components/parameters/Corpus'
+        - name: word
+          description: Word or lemgram.
+          required: true
+          in: query
+          schema:
+            type: string
+        - name: type
+          description: |
+            Search type. Available options:
+            
+            * `word` (default)
+            * `lemgram`
+          schema:
+            type: string
+            enum: [word, lemgram]
+            default: word
+          in: query
+        - name: min
+          description: Cut-off frequency. No cut-off if omitted.
+          schema:
+            type: integer
+          in: query
+        - name: max
+          description: Maximum number of results. 0 = unlimited.
+          schema:
+            type: integer
+            default: 15
+          in: query
+        - $ref: '#/components/parameters/IncrementalProgress'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  relations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        dep:
+                          description: Dependent lemgram or word.
+                          type: string
+                        depextra:
+                          description: Dependent prefix.
+                          type: string
+                        deppos:
+                          description: Dependent part of speech.
+                          type: string
+                        freq:
+                          description: Number of occurrences.
+                          type: integer
+                        head:
+                          description: Head lemgram or word.
+                          type: string
+                        headpos:
+                          description: Head part of speech.
+                          type: string
+                        mi:
+                          description: Lexicographer's mutual information score.
+                          type: number
+                          example: 17.326
+                        rel:
+                          description: Relation.
+                          type: string
+                        source:
+                          description: List of IDs, for getting the source sentences.
+                          type: array
+                          items:
+                            type: string
+                      example:
+                        dep: "black"
+                        depextra: ""
+                        deppos: "JJ"
+                        rel: "AT"
+                        headpos: "NN"
+                        head: "cat"
+                        freq: 5
+                        mi: 17.92607125616987
+                        source:
+                          - ROMI:253662
+                  time:
+                    $ref: '#/components/schemas/Time'
+  /relations_sentences:
+    get:
+      summary: Word Picture Sentences
+      description: |
+        Given the source ID for a relation (from a Word Picture query), return the sentences in which this relation occurs.
+        
+        Returns a structure identical to a regular `/query`.
+      tags:
+        - Word Picture
+      parameters:
+        - name: source
+          description: List of source IDs (from a Word Picture query).
+          schema:
+            type: array
+            items:
+              type: string
+          in: query
+          explode: false
+        - $ref: '#/components/parameters/Start'
+        - $ref: '#/components/parameters/End'
+        - $ref: '#/components/parameters/Show'
+        - $ref: '#/components/parameters/ShowStruct'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/paths/~1query/get/responses/200/content/application~1json/schema'
+  /lemgram_count:
+    get:
+      summary: Lemgram Statistics
+      description: |
+        Return the number of occurrences of one or more lemgrams in one or more corpora.
+        
+        ### Example
+        
+        Get number of occurrences of the lemgrams `ge..vb.1` and `ta..vb.1` in a single corpus:  
+        [`/lemgram_count?lemgram=ge..vb.1,ta..vb.1&corpus=ROMI`](https://ws.spraakbanken.gu.se/ws/korp/v8/lemgram_count?lemgram=ge..vb.1,ta..vb.1&corpus=ROMI&indent=4)
+      tags:
+        - Statistics
+      parameters:
+        - name: lemgram
+          description: Lemgram to look up.
+          schema:
+            type: array
+            items:
+              type: string
+          required: true
+          in: query
+          explode: false
+        - name: corpus
+          description: Corpus name. All corpora if omitted.
+          schema:
+            type: array
+            items:
+              type: string
+          in: query
+          explode: false
+        - name: count
+          description: |
+            What type of ocurrences to count. Available options are:
+            
+            * `lemgram` (default)
+            * `prefix`
+            * `suffix`
+          schema:
+            type: string
+            enum: [lemgram, prefix, suffix]
+            default: lemgram
+          in: query
+        - $ref: '#/components/parameters/IncrementalProgress'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Lemgrams as keys with absolute frequencies as values.
+                properties:
+                  time:
+                    $ref: '#/components/schemas/Time'
+                additionalProperties:
+                  type:
+                    integer
+                example:
+                  cat..nn.1: 354
+                  dog..nn.1: 85
+  /struct_values:
+    get:
+      summary: Structural Values
+      description: |
+        Get all available values for one or more structural attributes, together with number of tokens for each value. Similar to `/count_all` but without relative frequencies and with support for hierarchies.
+        
+        ### Example
+        
+        Get all authors and their titles together with token count:  
+        [`/struct_values?corpus=ROMI&struct=text_author>text_title&count=true`](https://ws.spraakbanken.gu.se/ws/korp/v8/struct_values?corpus=ROMI&struct=text_author>text_title&count=true&indent=4)
+      tags:
+        - Misc
+      parameters:
+        - $ref: '#/components/parameters/Corpus'
+        - name: struct
+          description: "Structural attribute. Each value can be either a plain attribute, or a hierarchy of two or more attributes, like so: `text_author>text_title`."
+          required: true
+          schema:
+            type: array
+            items:
+              type: string
+          in: query
+          explode: false
+        - name: count
+          description: Include token count. Disabled by default.
+          schema:
+            type: boolean
+            default: false
+          in: query
+        - name: per_corpus
+          description: Include per-corpus results. Enabled by default.
+          schema:
+            type: boolean
+            default: true
+          in: query
+        - name: combined
+          description: Include combined results. Enabled by default.
+          schema:
+            type: boolean
+            default: true
+          in: query
+        - $ref: '#/components/parameters/IncrementalProgress'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                  type: object
+                  properties:
+                    corpora:
+                      description: Per corpus data.
+                      type: object
+                      additionalProperties:
+                        $ref: '#/paths/~1struct_values/get/responses/200/content/application~1json/schema/properties/combined'
+                    combined:
+                      type: object
+                      description: Structural attributes as keys. The values are either given as arrays or objects depending on if `count` is `true`.
+                      additionalProperties:
+                        oneOf:
+                          - type: array
+                            description: Structural values.
+                            items:
+                              type: string
+                          - type: object
+                            description: Strucural values as keys, token counts as values.
+                            additionalProperties:
+                              type: integer
+                    time:
+                      $ref: '#/components/schemas/Time'
+  /authenticate:
+    get:
+      summary: Authentication
+      description: Authenticate a user against an authentication system, if available. Uses basic authentication. Returns a list of protected corpora the user has access to.
+      tags:
+        - Misc
+      responses:
+       '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  corpora:
+                    type: array
+                    items:
+                      type: string
+                    example:
+                      corpora:
+                        - CLASSIFIED
+                        - MYDIARY 
+                  time:
+                    $ref: '#/components/schemas/Time'
+
+security:
+  - basicAuth: []
+  
+components:
+  schemas:
+    Time:
+      type: number
+      description: Execution time in seconds.
+      example: 0.0125
+    Match:
+      type: object
+      properties:
+        start:
+          type: integer
+          description: Start position of the match within the context.
+          example: 5
+        end:
+          type: integer
+          description: End position of the match within the context.
+          example: 6
+        position:
+          type: integer
+          description: Global corpus position of the match.
+          example: 73648
+  parameters:
+    Corpus:
+      name: corpus
+      description: Corpus name.
+      in: query
+      schema:
+        type: array
+        items:
+          type: string
+        example: [ROMI, SUC3]
+      explode: false
+      required: true
+    CQP:
+      name: cqp
+      description: CQP query.
+      in: query
+      schema:
+        type: string
+      required: true
+      example: '[word="flower"]'
+    CQPn:
+      name: 'cqp#'
+      description: 'Where # is a number, e.g. `cqp1`, `cqp2`. In addition to the `cqp` parameter, you can add additional CQP queries that will be executed on the result of the previous query (i.e. searching within search results). The final result returned to the user will be that of the last numbered query.'
+      in: query
+      schema:
+        type: string
+        example: '[pos="NN"]'
+    DefaultWithin:
+      name: default_within
+      description: Prevent search from crossing boundaries of the given structural attribute, e.g. 'sentence'.
+      in: query
+      schema:
+        type: string
+        example: sentence
+    End:
+      name: end
+      description: Last result to return; used for pagination.
+      in: query
+      schema:
+        type: integer
+        default: 9
+        example: 9
+    ExpandPrequeries:
+      name: expand_prequeries
+      description: 'When using multiple CQP queries (`cqp#`), this determines whether subsequent queries should be executed on the containing sentences (or any other structural attribute defined by `within`) from the previous query, or just the actual matched tokens. Enabled by default.'
+      in: query
+      schema:
+        type: boolean
+        default: true
+    Granularity:
+      name: granularity
+      description: |
+        Time resolution. Available options are:
+        * `y` - Year (default)
+        * `m` - Month
+        * `d` - Day
+        * `h` - Hour
+        * `n` - Minute
+        * `s` - Second
+      in: query
+      schema:
+        type: string
+        enum: [y, m, d, h, n, s]
+        default: y
+    GroupBy:
+      name: group_by
+      description: Positional attribute by which the hits should be grouped. Defaults to `word` if neither `group_by` nor `group_by_struct` is defined.
+      in: query
+      schema:
+        type: array
+        items:
+          type: string
+      explode: false
+      example: [pos, baseform]
+    GroupByStruct:
+      name: group_by_struct
+      description: Structural attribute by which the hits should be grouped. The value for the *first* token of the hit will be used.
+      in: query
+      schema:
+        type: array
+        items:
+          type: string
+      explode: false
+      example: [text_author, text_title]
+    IgnoreCase:
+      name: ignore_case
+      description: Change all values of the given attribute(s) to lowercase.
+      in: query
+      schema:
+        type: array
+        items:
+          type: string
+      example: [word, pos]
+      explode: false
+    Incremental:
+      name: incremental
+      description: Return results incrementally when set to 'true' and more than one corpus is specified.
+      in: query
+      schema:
+        type: boolean
+        default: false
+    IncrementalProgress:
+      name: incremental
+      description: Incrementally return progress updates when the calculation for each corpus is finished.
+      in: query
+      schema:
+        type: boolean
+        default: false
+    Show:
+      name: show
+      description: Positional attributes to show. 'word' will always be included.
+      in: query
+      explode: false
+      schema:
+        type: array
+        items:
+          type: string
+        example: [pos, baseform]
+        default: [word]
+    ShowStruct:
+      name: show_struct
+      description: Structural attributes to show.
+      in: query
+      explode: false
+      schema:
+        type: array
+        items:
+          type: string
+        example: [text_author, text_title]
+    Start:
+      name: start
+      description: First result to return; used for pagination.
+      in: query
+      schema:
+        type: integer
+        default: 0
+        example: 0
+    SubCQPn:
+      name: subcqp#
+      description: "Where # is a number. Sub-queries to the main query (or last **cqp#** query). Any number of numbered subcqp-parameters can be used. These will always be executed on just the actual matched tokens from the main query (i.e. no expansion), and the result for each subquery will be included as a separate object in the final JSON, in addition to the main query result."
+      in: query
+      schema:
+        type: string
+    TimeFrom:
+      name: from
+      description: Only include results contained by date range specified by `from` and `to`. Must be used together with `to`. On the format `YYYYMMDDhhmmss`.
+      in: query
+      schema:
+        type: string
+    TimeTo:
+      name: to
+      description: Only include results contained by date range specified by `from` and `to`. Must be used together with `from`. On the format `YYYYMMDDhhmmss`.
+      in: query
+      schema:
+        type: string
+    Within:
+      name: within
+      description: Like default_within, but for specific corpora, overriding the default. Specified using the format 'corpus:attribute'.
+      in: query
+      explode: false
+      schema:
+        type: array
+        items:
+          type: string
+        example: ['ROMI:paragraph', 'SUC3:text']
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
