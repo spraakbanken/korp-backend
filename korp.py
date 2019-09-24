@@ -64,7 +64,7 @@ from flask_cors import CORS
 # Nothing needs to be changed in this file. Use config.py for configuration.
 
 # The version of this script
-KORP_VERSION = "8.0.0"
+KORP_VERSION = "8.0.1"
 
 # Special symbols used by this script; they must NOT be in the corpus
 END_OF_LINE = "-::-EOL-::-"
@@ -1751,6 +1751,10 @@ def count_time(args):
         if not fromdate or not todate:
             raise ValueError("When using 'from' or 'to', both need to be specified.")
 
+    result = {"corpora": {}}
+    if "debug" in args:
+        result["DEBUG"] = {"cqp": cqp}
+
     # Get date range of selected corpora
     corpus_data = generator_to_dict(corpus_info({"corpus": QUERY_DELIM.join(corpora), "cache": args["cache"]}, no_combined_cache=True))
     corpora_copy = corpora.copy()
@@ -1810,7 +1814,29 @@ def count_time(args):
     else:
         group_by = [(v, True) for v in ("text_datefrom", "text_dateto")]
 
-    result = {"corpora": {}}
+    # Add zero values for the corpora we removed because of the selected date span
+    for corpus in set(corpora_copy).difference(set(corpora)):
+        result["corpora"][corpus] = [{"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
+                                     for i in range(len(subcqp) + 1)]
+        for i, c in enumerate(result["corpora"][corpus][1:]):
+            c["cqp"] = subcqp[i]
+
+        if not subcqp:
+            result["corpora"][corpus] = result["corpora"][corpus][0]
+
+    # Add zero values for the combined results if no corpora are within the selected date span
+    if not corpora:
+        result["combined"] = [{"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
+                              for i in range(len(subcqp) + 1)]
+        for i, c in enumerate(result["combined"][1:]):
+            c["cqp"] = subcqp[i]
+
+        if not subcqp:
+            result["combined"] = result["combined"][0]
+
+        yield result
+        return
+
     corpora_sizes = {}
 
     ns = Namespace()
@@ -1886,7 +1912,6 @@ def count_time(args):
                           for date in corpus_timedata["corpora"].get(corpus, {})])
 
         for i, s in enumerate(search_timedata):
-
             prevdate = None
             for basedate in sorted(basedates):
                 if not basedates[basedate] == prevdate:
@@ -1916,7 +1941,6 @@ def count_time(args):
                       for date in corpus_timedata.get("combined", {})])
 
     for i, s in enumerate(search_timedata_combined):
-
         prevdate = None
         for basedate in sorted(basedates):
             if not basedates[basedate] == prevdate:
@@ -1940,13 +1964,6 @@ def count_time(args):
             total_stats[i]["cqp"] = subcqp[i - 1]
 
     result["combined"] = total_stats if len(total_stats) > 1 else total_stats[0]
-
-    # Add zero values for the corpora we removed because of the selected date span
-    for corpus in set(corpora_copy).difference(set(corpora)):
-        result["corpora"][corpus] = {"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
-
-    if "debug" in args:
-        result["DEBUG"] = {"cqp": cqp}
 
     yield result
 
