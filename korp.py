@@ -3087,14 +3087,15 @@ def setup_cache():
         action_needed = True
 
     # Set up Memcached if needed
-    with mc_pool.reserve() as mc:
-        if "multi:version" not in mc:
-            corpora = get_corpus_timestamps()
-            mc.set("multi:version", 1)
-            for corpus in corpora:
-                mc.set("%s:version" % corpus, 1)
-                mc.set("%s:last_update" % corpus, corpora[corpus])
-            action_needed = True
+    if config.MEMCACHED_SERVERS:
+        with mc_pool.reserve() as mc:
+            if "multi:version" not in mc:
+                corpora = get_corpus_timestamps()
+                mc.set("multi:version", 1)
+                for corpus in corpora:
+                    mc.set("%s:version" % corpus, 1)
+                    mc.set("%s:last_update" % corpus, corpora[corpus])
+                action_needed = True
 
     return action_needed
 
