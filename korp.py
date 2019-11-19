@@ -2509,41 +2509,6 @@ def timespan_calculator(timedata, granularity="y", combined=True, per_corpus=Tru
 
     gs = {"y": 4, "m": 6, "d": 8, "h": 10, "n": 12, "s": 14}
 
-    def strftime(dt, fmt):
-        """Python datetime.strftime < 1900 workaround, taken from https://gist.github.com/2000837"""
-
-        TEMPYEAR = 9996  # We need to use a leap year to support feb 29th
-
-        if dt.year < 1900:
-            # Create a copy of this datetime, just in case, then set the year to
-            # something acceptable, then replace that year in the resulting string
-            tmp_dt = datetime.datetime(TEMPYEAR, dt.month, dt.day,
-                                       dt.hour, dt.minute,
-                                       dt.second, dt.microsecond,
-                                       dt.tzinfo)
-
-            tmp_fmt = fmt
-            tmp_fmt = re.sub('(?<!%)((?:%%)*)(%y)', '\\1\x11\x11', tmp_fmt, re.U)
-            tmp_fmt = re.sub('(?<!%)((?:%%)*)(%Y)', '\\1\x12\x12\x12\x12', tmp_fmt, re.U)
-            tmp_fmt = tmp_fmt.replace(str(TEMPYEAR), '\x13\x13\x13\x13')
-            tmp_fmt = tmp_fmt.replace(str(TEMPYEAR)[-2:], '\x14\x14')
-
-            result = tmp_dt.strftime(tmp_fmt)
-
-            if '%c' in fmt:
-                # Local datetime format - uses full year but hard for us to guess where.
-                result = result.replace(str(TEMPYEAR), str(dt.year))
-
-            result = result.replace('\x11\x11', str(dt.year)[-2:])
-            result = result.replace('\x12\x12\x12\x12', str(dt.year))
-            result = result.replace('\x13\x13\x13\x13', str(TEMPYEAR))
-            result = result.replace('\x14\x14', str(TEMPYEAR)[-2:])
-
-            return result
-
-        else:
-            return dt.strftime(fmt)
-
     def plusminusone(date, value, df, negative=False):
         date = "0" + date if len(date) % 2 else date  # Handle years with three digits
         d = strptime(date)
@@ -2551,7 +2516,7 @@ def timespan_calculator(timedata, granularity="y", combined=True, per_corpus=Tru
             d = d - value
         else:
             d = d + value
-        return int(strftime(d, df))
+        return int(d.strftime(df))
 
     def shorten(date, g):
         alt = 1 if len(date) % 2 else 0  # Handle years with three digits

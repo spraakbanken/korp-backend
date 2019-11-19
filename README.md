@@ -12,7 +12,7 @@ The Korp backend is a Python 3 WSGI application, acting as a wrapper for Corpus 
 
 To use the basic features of the Korp backend you need the following:
 
-* [Python 3](http://python.org/)
+* [Python 3.3+](http://python.org/)
 * [Corpus Workbench](http://cwb.sourceforge.net/beta.php) (CWB) 3.4.12 or newer
 
 To use the additional features such as the Word Picture you also need:
