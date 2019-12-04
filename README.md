@@ -261,6 +261,14 @@ For every corpus, you need five database tables. The table structures are as fol
         id
 
 
+In the main `relations_CORPUSNAME` table, each relation should be represented three times. Once with both dependent
+and head as base forms, once with dependent as base form and head as word form, and once with dependent as
+word form and head as base form. This is to allow searching for both base forms and word forms, giving different
+results for different searched word forms, while the results are always displayed as base forms.
+If the base form annotation is missing for a dependent, head or both, the word form can be used as both word form and
+base form by setting both bfhead/bfdep and wfhead/wfdep to True. In such a case you won't need all three rows for
+that relation.
+
 The `sentences` table contains sentence IDs for sentences containing the relations, with start and end
 values to point out exactly where in the sentences the relations occur (1 being the first word of the sentence).
 
