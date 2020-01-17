@@ -3014,9 +3014,10 @@ def cache_handler(args):
                             os.remove(cachefile)
                             result["files_removed"] += 1
 
-            # If any corpus has been updated or added, increase version to invalidate all combined caches
-            if result["corpora_invalidated"]:
+            # If any corpus has been updated, added or removed, increase version to invalidate all combined caches
+            if result["corpora_invalidated"] or not mc.get("multi:corpora", set()) == set(corpora.keys()):
                 mc.set("multi:version", mc.get("multi:version", 0) + 1)
+                mc.set("multi:corpora", set(corpora.keys()))
                 result["multi_invalidated"] = True
 
         # Remove old query data
@@ -3057,6 +3058,7 @@ def setup_cache():
             if "multi:version" not in mc:
                 corpora = get_corpus_timestamps()
                 mc.set("multi:version", 1)
+                mc.set("multi:corpora", set(corpora.keys()))
                 for corpus in corpora:
                     mc.set("%s:version" % corpus, 1)
                     mc.set("%s:last_update" % corpus, corpora[corpus])
