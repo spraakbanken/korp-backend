@@ -2776,8 +2776,8 @@ def relations(args):
                 pass
 
     for row in itertools.chain(relations_data, (None,), cursor_result):
-        if row is None and args["cache"]:
-            do_caching = True
+        if row is None:
+            do_caching = args["cache"]
             continue
 
         if do_caching:
