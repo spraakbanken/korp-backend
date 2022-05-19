@@ -1,7 +1,6 @@
-# -*- coding: utf-8 -*-
 """
-korp.py is a WSGI application for querying corpora available on the server.
-Currently it acts as a wrapper for the CQP Query Language of Corpus Workbench.
+A WSGI application for querying corpora available on the server.
+It mainly acts as a wrapper for the CQP Query Language of Corpus Workbench.
 
 Configuration is done by editing config.py.
 
@@ -826,7 +825,7 @@ def query_optimize(cqp, cqpparams, find_match=True, expand=True, free_search=Fal
     if find_match and not free_search:
         # MU searches only highlight the first keyword of each hit. To highlight all keywords we need to
         # do a new non-optimized search within the results, and to be able to do that we first need to expand the rows.
-        # Most of the times we only need to expand to the right, except for when leading wildcards are used.
+        # Most of the time we only need to expand to the right, except for when leading wildcards are used.
         if leading_wildcards:
             cmd[0] += " expand to %s;" % within
         else:
@@ -1271,7 +1270,7 @@ def struct_values(args):
     if not all_cache:
         ns.progress_count = 0
         if incremental:
-            yield ({"progress_corpora": list(corpora)})
+            yield {"progress_corpora": list(corpora)}
 
         with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
             future_query = dict((executor.submit(count_query_worker_simple, corpus, cqp=None,
@@ -1493,7 +1492,7 @@ def count(args):
             debug["cache_coverage"] = "%d/%d" % (read_from_cache, len(corpora))
 
     total_stats = [{"rows": defaultdict(lambda: {"absolute": 0, "relative": 0.0}),
-                    "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
+                    "sums": {"absolute": 0, "relative": 0.0}} for _ in range(len(subcqp) + 1)]
 
     ns = Namespace()  # To make variables writable from nested functions
     ns.total_size = 0
@@ -1584,7 +1583,7 @@ def count(args):
                             else:
                                 ngrams = (ngram,)
 
-                        # Remove multi word pointers
+                        # Remove multi-word pointers
                         if group_by[i][0] in strip_pointer:
                             for j in range(len(ngrams)):
                                 for k in range(len(ngrams[j])):
@@ -1700,7 +1699,7 @@ def remap_keys(mapping):
 def strptime(date):
     """Take a date in string format and return a datetime object.
     Input must be on the format "YYYYMMDDhhmmss".
-    We need this since the built in strptime isn't thread safe (and this is much faster)."""
+    We need this since the built-in strptime isn't thread safe (and this is much faster)."""
     year = int(date[:4])
     month = int(date[4:6]) if len(date) > 4 else 1
     day = int(date[6:8]) if len(date) > 6 else 1
@@ -1817,7 +1816,7 @@ def count_time(args):
     # Add zero values for the corpora we removed because of the selected date span
     for corpus in set(corpora_copy).difference(set(corpora)):
         result["corpora"][corpus] = [{"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
-                                     for i in range(len(subcqp) + 1)]
+                                     for _ in range(len(subcqp) + 1)]
         for i, c in enumerate(result["corpora"][corpus][1:]):
             c["cqp"] = subcqp[i]
 
@@ -1827,7 +1826,7 @@ def count_time(args):
     # Add zero values for the combined results if no corpora are within the selected date span
     if not corpora:
         result["combined"] = [{"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
-                              for i in range(len(subcqp) + 1)]
+                              for _ in range(len(subcqp) + 1)]
         for i, c in enumerate(result["combined"][1:]):
             c["cqp"] = subcqp[i]
 
@@ -1840,7 +1839,7 @@ def count_time(args):
     corpora_sizes = {}
 
     ns = Namespace()
-    total_rows = [[] for i in range(len(subcqp) + 1)]
+    total_rows = [[] for _ in range(len(subcqp) + 1)]
     ns.total_size = 0
 
     ns.progress_count = 0
