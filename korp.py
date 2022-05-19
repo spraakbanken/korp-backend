@@ -2127,43 +2127,6 @@ def loglike(args):
         loglike = 2 * (l1 + l2)
         return round(loglike, 2)
 
-    def critical(val):
-        # 95th percentile; 5% level; p < 0.05; critical value = 3.84
-        # 99th percentile; 1% level; p < 0.01; critical value = 6.63
-        # 99.9th percentile; 0.1% level; p < 0.001; critical value = 10.83
-        # 99.99th percentile; 0.01% level; p < 0.0001; critical value = 15.13
-        return val > 15.13
-
-    def select(w, ls):
-        """ Split annotations on | and returns as list. If annotation is missing, returns the word instead. """
-        #    for c in w:
-        #        if not (c.isalpha() or (len(w) > 1 and c in '-:')):
-        #            return []
-        xs = [l for l in ls.split('|') if len(l) > 0]
-        return xs or [w]
-
-    def wf_frequencies(texts):
-        freqs = []
-        for (name, text) in texts:
-            d = defaultdict(int)  # Lemgram frequency
-            tc = 0  # Total number of tokens
-            for w in [r for s in text for (w, a) in s for r in select(w, a['lex'])]:
-                tc += 1
-                d[w] += 1
-            freqs.append((name, d, tc))
-        return freqs
-
-    def reference_material(filename):
-        d = defaultdict(int)
-        tot = 0
-        with open(filename, encoding='utf8') as f:
-            for l in f:
-                (wf, msd, lemgram, comp, af, rf) = l[:-1].split('\t')
-                for ll in select(wf, lemgram):
-                    tot += int(af)  # Total number of tokens
-                    d[ll] += int(af)  # Lemgram frequency
-        return d, tot
-
     def compute_list(d1, tot1, ref, reftot):
         """ Compute log-likelyhood for lists. """
         result = []
