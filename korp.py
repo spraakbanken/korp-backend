@@ -3011,8 +3011,11 @@ def cache_handler(args):
                     # Remove outdated query data
                     for cachefile in glob.glob(os.path.join(config.CACHE_DIR, "%s:*" % corpus)):
                         if os.path.getmtime(cachefile) < corpora[corpus]:
-                            os.remove(cachefile)
-                            result["files_removed"] += 1
+                            try:
+                                os.remove(cachefile)
+                                result["files_removed"] += 1
+                            except FileNotFoundError:
+                                pass
 
             # If any corpus has been updated, added or removed, increase version to invalidate all combined caches
             if result["corpora_invalidated"] or not mc.get("multi:corpora", set()) == set(corpora.keys()):
