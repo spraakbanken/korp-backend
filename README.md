@@ -296,7 +296,8 @@ index consists of a single MySQL table, with the following layout:
 
 ### Time data
 
-For the Trend Diagram, you need to add token-per-time-span data to your database.
+For the Trend Diagram, you need to add token-per-time-span data to your database. For tokens without
+date or time info, use the date 0000-00-00 00:00:00.
 Use the following table layout:
 
 
