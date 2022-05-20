@@ -1,7 +1,8 @@
-Flask==1.0
-Flask-Cors==3.0.4
+Flask==2.0.2
+Flask-Cors==3.0.10
 Flask-MySQLdb==0.2.0
-mysqlclient==1.3.13
-gevent==1.2.2
+mysqlclient==2.1.0
+gevent==21.12.0
 pylibmc==1.6.0
-python-dateutil==2.8.0
+python-dateutil==2.8.2
+PyYAML==6.0

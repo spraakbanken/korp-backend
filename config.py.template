@@ -65,3 +65,9 @@ MEMCACHED_POOL_SIZE = 25
 
 # Max number of rows from count command to cache
 CACHE_MAX_STATS = 5000
+
+# Corpus configuration directory
+CORPUS_CONFIG_DIR = ""
+
+# Set to True to enable "lab mode", potentially enabling experimental features and access to lab-only corpora
+LAB_MODE = False

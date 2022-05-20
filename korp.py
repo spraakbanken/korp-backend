@@ -28,6 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict, OrderedDict
 from dateutil.relativedelta import relativedelta
 from copy import deepcopy
+from pathlib import Path
 import datetime
 import uuid
 import binascii
@@ -48,6 +49,7 @@ import functools
 import math
 import random
 import config
+import yaml
 try:
     import pylibmc
 except ImportError:
@@ -63,7 +65,7 @@ from flask_cors import CORS
 # Nothing needs to be changed in this file. Use config.py for configuration.
 
 # The version of this script
-KORP_VERSION = "8.0.1"
+KORP_VERSION = "8.1.0"
 
 # Special symbols used by this script; they must NOT be in the corpus
 END_OF_LINE = "-::-EOL-::-"
@@ -2955,12 +2957,16 @@ def cache_handler(args):
         result["initial_setup"] = True
     else:
         result = {"multi_invalidated": False,
+                  "multi_config_invalidated": False,
                   "corpora_invalidated": 0,
+                  "configs_invalidated": 0,
                   "files_removed": 0}
         now = time.time()
 
         # Get modification time of corpus registry files
         corpora = get_corpus_timestamps()
+        # Get modification time of corpus config files
+        corpora_configs = get_corpus_config_timestamps()
 
         with mc_pool.reserve() as mc:
             # Invalidate cache for updated corpora
@@ -2979,11 +2985,22 @@ def cache_handler(args):
                             except FileNotFoundError:
                                 pass
 
+                if mc.get(f"{corpus}:last_update_config", 0) < corpora_configs.get(corpus, 0):
+                    mc.set(f"{corpus}:version_config", mc.get(f"{corpus}:version_config", 0) + 1)
+                    mc.set(f"{corpus}:last_update_config", corpora_configs[corpus])
+                    result["configs_invalidated"] += 1
+
             # If any corpus has been updated, added or removed, increase version to invalidate all combined caches
             if result["corpora_invalidated"] or not mc.get("multi:corpora", set()) == set(corpora.keys()):
                 mc.set("multi:version", mc.get("multi:version", 0) + 1)
                 mc.set("multi:corpora", set(corpora.keys()))
                 result["multi_invalidated"] = True
+
+            # If any corpus config has been updated, added or removed, increase version to invalidate all combined caches
+            if result["configs_invalidated"] or not mc.get("multi:corpora_config", set()) == set(corpora_configs.keys()):
+                mc.set("multi:version_config", mc.get("multi:version_config", 0) + 1)
+                mc.set("multi:corpora_config", set(corpora_configs.keys()))
+                result["multi_config_invalidated"] = True
 
         # Remove old query data
         for cachefile in glob.glob(os.path.join(config.CACHE_DIR, "*:query_data_*")):
@@ -2993,15 +3010,22 @@ def cache_handler(args):
     yield result
 
 
-def cache_prefix(corpus="multi"):
+def cache_prefix(corpus="multi", config=False):
     with mc_pool.reserve() as mc:
-        return "%s:%d" % (corpus, mc.get("%s:version" % corpus, 0))
+        return "%s:%d" % (corpus, mc.get(f"{corpus}:version{'_config' if config else ''}", 0))
 
 
 def get_corpus_timestamps():
     """Get modification time of corpus registry files."""
     corpora = dict((os.path.basename(f).upper(), os.path.getmtime(f)) for f in
                    glob.glob(os.path.join(config.CWB_REGISTRY, "*")))
+    return corpora
+
+
+def get_corpus_config_timestamps():
+    """Get modification time of corpus config files."""
+    corpora = dict((os.path.basename(f)[:-5].upper(), os.path.getmtime(f)) for f in
+                   glob.glob(os.path.join(config.CORPUS_CONFIG_DIR, "corpora", "*.yaml")))
     return corpora
 
 
@@ -3022,11 +3046,16 @@ def setup_cache():
         with mc_pool.reserve() as mc:
             if "multi:version" not in mc:
                 corpora = get_corpus_timestamps()
+                corpora_configs = get_corpus_config_timestamps()
                 mc.set("multi:version", 1)
+                mc.set("multi:version_config", 1)
                 mc.set("multi:corpora", set(corpora.keys()))
+                mc.set("multi:corpora_config", set(corpora_configs.keys()))
                 for corpus in corpora:
                     mc.set("%s:version" % corpus, 1)
+                    mc.set("%s:version_config" % corpus, 1)
                     mc.set("%s:last_update" % corpus, corpora[corpus])
+                    mc.set("%s:last_update_config" % corpus, corpora_configs.get(corpus, 0))
                 action_needed = True
 
     return action_needed
@@ -3285,6 +3314,234 @@ def authenticate(_=None):
             return
 
     yield {}
+
+
+@app.route("/corpus_config", methods=["GET", "POST"])
+@main_handler
+def corpus_config(args):
+    """Get corpus configuration for a given mode. To be used by the Korp frontend.
+
+    If no mode is specified, 'default' is used.
+    """
+    mode_name = args.get("mode", "default")
+    cache_checksum = get_hash((mode_name, config.LAB_MODE))
+
+    # Try to fetch config from cache
+    if args["cache"]:
+        with mc_pool.reserve() as mc:
+            result = mc.get("%s:corpus_config_%s" % (cache_prefix(config=True), cache_checksum))
+        if result:
+            if "debug" in args:
+                result.setdefault("DEBUG", {})
+                result["DEBUG"]["cache_read"] = True
+            yield result
+            return
+
+    result = get_mode(mode_name, args["cache"])
+    result["modes"] = get_modes(mode_name)
+
+    # Save to cache
+    if args["cache"]:
+        with mc_pool.reserve() as mc:
+            try:
+                added = mc.add("%s:corpus_config_%s" % (cache_prefix(config=True), cache_checksum), result)
+            except pylibmc.TooBig:
+                pass
+            else:
+                if added and "debug" in args:
+                    result.setdefault("DEBUG", {})
+                    result["DEBUG"]["cache_saved"] = True
+
+    yield result
+
+
+def get_modes(mode_name=None):
+    """Get all modes data.
+
+    Args:
+        mode_name: Name of current mode. A hidden mode will only be included if it is the current mode.
+    """
+    modes = []
+    for mode_file in (Path(config.CORPUS_CONFIG_DIR) / "modes").glob("*.yaml"):
+        with open(mode_file, "r", encoding="utf-8") as f:
+            mode = yaml.safe_load(f)
+            # Only include hidden modes when accessed directly
+            if mode.get("hidden") and not mode_name == mode_file.stem:
+                continue
+            modes.append({
+                "mode": mode_file.stem,
+                "label": mode.get("label", mode_file.stem),
+                "order": mode.get("order")
+            })
+    return [
+        {k: m[k] for k in m if k not in "order"} for m in sorted(modes, key=lambda x: (x["order"] is None, x["order"]))
+    ]
+
+
+def get_mode(mode_name: str, cache: bool):
+    """Build configuration structure for a given mode.
+
+    Args:
+        mode_name: Name of mode to get.
+        cache: Whether to use cache.
+    """
+    try:
+        with open(os.path.join(config.CORPUS_CONFIG_DIR, "modes", mode_name + ".yaml"), "r", encoding="utf-8") as fp:
+            mode = yaml.safe_load(fp)
+    except FileNotFoundError:
+        return
+
+    attr_types = {
+        "positional": "pos_attributes",
+        "structural": "struct_attributes",
+        "custom": "custom_attributes"
+    }
+
+    mode["corpora"] = {}  # All corpora in mode
+    mode["attributes"] = {t: {} for t in attr_types.values()}  # Attributes referred to by corpora
+    attribute_presets = {t: {} for t in attr_types.values()}  # Attribute presets
+    hash_to_attr = {}
+    warnings = set()
+
+    def get_new_attr_name(name: str) -> str:
+        """Create a unique name for attribute, to be used as identifier."""
+        while name in hash_to_attr.values():
+            name += "_"
+        return name
+
+    # Go through all corpora to see if they are included in mode
+    for corpus_file in glob.glob(os.path.join(config.CORPUS_CONFIG_DIR, "corpora", "*.yaml")):
+        # Load corpus config from cache if possible
+        cached_corpus = None
+        if cache:
+            with mc_pool.reserve() as mc:
+                cached_corpus = mc.get("%s:corpus_config_%s" % (cache_prefix(config=True),
+                                                                os.path.basename(corpus_file)))
+            if cached_corpus:
+                corpus_def = cached_corpus
+
+        if not cached_corpus:
+            with open(corpus_file, "r", encoding="utf-8") as fp:
+                corpus_def = yaml.safe_load(fp)
+            # Save to cache
+            if cache:
+                with mc_pool.reserve() as mc:
+                    try:
+                        mc.add("%s:corpus_config_%s" % (cache_prefix(config=True),
+                                                        os.path.basename(corpus_file)), corpus_def)
+                    except pylibmc.TooBig:
+                        pass
+
+        corpus_id = corpus_def["id"]
+
+        # Check if corpus is included in selected mode
+        if mode_name in [m["name"] for m in corpus_def["mode"]]:
+            for attr_type_name, attr_type in attr_types.items():
+                if attr_type in corpus_def:
+                    to_delete = []
+                    for i, attr in enumerate(corpus_def[attr_type]):
+                        for attr_name, attr_val in attr.items():
+                            if isinstance(attr_val, str):  # A reference to an attribute preset
+                                attr_hash = get_hash((attr_name, attr_val, attr_type))
+                                if attr_hash in hash_to_attr:  # Preset already loaded and ready to use
+                                    corpus_def[attr_type][i] = hash_to_attr[attr_hash]
+                                else:
+                                    if attr_val not in attribute_presets[attr_type]:  # Preset not loaded yet
+                                        try:
+                                            with open(os.path.join(config.CORPUS_CONFIG_DIR, "attributes",
+                                                                   attr_type_name, attr_val + ".yaml"),
+                                                      encoding="utf-8") as f:
+                                                attr_def = yaml.safe_load(f)
+                                                if not attr_def:
+                                                    warnings.add(f"Preset {attr_val!r} is empty.")
+                                                    to_delete.append(i)
+                                                    continue
+                                                attribute_presets[attr_type][attr_val] = attr_def
+                                        except FileNotFoundError:
+                                            to_delete.append(i)
+                                            warnings.add(f"Attribute preset {attr_val!r} in corpus {corpus_id!r} "
+                                                            "does not exist.")
+                                            continue
+                                    attr_id = get_new_attr_name(attr_val)
+                                    hash_to_attr[attr_hash] = attr_id
+                                    mode["attributes"][attr_type][attr_id] = attribute_presets[attr_type][attr_val]
+                                    mode["attributes"][attr_type][attr_id].update({"name": attr_name})
+                                    corpus_def[attr_type][i] = attr_id
+
+                            elif isinstance(attr_val, dict):  # Inline attribute definition
+                                attr_hash = get_hash((attr_name, json.dumps(attr_val, sort_keys=True), attr_type))
+                                if attr_hash in hash_to_attr:  # Identical attribute has previously been used
+                                    corpus_def[attr_type][i] = hash_to_attr[attr_hash]
+                                else:
+                                    attr_id = get_new_attr_name(attr_name)
+                                    hash_to_attr[attr_hash] = attr_id
+                                    attr_val.update({"name": attr_name})
+                                    mode["attributes"][attr_type][attr_id] = attr_val
+                                    corpus_def[attr_type][i] = attr_id
+                    for i in reversed(to_delete):
+                        del corpus_def[attr_type][i]
+            corpus_mode_settings = [mode for mode in corpus_def["mode"] if mode["name"] == mode_name].pop()
+
+            # Skip corpus if it should only appear in lab mode, and we're not in lab mode
+            if config.LAB_MODE or not corpus_mode_settings.get("lab_only", False):
+                # Remove some keys from corpus config, as they are only used to create the full configuration
+                corpus = {k: v for k, v in corpus_def.items() if k not in ("mode",)}
+
+                folders = corpus_mode_settings.get("folder", [])
+                if not isinstance(folders, list):
+                    folders = [folders]
+                for folder in folders:
+                    try:
+                        _add_corpus_to_folder(mode.get("folders"), folder, corpus_id)
+                    except KeyError:
+                        warnings.add(f"The folder '{folder}' referred to by the corpus '{corpus_id}' doesn't exist.")
+
+                # Add corpus configuration to mode
+                mode["corpora"][corpus_id] = corpus
+
+    _remove_empty_folders(mode)
+    if warnings:
+        mode["warnings"] = list(warnings)
+
+    return mode
+
+
+def _add_corpus_to_folder(folders: dict, target_folder: str, corpus: str) -> None:
+    """Add corpus to target_folder in folders.
+
+    target_folder is a path with . as separator.
+    """
+    if not (target_folder and folders):
+        return
+    target = {"subfolders": folders}
+    parts = target_folder.split(".")
+    for part in parts:
+        target.setdefault("subfolders", {})
+        target = target["subfolders"][part]
+    target.setdefault("corpora", [])
+    target["corpora"].append(corpus)
+
+
+def _remove_empty_folders(mode) -> None:
+    """Remove empty folders from mode."""
+
+    def should_include(folder):
+        """Recurseively check for content in this folder or its subfolders."""
+        include = "corpora" in folder
+
+        for subfolder_name, subfolder in list(folder.get("subfolders", {}).items()):
+            include_subfolder = should_include(subfolder)
+            if not include_subfolder:
+                del folder["subfolders"][subfolder_name]
+            if not include:
+                # If current folder has no content but one of its subfolder has, it should be included
+                include = include_subfolder
+        return include
+
+    mode_folders = mode.get("folders", {})
+    for folder_id, f in list(mode_folders.items()):
+        if not should_include(f):
+            del mode_folders[folder_id]
 
 
 def check_authentication(corpora):
