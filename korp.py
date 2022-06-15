@@ -3464,7 +3464,8 @@ def get_mode(mode_name: str, cache: bool):
                                             continue
                                     attr_id = get_new_attr_name(attr_val)
                                     hash_to_attr[attr_hash] = attr_id
-                                    mode["attributes"][attr_type][attr_id] = attribute_presets[attr_type][attr_val]
+                                    mode["attributes"][attr_type][attr_id] = attribute_presets[attr_type][
+                                        attr_val].copy()
                                     mode["attributes"][attr_type][attr_id].update({"name": attr_name})
                                     corpus_def[attr_type][i] = attr_id
 
