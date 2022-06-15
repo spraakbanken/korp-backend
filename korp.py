@@ -3441,35 +3441,47 @@ def get_mode(mode_name: str, cache: bool):
                     to_delete = []
                     for i, attr in enumerate(corpus_def[attr_type]):
                         for attr_name, attr_val in attr.items():
-                            if isinstance(attr_val, str):  # A reference to an attribute preset
-                                attr_hash = get_hash((attr_name, attr_val, attr_type))
+                            # A reference to an attribute preset
+                            if isinstance(attr_val, str) or isinstance(attr_val, dict) and "preset" in attr_val:
+                                if isinstance(attr_val, str):
+                                    preset_name = attr_val
+                                    attr_hash = get_hash((attr_name, attr_val, attr_type))
+                                else:
+                                    preset_name = attr_val["preset"]
+                                    attr_hash = get_hash((attr_name, json.dumps(attr_val, sort_keys=True), attr_type))
+
                                 if attr_hash in hash_to_attr:  # Preset already loaded and ready to use
                                     corpus_def[attr_type][i] = hash_to_attr[attr_hash]
                                 else:
-                                    if attr_val not in attribute_presets[attr_type]:  # Preset not loaded yet
+                                    if preset_name not in attribute_presets[attr_type]:  # Preset not loaded yet
                                         try:
                                             with open(os.path.join(config.CORPUS_CONFIG_DIR, "attributes",
-                                                                   attr_type_name, attr_val + ".yaml"),
+                                                                   attr_type_name, preset_name + ".yaml"),
                                                       encoding="utf-8") as f:
                                                 attr_def = yaml.safe_load(f)
                                                 if not attr_def:
-                                                    warnings.add(f"Preset {attr_val!r} is empty.")
+                                                    warnings.add(f"Preset {preset_name!r} is empty.")
                                                     to_delete.append(i)
                                                     continue
-                                                attribute_presets[attr_type][attr_val] = attr_def
+                                                attribute_presets[attr_type][preset_name] = attr_def
                                         except FileNotFoundError:
                                             to_delete.append(i)
-                                            warnings.add(f"Attribute preset {attr_val!r} in corpus {corpus_id!r} "
-                                                            "does not exist.")
+                                            warnings.add(f"Attribute preset {preset_name!r} in corpus {corpus_id!r} "
+                                                         "does not exist.")
                                             continue
-                                    attr_id = get_new_attr_name(attr_val)
+                                    attr_id = get_new_attr_name(preset_name)
                                     hash_to_attr[attr_hash] = attr_id
                                     mode["attributes"][attr_type][attr_id] = attribute_presets[attr_type][
-                                        attr_val].copy()
+                                        preset_name].copy()
                                     mode["attributes"][attr_type][attr_id].update({"name": attr_name})
+                                    if isinstance(attr_val, dict):
+                                        # Override preset values
+                                        del attr_val["preset"]
+                                        mode["attributes"][attr_type][attr_id].update(attr_val)
                                     corpus_def[attr_type][i] = attr_id
 
-                            elif isinstance(attr_val, dict):  # Inline attribute definition
+                            # Inline attribute definition
+                            elif isinstance(attr_val, dict):
                                 attr_hash = get_hash((attr_name, json.dumps(attr_val, sort_keys=True), attr_type))
                                 if attr_hash in hash_to_attr:  # Identical attribute has previously been used
                                     corpus_def[attr_type][i] = hash_to_attr[attr_hash]
