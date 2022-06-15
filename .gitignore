@@ -1,6 +1,16 @@
-__pycache__/
+# Editors
 .idea/
+.vscode/
+
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+
+# Environments
+.env/
+.venv/
+env/
 venv/
 
+# Config
 config.py
-
