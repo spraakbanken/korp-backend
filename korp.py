@@ -2966,7 +2966,7 @@ def cache_handler(args):
         # Get modification time of corpus registry files
         corpora = get_corpus_timestamps()
         # Get modification time of corpus config files
-        corpora_configs = get_corpus_config_timestamps()
+        corpora_configs, config_modes, config_presets = get_corpus_config_timestamps()
 
         with mc_pool.reserve() as mc:
             # Invalidate cache for updated corpora
@@ -2996,10 +2996,18 @@ def cache_handler(args):
                 mc.set("multi:corpora", set(corpora.keys()))
                 result["multi_invalidated"] = True
 
-            # If any corpus config has been updated, added or removed, increase version to invalidate all combined caches
-            if result["configs_invalidated"] or not mc.get("multi:corpora_config", set()) == set(corpora_configs.keys()):
+            # Have any config modes or presets been updated?
+            configs_updated = config_modes > mc.get("multi:config_modes", 0) or config_presets > mc.get(
+                "multi:config_presets", 0)
+
+            # If modes or presets have been updated, or any corpus config has been updated, added or removed, increase
+            # version to invalidate all combined caches
+            if configs_updated or result["configs_invalidated"] or not mc.get("multi:config_corpora", set()) == set(
+                    corpora_configs.keys()):
                 mc.set("multi:version_config", mc.get("multi:version_config", 0) + 1)
-                mc.set("multi:corpora_config", set(corpora_configs.keys()))
+                mc.set("multi:config_corpora", set(corpora_configs.keys()))
+                mc.set("multi:config_modes", config_modes)
+                mc.set("multi:config_presets", config_presets)
                 result["multi_config_invalidated"] = True
 
         # Remove old query data
@@ -3026,7 +3034,10 @@ def get_corpus_config_timestamps():
     """Get modification time of corpus config files."""
     corpora = dict((os.path.basename(f)[:-5].upper(), os.path.getmtime(f)) for f in
                    glob.glob(os.path.join(config.CORPUS_CONFIG_DIR, "corpora", "*.yaml")))
-    return corpora
+    modes = max(os.path.getmtime(f) for f in glob.glob(os.path.join(config.CORPUS_CONFIG_DIR, "modes", "*.yaml")))
+    presets = max(
+        os.path.getmtime(f) for f in glob.glob(os.path.join(config.CORPUS_CONFIG_DIR, "attributes", "*/*.yaml")))
+    return corpora, modes, presets
 
 
 def setup_cache():
@@ -3046,11 +3057,13 @@ def setup_cache():
         with mc_pool.reserve() as mc:
             if "multi:version" not in mc:
                 corpora = get_corpus_timestamps()
-                corpora_configs = get_corpus_config_timestamps()
+                corpora_configs, config_modes, config_presets = get_corpus_config_timestamps()
                 mc.set("multi:version", 1)
                 mc.set("multi:version_config", 1)
                 mc.set("multi:corpora", set(corpora.keys()))
-                mc.set("multi:corpora_config", set(corpora_configs.keys()))
+                mc.set("multi:config_corpora", set(corpora_configs.keys()))
+                mc.set("multi:config_modes", config_modes)
+                mc.set("multi:config_presets", config_presets)
                 for corpus in corpora:
                     mc.set("%s:version" % corpus, 1)
                     mc.set("%s:version_config" % corpus, 1)
