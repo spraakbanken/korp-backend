@@ -549,6 +549,18 @@ paths:
             type: integer
             enum: [1, 2, 3]
             default: 1
+        - name: per_corpus
+          description: Include per-corpus results.
+          schema:
+            type: boolean
+            default: true
+          in: query
+        - name: combined
+          description: Include combined results.
+          schema:
+            type: boolean
+            default: true
+          in: query
         - $ref: '#/components/parameters/CQPn'
         - $ref: '#/components/parameters/ExpandPrequeries'
         - $ref: '#/components/parameters/IncrementalProgress'

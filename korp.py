@@ -1724,8 +1724,12 @@ def count_time(args):
     assert_key("from", args, r"^\d{14}$")
     assert_key("to", args, r"^\d{14}$")
     assert_key("strategy", args, r"^[123]$")
+    assert_key("combined", args, r"(true|false)")
+    assert_key("per_corpus", args, r"(true|false)")
 
     incremental = parse_bool(args, "incremental", False)
+    combined = parse_bool(args, "combined", True)
+    per_corpus = parse_bool(args, "per_corpus", True)
 
     corpora = parse_corpora(args)
     check_authentication(corpora)
@@ -1752,7 +1756,9 @@ def count_time(args):
         if not fromdate or not todate:
             raise ValueError("When using 'from' or 'to', both need to be specified.")
 
-    result = {"corpora": {}}
+    result = {}
+    if per_corpus:
+        result["corpora"] = {}
     if "debug" in args:
         result["DEBUG"] = {"cqp": cqp}
 
@@ -1815,18 +1821,19 @@ def count_time(args):
     else:
         group_by = [(v, True) for v in ("text_datefrom", "text_dateto")]
 
-    # Add zero values for the corpora we removed because of the selected date span
-    for corpus in set(corpora_copy).difference(set(corpora)):
-        result["corpora"][corpus] = [{"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
-                                     for _ in range(len(subcqp) + 1)]
-        for i, c in enumerate(result["corpora"][corpus][1:]):
-            c["cqp"] = subcqp[i]
+    if per_corpus:
+        # Add zero values for the corpora we removed because of the selected date span
+        for corpus in set(corpora_copy).difference(set(corpora)):
+            result["corpora"][corpus] = [{"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
+                                         for _ in range(len(subcqp) + 1)]
+            for i, c in enumerate(result["corpora"][corpus][1:]):
+                c["cqp"] = subcqp[i]
 
-        if not subcqp:
-            result["corpora"][corpus] = result["corpora"][corpus][0]
+            if not subcqp:
+                result["corpora"][corpus] = result["corpora"][corpus][0]
 
     # Add zero values for the combined results if no corpora are within the selected date span
-    if not corpora:
+    if combined and not corpora:
         result["combined"] = [{"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
                               for _ in range(len(subcqp) + 1)]
         for i, c in enumerate(result["combined"][1:]):
@@ -1901,70 +1908,74 @@ def count_time(args):
     search_timedata_combined = []
     for total_row in total_rows:
         temp = timespan_calculator(total_row, granularity=granularity, strategy=strategy)
-        search_timedata.append(temp["corpora"])
-        search_timedata_combined.append(temp["combined"])
+        if per_corpus:
+            search_timedata.append(temp["corpora"])
+        if combined:
+            search_timedata_combined.append(temp["combined"])
 
-    for corpus in corpora:
-        corpus_stats = [{"absolute": defaultdict(int),
-                         "relative": defaultdict(float),
-                         "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
+    if per_corpus:
+        for corpus in corpora:
+            corpus_stats = [{"absolute": defaultdict(int),
+                             "relative": defaultdict(float),
+                             "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
 
-        basedates = dict([(date, None if corpus_timedata["corpora"][corpus][date] == 0 else 0)
-                          for date in corpus_timedata["corpora"].get(corpus, {})])
+            basedates = dict([(date, None if corpus_timedata["corpora"][corpus][date] == 0 else 0)
+                              for date in corpus_timedata["corpora"].get(corpus, {})])
 
-        for i, s in enumerate(search_timedata):
+            for i, s in enumerate(search_timedata):
+                prevdate = None
+                for basedate in sorted(basedates):
+                    if not basedates[basedate] == prevdate:
+                        corpus_stats[i]["absolute"][basedate] = basedates[basedate]
+                        corpus_stats[i]["relative"][basedate] = basedates[basedate]
+                    prevdate = basedates[basedate]
+
+                for row in s.get(corpus, {}).items():
+                    date, count = row
+                    corpus_date_size = float(corpus_timedata["corpora"].get(corpus, {}).get(date, 0))
+                    if corpus_date_size > 0.0:
+                        corpus_stats[i]["absolute"][date] += count
+                        corpus_stats[i]["relative"][date] += (count / corpus_date_size * 1000000)
+                        corpus_stats[i]["sums"]["absolute"] += count
+                        corpus_stats[i]["sums"]["relative"] += (count / corpus_date_size * 1000000)
+
+                if subcqp and i > 0:
+                    corpus_stats[i]["cqp"] = subcqp[i - 1]
+
+            result["corpora"][corpus] = corpus_stats if len(corpus_stats) > 1 else corpus_stats[0]
+
+    if combined:
+        total_stats = [{"absolute": defaultdict(int),
+                        "relative": defaultdict(float),
+                        "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
+
+        basedates = dict([(date, None if corpus_timedata["combined"][date] == 0 else 0)
+                          for date in corpus_timedata.get("combined", {})])
+
+        for i, s in enumerate(search_timedata_combined):
             prevdate = None
             for basedate in sorted(basedates):
                 if not basedates[basedate] == prevdate:
-                    corpus_stats[i]["absolute"][basedate] = basedates[basedate]
-                    corpus_stats[i]["relative"][basedate] = basedates[basedate]
+                    total_stats[i]["absolute"][basedate] = basedates[basedate]
+                    total_stats[i]["relative"][basedate] = basedates[basedate]
                 prevdate = basedates[basedate]
 
-            for row in s.get(corpus, {}).items():
-                date, count = row
-                corpus_date_size = float(corpus_timedata["corpora"].get(corpus, {}).get(date, 0))
-                if corpus_date_size > 0.0:
-                    corpus_stats[i]["absolute"][date] += count
-                    corpus_stats[i]["relative"][date] += (count / corpus_date_size * 1000000)
-                    corpus_stats[i]["sums"]["absolute"] += count
-                    corpus_stats[i]["sums"]["relative"] += (count / corpus_date_size * 1000000)
+            if s:
+                for row in s.items():
+                    date, count = row
+                    combined_date_size = float(corpus_timedata["combined"].get(date, 0))
+                    if combined_date_size > 0.0:
+                        total_stats[i]["absolute"][date] += count
+                        total_stats[i]["relative"][date] += (
+                            count / combined_date_size * 1000000) if combined_date_size else 0
+                        total_stats[i]["sums"]["absolute"] += count
 
+            total_stats[i]["sums"]["relative"] = total_stats[i]["sums"]["absolute"] / float(
+                ns.total_size) * 1000000 if ns.total_size > 0 else 0.0
             if subcqp and i > 0:
-                corpus_stats[i]["cqp"] = subcqp[i - 1]
+                total_stats[i]["cqp"] = subcqp[i - 1]
 
-        result["corpora"][corpus] = corpus_stats if len(corpus_stats) > 1 else corpus_stats[0]
-
-    total_stats = [{"absolute": defaultdict(int),
-                    "relative": defaultdict(float),
-                    "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
-
-    basedates = dict([(date, None if corpus_timedata["combined"][date] == 0 else 0)
-                      for date in corpus_timedata.get("combined", {})])
-
-    for i, s in enumerate(search_timedata_combined):
-        prevdate = None
-        for basedate in sorted(basedates):
-            if not basedates[basedate] == prevdate:
-                total_stats[i]["absolute"][basedate] = basedates[basedate]
-                total_stats[i]["relative"][basedate] = basedates[basedate]
-            prevdate = basedates[basedate]
-
-        if s:
-            for row in s.items():
-                date, count = row
-                combined_date_size = float(corpus_timedata["combined"].get(date, 0))
-                if combined_date_size > 0.0:
-                    total_stats[i]["absolute"][date] += count
-                    total_stats[i]["relative"][date] += (
-                        count / combined_date_size * 1000000) if combined_date_size else 0
-                    total_stats[i]["sums"]["absolute"] += count
-
-        total_stats[i]["sums"]["relative"] = total_stats[i]["sums"]["absolute"] / float(
-            ns.total_size) * 1000000 if ns.total_size > 0 else 0.0
-        if subcqp and i > 0:
-            total_stats[i]["cqp"] = subcqp[i - 1]
-
-    result["combined"] = total_stats if len(total_stats) > 1 else total_stats[0]
+        result["combined"] = total_stats if len(total_stats) > 1 else total_stats[0]
 
     yield result
 
