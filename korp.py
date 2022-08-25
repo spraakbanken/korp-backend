@@ -3332,12 +3332,13 @@ def authenticate(_=None):
 @app.route("/corpus_config", methods=["GET", "POST"])
 @main_handler
 def corpus_config(args):
-    """Get corpus configuration for a given mode. To be used by the Korp frontend.
+    """Get corpus configuration for a given mode or list of corpora. To be used by the Korp frontend.
 
-    If no mode is specified, 'default' is used.
+    If no mode or corpora are specified, the mode 'default' is used.
     """
     mode_name = args.get("mode", "default")
-    cache_checksum = get_hash((mode_name, config.LAB_MODE))
+    corpora = parse_corpora(args)
+    cache_checksum = get_hash((mode_name, sorted(corpora), config.LAB_MODE))
 
     # Try to fetch config from cache
     if args["cache"]:
@@ -3350,7 +3351,7 @@ def corpus_config(args):
             yield result
             return
 
-    result = get_mode(mode_name, args["cache"])
+    result = get_mode(mode_name, corpora, args["cache"])
     result["modes"] = get_modes(mode_name)
 
     # Save to cache
@@ -3391,11 +3392,12 @@ def get_modes(mode_name=None):
     ]
 
 
-def get_mode(mode_name: str, cache: bool):
+def get_mode(mode_name: str, corpora: list, cache: bool):
     """Build configuration structure for a given mode.
 
     Args:
         mode_name: Name of mode to get.
+        corpora: Optionally specify which corpora to include.
         cache: Whether to use cache.
     """
     try:
@@ -3422,8 +3424,22 @@ def get_mode(mode_name: str, cache: bool):
             name += "_"
         return name
 
+    if corpora:
+        corpus_files = []
+        for c in corpora:
+            path = ""
+            if ":" in c:
+                path, _, c = c.partition(":")
+            file_path = Path(config.CORPUS_CONFIG_DIR) / "corpora" / path.lower() / f"{c.lower()}.yaml"
+            if file_path.is_file():
+                corpus_files.append(file_path)
+            else:
+                warnings.add(f"The corpus {c!r} does not exist, or does not have a config file.")
+    else:
+        corpus_files = glob.glob(os.path.join(config.CORPUS_CONFIG_DIR, "corpora", "*.yaml"))
+
     # Go through all corpora to see if they are included in mode
-    for corpus_file in glob.glob(os.path.join(config.CORPUS_CONFIG_DIR, "corpora", "*.yaml")):
+    for corpus_file in corpus_files:
         # Load corpus config from cache if possible
         cached_corpus = None
         if cache:
@@ -3448,7 +3464,7 @@ def get_mode(mode_name: str, cache: bool):
         corpus_id = corpus_def["id"]
 
         # Check if corpus is included in selected mode
-        if mode_name in [m["name"] for m in corpus_def["mode"]]:
+        if corpora or mode_name in [m["name"] for m in corpus_def.get("mode", [])]:
             for attr_type_name, attr_type in attr_types.items():
                 if attr_type in corpus_def:
                     to_delete = []
@@ -3506,7 +3522,11 @@ def get_mode(mode_name: str, cache: bool):
                                     corpus_def[attr_type][i] = attr_id
                     for i in reversed(to_delete):
                         del corpus_def[attr_type][i]
-            corpus_mode_settings = [mode for mode in corpus_def["mode"] if mode["name"] == mode_name].pop()
+            corpus_modes = [mode for mode in corpus_def.get("mode", []) if mode["name"] == mode_name]
+            if corpus_modes:
+                corpus_mode_settings = corpus_modes.pop()
+            else:
+                corpus_mode_settings = {}
 
             # Skip corpus if it should only appear in lab mode, and we're not in lab mode
             if config.LAB_MODE or not corpus_mode_settings.get("lab_only", False):
@@ -3524,6 +3544,9 @@ def get_mode(mode_name: str, cache: bool):
 
                 # Add corpus configuration to mode
                 mode["corpora"][corpus_id] = corpus
+
+    if corpora and "preselected_corpora" in mode:
+        del mode["preselected_corpora"]
 
     _remove_empty_folders(mode)
     if warnings:
