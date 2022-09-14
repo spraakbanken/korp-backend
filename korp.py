@@ -1,7 +1,6 @@
-# -*- coding: utf-8 -*-
 """
-korp.py is a WSGI application for querying corpora available on the server.
-Currently it acts as a wrapper for the CQP Query Language of Corpus Workbench.
+A WSGI application for querying corpora available on the server.
+It mainly acts as a wrapper for the CQP Query Language of Corpus Workbench.
 
 Configuration is done by editing config.py.
 
@@ -29,6 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict, OrderedDict
 from dateutil.relativedelta import relativedelta
 from copy import deepcopy
+from pathlib import Path
 import datetime
 import uuid
 import binascii
@@ -49,6 +49,7 @@ import functools
 import math
 import random
 import config
+import yaml
 try:
     import pylibmc
 except ImportError:
@@ -64,7 +65,7 @@ from flask_cors import CORS
 # Nothing needs to be changed in this file. Use config.py for configuration.
 
 # The version of this script
-KORP_VERSION = "8.0.0"
+KORP_VERSION = "8.1.0"
 
 # Special symbols used by this script; they must NOT be in the corpus
 END_OF_LINE = "-::-EOL-::-"
@@ -826,7 +827,7 @@ def query_optimize(cqp, cqpparams, find_match=True, expand=True, free_search=Fal
     if find_match and not free_search:
         # MU searches only highlight the first keyword of each hit. To highlight all keywords we need to
         # do a new non-optimized search within the results, and to be able to do that we first need to expand the rows.
-        # Most of the times we only need to expand to the right, except for when leading wildcards are used.
+        # Most of the time we only need to expand to the right, except for when leading wildcards are used.
         if leading_wildcards:
             cmd[0] += " expand to %s;" % within
         else:
@@ -1271,7 +1272,7 @@ def struct_values(args):
     if not all_cache:
         ns.progress_count = 0
         if incremental:
-            yield ({"progress_corpora": list(corpora)})
+            yield {"progress_corpora": list(corpora)}
 
         with ThreadPoolExecutor(max_workers=config.PARALLEL_THREADS) as executor:
             future_query = dict((executor.submit(count_query_worker_simple, corpus, cqp=None,
@@ -1493,7 +1494,7 @@ def count(args):
             debug["cache_coverage"] = "%d/%d" % (read_from_cache, len(corpora))
 
     total_stats = [{"rows": defaultdict(lambda: {"absolute": 0, "relative": 0.0}),
-                    "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
+                    "sums": {"absolute": 0, "relative": 0.0}} for _ in range(len(subcqp) + 1)]
 
     ns = Namespace()  # To make variables writable from nested functions
     ns.total_size = 0
@@ -1584,7 +1585,7 @@ def count(args):
                             else:
                                 ngrams = (ngram,)
 
-                        # Remove multi word pointers
+                        # Remove multi-word pointers
                         if group_by[i][0] in strip_pointer:
                             for j in range(len(ngrams)):
                                 for k in range(len(ngrams[j])):
@@ -1700,7 +1701,7 @@ def remap_keys(mapping):
 def strptime(date):
     """Take a date in string format and return a datetime object.
     Input must be on the format "YYYYMMDDhhmmss".
-    We need this since the built in strptime isn't thread safe (and this is much faster)."""
+    We need this since the built-in strptime isn't thread safe (and this is much faster)."""
     year = int(date[:4])
     month = int(date[4:6]) if len(date) > 4 else 1
     day = int(date[6:8]) if len(date) > 6 else 1
@@ -1723,8 +1724,12 @@ def count_time(args):
     assert_key("from", args, r"^\d{14}$")
     assert_key("to", args, r"^\d{14}$")
     assert_key("strategy", args, r"^[123]$")
+    assert_key("combined", args, r"(true|false)")
+    assert_key("per_corpus", args, r"(true|false)")
 
     incremental = parse_bool(args, "incremental", False)
+    combined = parse_bool(args, "combined", True)
+    per_corpus = parse_bool(args, "per_corpus", True)
 
     corpora = parse_corpora(args)
     check_authentication(corpora)
@@ -1750,6 +1755,12 @@ def count_time(args):
     if fromdate or todate:
         if not fromdate or not todate:
             raise ValueError("When using 'from' or 'to', both need to be specified.")
+
+    result = {}
+    if per_corpus:
+        result["corpora"] = {}
+    if "debug" in args:
+        result["DEBUG"] = {"cqp": cqp}
 
     # Get date range of selected corpora
     corpus_data = generator_to_dict(corpus_info({"corpus": QUERY_DELIM.join(corpora), "cache": args["cache"]}, no_combined_cache=True))
@@ -1810,11 +1821,34 @@ def count_time(args):
     else:
         group_by = [(v, True) for v in ("text_datefrom", "text_dateto")]
 
-    result = {"corpora": {}}
+    if per_corpus:
+        # Add zero values for the corpora we removed because of the selected date span
+        for corpus in set(corpora_copy).difference(set(corpora)):
+            result["corpora"][corpus] = [{"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
+                                         for _ in range(len(subcqp) + 1)]
+            for i, c in enumerate(result["corpora"][corpus][1:]):
+                c["cqp"] = subcqp[i]
+
+            if not subcqp:
+                result["corpora"][corpus] = result["corpora"][corpus][0]
+
+    # Add zero values for the combined results if no corpora are within the selected date span
+    if combined and not corpora:
+        result["combined"] = [{"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
+                              for _ in range(len(subcqp) + 1)]
+        for i, c in enumerate(result["combined"][1:]):
+            c["cqp"] = subcqp[i]
+
+        if not subcqp:
+            result["combined"] = result["combined"][0]
+
+        yield result
+        return
+
     corpora_sizes = {}
 
     ns = Namespace()
-    total_rows = [[] for i in range(len(subcqp) + 1)]
+    total_rows = [[] for _ in range(len(subcqp) + 1)]
     ns.total_size = 0
 
     ns.progress_count = 0
@@ -1874,79 +1908,74 @@ def count_time(args):
     search_timedata_combined = []
     for total_row in total_rows:
         temp = timespan_calculator(total_row, granularity=granularity, strategy=strategy)
-        search_timedata.append(temp["corpora"])
-        search_timedata_combined.append(temp["combined"])
+        if per_corpus:
+            search_timedata.append(temp["corpora"])
+        if combined:
+            search_timedata_combined.append(temp["combined"])
 
-    for corpus in corpora:
-        corpus_stats = [{"absolute": defaultdict(int),
-                         "relative": defaultdict(float),
-                         "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
+    if per_corpus:
+        for corpus in corpora:
+            corpus_stats = [{"absolute": defaultdict(int),
+                             "relative": defaultdict(float),
+                             "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
 
-        basedates = dict([(date, None if corpus_timedata["corpora"][corpus][date] == 0 else 0)
-                          for date in corpus_timedata["corpora"].get(corpus, {})])
+            basedates = dict([(date, None if corpus_timedata["corpora"][corpus][date] == 0 else 0)
+                              for date in corpus_timedata["corpora"].get(corpus, {})])
 
-        for i, s in enumerate(search_timedata):
+            for i, s in enumerate(search_timedata):
+                prevdate = None
+                for basedate in sorted(basedates):
+                    if not basedates[basedate] == prevdate:
+                        corpus_stats[i]["absolute"][basedate] = basedates[basedate]
+                        corpus_stats[i]["relative"][basedate] = basedates[basedate]
+                    prevdate = basedates[basedate]
 
+                for row in s.get(corpus, {}).items():
+                    date, count = row
+                    corpus_date_size = float(corpus_timedata["corpora"].get(corpus, {}).get(date, 0))
+                    if corpus_date_size > 0.0:
+                        corpus_stats[i]["absolute"][date] += count
+                        corpus_stats[i]["relative"][date] += (count / corpus_date_size * 1000000)
+                        corpus_stats[i]["sums"]["absolute"] += count
+                        corpus_stats[i]["sums"]["relative"] += (count / corpus_date_size * 1000000)
+
+                if subcqp and i > 0:
+                    corpus_stats[i]["cqp"] = subcqp[i - 1]
+
+            result["corpora"][corpus] = corpus_stats if len(corpus_stats) > 1 else corpus_stats[0]
+
+    if combined:
+        total_stats = [{"absolute": defaultdict(int),
+                        "relative": defaultdict(float),
+                        "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
+
+        basedates = dict([(date, None if corpus_timedata["combined"][date] == 0 else 0)
+                          for date in corpus_timedata.get("combined", {})])
+
+        for i, s in enumerate(search_timedata_combined):
             prevdate = None
             for basedate in sorted(basedates):
                 if not basedates[basedate] == prevdate:
-                    corpus_stats[i]["absolute"][basedate] = basedates[basedate]
-                    corpus_stats[i]["relative"][basedate] = basedates[basedate]
+                    total_stats[i]["absolute"][basedate] = basedates[basedate]
+                    total_stats[i]["relative"][basedate] = basedates[basedate]
                 prevdate = basedates[basedate]
 
-            for row in s.get(corpus, {}).items():
-                date, count = row
-                corpus_date_size = float(corpus_timedata["corpora"].get(corpus, {}).get(date, 0))
-                if corpus_date_size > 0.0:
-                    corpus_stats[i]["absolute"][date] += count
-                    corpus_stats[i]["relative"][date] += (count / corpus_date_size * 1000000)
-                    corpus_stats[i]["sums"]["absolute"] += count
-                    corpus_stats[i]["sums"]["relative"] += (count / corpus_date_size * 1000000)
+            if s:
+                for row in s.items():
+                    date, count = row
+                    combined_date_size = float(corpus_timedata["combined"].get(date, 0))
+                    if combined_date_size > 0.0:
+                        total_stats[i]["absolute"][date] += count
+                        total_stats[i]["relative"][date] += (
+                            count / combined_date_size * 1000000) if combined_date_size else 0
+                        total_stats[i]["sums"]["absolute"] += count
 
+            total_stats[i]["sums"]["relative"] = total_stats[i]["sums"]["absolute"] / float(
+                ns.total_size) * 1000000 if ns.total_size > 0 else 0.0
             if subcqp and i > 0:
-                corpus_stats[i]["cqp"] = subcqp[i - 1]
+                total_stats[i]["cqp"] = subcqp[i - 1]
 
-        result["corpora"][corpus] = corpus_stats if len(corpus_stats) > 1 else corpus_stats[0]
-
-    total_stats = [{"absolute": defaultdict(int),
-                    "relative": defaultdict(float),
-                    "sums": {"absolute": 0, "relative": 0.0}} for i in range(len(subcqp) + 1)]
-
-    basedates = dict([(date, None if corpus_timedata["combined"][date] == 0 else 0)
-                      for date in corpus_timedata.get("combined", {})])
-
-    for i, s in enumerate(search_timedata_combined):
-
-        prevdate = None
-        for basedate in sorted(basedates):
-            if not basedates[basedate] == prevdate:
-                total_stats[i]["absolute"][basedate] = basedates[basedate]
-                total_stats[i]["relative"][basedate] = basedates[basedate]
-            prevdate = basedates[basedate]
-
-        if s:
-            for row in s.items():
-                date, count = row
-                combined_date_size = float(corpus_timedata["combined"].get(date, 0))
-                if combined_date_size > 0.0:
-                    total_stats[i]["absolute"][date] += count
-                    total_stats[i]["relative"][date] += (
-                        count / combined_date_size * 1000000) if combined_date_size else 0
-                    total_stats[i]["sums"]["absolute"] += count
-
-        total_stats[i]["sums"]["relative"] = total_stats[i]["sums"]["absolute"] / float(
-            ns.total_size) * 1000000 if ns.total_size > 0 else 0.0
-        if subcqp and i > 0:
-            total_stats[i]["cqp"] = subcqp[i - 1]
-
-    result["combined"] = total_stats if len(total_stats) > 1 else total_stats[0]
-
-    # Add zero values for the corpora we removed because of the selected date span
-    for corpus in set(corpora_copy).difference(set(corpora)):
-        result["corpora"][corpus] = {"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
-
-    if "debug" in args:
-        result["DEBUG"] = {"cqp": cqp}
+        result["combined"] = total_stats if len(total_stats) > 1 else total_stats[0]
 
     yield result
 
@@ -2109,43 +2138,6 @@ def loglike(args):
             l2 = wf2 * math.log(wf2 / e2)
         loglike = 2 * (l1 + l2)
         return round(loglike, 2)
-
-    def critical(val):
-        # 95th percentile; 5% level; p < 0.05; critical value = 3.84
-        # 99th percentile; 1% level; p < 0.01; critical value = 6.63
-        # 99.9th percentile; 0.1% level; p < 0.001; critical value = 10.83
-        # 99.99th percentile; 0.01% level; p < 0.0001; critical value = 15.13
-        return val > 15.13
-
-    def select(w, ls):
-        """ Split annotations on | and returns as list. If annotation is missing, returns the word instead. """
-        #    for c in w:
-        #        if not (c.isalpha() or (len(w) > 1 and c in '-:')):
-        #            return []
-        xs = [l for l in ls.split('|') if len(l) > 0]
-        return xs or [w]
-
-    def wf_frequencies(texts):
-        freqs = []
-        for (name, text) in texts:
-            d = defaultdict(int)  # Lemgram frequency
-            tc = 0  # Total number of tokens
-            for w in [r for s in text for (w, a) in s for r in select(w, a['lex'])]:
-                tc += 1
-                d[w] += 1
-            freqs.append((name, d, tc))
-        return freqs
-
-    def reference_material(filename):
-        d = defaultdict(int)
-        tot = 0
-        with open(filename, encoding='utf8') as f:
-            for l in f:
-                (wf, msd, lemgram, comp, af, rf) = l[:-1].split('\t')
-                for ll in select(wf, lemgram):
-                    tot += int(af)  # Total number of tokens
-                    d[ll] += int(af)  # Lemgram frequency
-        return d, tot
 
     def compute_list(d1, tot1, ref, reftot):
         """ Compute log-likelyhood for lists. """
@@ -2492,41 +2484,6 @@ def timespan_calculator(timedata, granularity="y", combined=True, per_corpus=Tru
 
     gs = {"y": 4, "m": 6, "d": 8, "h": 10, "n": 12, "s": 14}
 
-    def strftime(dt, fmt):
-        """Python datetime.strftime < 1900 workaround, taken from https://gist.github.com/2000837"""
-
-        TEMPYEAR = 9996  # We need to use a leap year to support feb 29th
-
-        if dt.year < 1900:
-            # Create a copy of this datetime, just in case, then set the year to
-            # something acceptable, then replace that year in the resulting string
-            tmp_dt = datetime.datetime(TEMPYEAR, dt.month, dt.day,
-                                       dt.hour, dt.minute,
-                                       dt.second, dt.microsecond,
-                                       dt.tzinfo)
-
-            tmp_fmt = fmt
-            tmp_fmt = re.sub('(?<!%)((?:%%)*)(%y)', '\\1\x11\x11', tmp_fmt, re.U)
-            tmp_fmt = re.sub('(?<!%)((?:%%)*)(%Y)', '\\1\x12\x12\x12\x12', tmp_fmt, re.U)
-            tmp_fmt = tmp_fmt.replace(str(TEMPYEAR), '\x13\x13\x13\x13')
-            tmp_fmt = tmp_fmt.replace(str(TEMPYEAR)[-2:], '\x14\x14')
-
-            result = tmp_dt.strftime(tmp_fmt)
-
-            if '%c' in fmt:
-                # Local datetime format - uses full year but hard for us to guess where.
-                result = result.replace(str(TEMPYEAR), str(dt.year))
-
-            result = result.replace('\x11\x11', str(dt.year)[-2:])
-            result = result.replace('\x12\x12\x12\x12', str(dt.year))
-            result = result.replace('\x13\x13\x13\x13', str(TEMPYEAR))
-            result = result.replace('\x14\x14', str(TEMPYEAR)[-2:])
-
-            return result
-
-        else:
-            return dt.strftime(fmt)
-
     def plusminusone(date, value, df, negative=False):
         date = "0" + date if len(date) % 2 else date  # Handle years with three digits
         d = strptime(date)
@@ -2534,7 +2491,7 @@ def timespan_calculator(timedata, granularity="y", combined=True, per_corpus=Tru
             d = d - value
         else:
             d = d + value
-        return int(strftime(d, df))
+        return int(d.strftime(df))
 
     def shorten(date, g):
         alt = 1 if len(date) % 2 else 0  # Handle years with three digits
@@ -3011,12 +2968,16 @@ def cache_handler(args):
         result["initial_setup"] = True
     else:
         result = {"multi_invalidated": False,
+                  "multi_config_invalidated": False,
                   "corpora_invalidated": 0,
+                  "configs_invalidated": 0,
                   "files_removed": 0}
         now = time.time()
 
         # Get modification time of corpus registry files
         corpora = get_corpus_timestamps()
+        # Get modification time of corpus config files
+        corpora_configs, config_modes, config_presets = get_corpus_config_timestamps()
 
         with mc_pool.reserve() as mc:
             # Invalidate cache for updated corpora
@@ -3029,13 +2990,36 @@ def cache_handler(args):
                     # Remove outdated query data
                     for cachefile in glob.glob(os.path.join(config.CACHE_DIR, "%s:*" % corpus)):
                         if os.path.getmtime(cachefile) < corpora[corpus]:
-                            os.remove(cachefile)
-                            result["files_removed"] += 1
+                            try:
+                                os.remove(cachefile)
+                                result["files_removed"] += 1
+                            except FileNotFoundError:
+                                pass
 
-            # If any corpus has been updated or added, increase version to invalidate all combined caches
-            if result["corpora_invalidated"]:
+                if mc.get(f"{corpus}:last_update_config", 0) < corpora_configs.get(corpus, 0):
+                    mc.set(f"{corpus}:version_config", mc.get(f"{corpus}:version_config", 0) + 1)
+                    mc.set(f"{corpus}:last_update_config", corpora_configs[corpus])
+                    result["configs_invalidated"] += 1
+
+            # If any corpus has been updated, added or removed, increase version to invalidate all combined caches
+            if result["corpora_invalidated"] or not mc.get("multi:corpora", set()) == set(corpora.keys()):
                 mc.set("multi:version", mc.get("multi:version", 0) + 1)
+                mc.set("multi:corpora", set(corpora.keys()))
                 result["multi_invalidated"] = True
+
+            # Have any config modes or presets been updated?
+            configs_updated = config_modes > mc.get("multi:config_modes", 0) or config_presets > mc.get(
+                "multi:config_presets", 0)
+
+            # If modes or presets have been updated, or any corpus config has been updated, added or removed, increase
+            # version to invalidate all combined caches
+            if configs_updated or result["configs_invalidated"] or not mc.get("multi:config_corpora", set()) == set(
+                    corpora_configs.keys()):
+                mc.set("multi:version_config", mc.get("multi:version_config", 0) + 1)
+                mc.set("multi:config_corpora", set(corpora_configs.keys()))
+                mc.set("multi:config_modes", config_modes)
+                mc.set("multi:config_presets", config_presets)
+                result["multi_config_invalidated"] = True
 
         # Remove old query data
         for cachefile in glob.glob(os.path.join(config.CACHE_DIR, "*:query_data_*")):
@@ -3045,9 +3029,9 @@ def cache_handler(args):
     yield result
 
 
-def cache_prefix(corpus="multi"):
+def cache_prefix(corpus="multi", config=False):
     with mc_pool.reserve() as mc:
-        return "%s:%d" % (corpus, mc.get("%s:version" % corpus, 0))
+        return "%s:%d" % (corpus, mc.get(f"{corpus}:version{'_config' if config else ''}", 0))
 
 
 def get_corpus_timestamps():
@@ -3055,6 +3039,16 @@ def get_corpus_timestamps():
     corpora = dict((os.path.basename(f).upper(), os.path.getmtime(f)) for f in
                    glob.glob(os.path.join(config.CWB_REGISTRY, "*")))
     return corpora
+
+
+def get_corpus_config_timestamps():
+    """Get modification time of corpus config files."""
+    corpora = dict((os.path.basename(f)[:-5].upper(), os.path.getmtime(f)) for f in
+                   glob.glob(os.path.join(config.CORPUS_CONFIG_DIR, "corpora", "*.yaml")))
+    modes = max(os.path.getmtime(f) for f in glob.glob(os.path.join(config.CORPUS_CONFIG_DIR, "modes", "*.yaml")))
+    presets = max(
+        os.path.getmtime(f) for f in glob.glob(os.path.join(config.CORPUS_CONFIG_DIR, "attributes", "*/*.yaml")))
+    return corpora, modes, presets
 
 
 def setup_cache():
@@ -3070,14 +3064,23 @@ def setup_cache():
         action_needed = True
 
     # Set up Memcached if needed
-    with mc_pool.reserve() as mc:
-        if "multi:version" not in mc:
-            corpora = get_corpus_timestamps()
-            mc.set("multi:version", 1)
-            for corpus in corpora:
-                mc.set("%s:version" % corpus, 1)
-                mc.set("%s:last_update" % corpus, corpora[corpus])
-            action_needed = True
+    if config.MEMCACHED_SERVERS:
+        with mc_pool.reserve() as mc:
+            if "multi:version" not in mc:
+                corpora = get_corpus_timestamps()
+                corpora_configs, config_modes, config_presets = get_corpus_config_timestamps()
+                mc.set("multi:version", 1)
+                mc.set("multi:version_config", 1)
+                mc.set("multi:corpora", set(corpora.keys()))
+                mc.set("multi:config_corpora", set(corpora_configs.keys()))
+                mc.set("multi:config_modes", config_modes)
+                mc.set("multi:config_presets", config_presets)
+                for corpus in corpora:
+                    mc.set("%s:version" % corpus, 1)
+                    mc.set("%s:version_config" % corpus, 1)
+                    mc.set("%s:last_update" % corpus, corpora[corpus])
+                    mc.set("%s:last_update_config" % corpus, corpora_configs.get(corpus, 0))
+                action_needed = True
 
     return action_needed
 
@@ -3335,6 +3338,270 @@ def authenticate(_=None):
             return
 
     yield {}
+
+
+@app.route("/corpus_config", methods=["GET", "POST"])
+@main_handler
+def corpus_config(args):
+    """Get corpus configuration for a given mode or list of corpora. To be used by the Korp frontend.
+
+    If no mode or corpora are specified, the mode 'default' is used.
+    """
+    mode_name = args.get("mode", "default")
+    corpora = parse_corpora(args)
+    cache_checksum = get_hash((mode_name, sorted(corpora), config.LAB_MODE))
+
+    # Try to fetch config from cache
+    if args["cache"]:
+        with mc_pool.reserve() as mc:
+            result = mc.get("%s:corpus_config_%s" % (cache_prefix(config=True), cache_checksum))
+        if result:
+            if "debug" in args:
+                result.setdefault("DEBUG", {})
+                result["DEBUG"]["cache_read"] = True
+            yield result
+            return
+
+    result = get_mode(mode_name, corpora, args["cache"])
+    result["modes"] = get_modes(mode_name)
+
+    # Save to cache
+    if args["cache"]:
+        with mc_pool.reserve() as mc:
+            try:
+                added = mc.add("%s:corpus_config_%s" % (cache_prefix(config=True), cache_checksum), result)
+            except pylibmc.TooBig:
+                pass
+            else:
+                if added and "debug" in args:
+                    result.setdefault("DEBUG", {})
+                    result["DEBUG"]["cache_saved"] = True
+
+    yield result
+
+
+def get_modes(mode_name=None):
+    """Get all modes data.
+
+    Args:
+        mode_name: Name of current mode. A hidden mode will only be included if it is the current mode.
+    """
+    modes = []
+    for mode_file in (Path(config.CORPUS_CONFIG_DIR) / "modes").glob("*.yaml"):
+        with open(mode_file, "r", encoding="utf-8") as f:
+            mode = yaml.safe_load(f)
+            # Only include hidden modes when accessed directly
+            if mode.get("hidden") and not mode_name == mode_file.stem:
+                continue
+            modes.append({
+                "mode": mode_file.stem,
+                "label": mode.get("label", mode_file.stem),
+                "order": mode.get("order")
+            })
+    return [
+        {k: m[k] for k in m if k not in "order"} for m in sorted(modes, key=lambda x: (x["order"] is None, x["order"]))
+    ]
+
+
+def get_mode(mode_name: str, corpora: list, cache: bool):
+    """Build configuration structure for a given mode.
+
+    Args:
+        mode_name: Name of mode to get.
+        corpora: Optionally specify which corpora to include.
+        cache: Whether to use cache.
+    """
+    try:
+        with open(os.path.join(config.CORPUS_CONFIG_DIR, "modes", mode_name + ".yaml"), "r", encoding="utf-8") as fp:
+            mode = yaml.safe_load(fp)
+    except FileNotFoundError:
+        return
+
+    attr_types = {
+        "positional": "pos_attributes",
+        "structural": "struct_attributes",
+        "custom": "custom_attributes"
+    }
+
+    mode["corpora"] = {}  # All corpora in mode
+    mode["attributes"] = {t: {} for t in attr_types.values()}  # Attributes referred to by corpora
+    attribute_presets = {t: {} for t in attr_types.values()}  # Attribute presets
+    hash_to_attr = {}
+    warnings = set()
+
+    def get_new_attr_name(name: str) -> str:
+        """Create a unique name for attribute, to be used as identifier."""
+        while name in hash_to_attr.values():
+            name += "_"
+        return name
+
+    if corpora:
+        corpus_files = []
+        for c in corpora:
+            path = ""
+            if ":" in c:
+                path, _, c = c.partition(":")
+            file_path = Path(config.CORPUS_CONFIG_DIR) / "corpora" / path.lower() / f"{c.lower()}.yaml"
+            if file_path.is_file():
+                corpus_files.append(file_path)
+            else:
+                warnings.add(f"The corpus {c!r} does not exist, or does not have a config file.")
+    else:
+        corpus_files = glob.glob(os.path.join(config.CORPUS_CONFIG_DIR, "corpora", "*.yaml"))
+
+    # Go through all corpora to see if they are included in mode
+    for corpus_file in corpus_files:
+        # Load corpus config from cache if possible
+        cached_corpus = None
+        if cache:
+            with mc_pool.reserve() as mc:
+                cached_corpus = mc.get("%s:corpus_config_%s" % (cache_prefix(config=True),
+                                                                os.path.basename(corpus_file)))
+            if cached_corpus:
+                corpus_def = cached_corpus
+
+        if not cached_corpus:
+            with open(corpus_file, "r", encoding="utf-8") as fp:
+                corpus_def = yaml.safe_load(fp)
+            # Save to cache
+            if cache:
+                with mc_pool.reserve() as mc:
+                    try:
+                        mc.add("%s:corpus_config_%s" % (cache_prefix(config=True),
+                                                        os.path.basename(corpus_file)), corpus_def)
+                    except pylibmc.TooBig:
+                        pass
+
+        corpus_id = corpus_def["id"]
+
+        # Check if corpus is included in selected mode
+        if corpora or mode_name in [m["name"] for m in corpus_def.get("mode", [])]:
+            for attr_type_name, attr_type in attr_types.items():
+                if attr_type in corpus_def:
+                    to_delete = []
+                    for i, attr in enumerate(corpus_def[attr_type]):
+                        for attr_name, attr_val in attr.items():
+                            # A reference to an attribute preset
+                            if isinstance(attr_val, str) or isinstance(attr_val, dict) and "preset" in attr_val:
+                                if isinstance(attr_val, str):
+                                    preset_name = attr_val
+                                    attr_hash = get_hash((attr_name, attr_val, attr_type))
+                                else:
+                                    preset_name = attr_val["preset"]
+                                    attr_hash = get_hash((attr_name, json.dumps(attr_val, sort_keys=True), attr_type))
+
+                                if attr_hash in hash_to_attr:  # Preset already loaded and ready to use
+                                    corpus_def[attr_type][i] = hash_to_attr[attr_hash]
+                                else:
+                                    if preset_name not in attribute_presets[attr_type]:  # Preset not loaded yet
+                                        try:
+                                            with open(os.path.join(config.CORPUS_CONFIG_DIR, "attributes",
+                                                                   attr_type_name, preset_name + ".yaml"),
+                                                      encoding="utf-8") as f:
+                                                attr_def = yaml.safe_load(f)
+                                                if not attr_def:
+                                                    warnings.add(f"Preset {preset_name!r} is empty.")
+                                                    to_delete.append(i)
+                                                    continue
+                                                attribute_presets[attr_type][preset_name] = attr_def
+                                        except FileNotFoundError:
+                                            to_delete.append(i)
+                                            warnings.add(f"Attribute preset {preset_name!r} in corpus {corpus_id!r} "
+                                                         "does not exist.")
+                                            continue
+                                    attr_id = get_new_attr_name(preset_name)
+                                    hash_to_attr[attr_hash] = attr_id
+                                    mode["attributes"][attr_type][attr_id] = attribute_presets[attr_type][
+                                        preset_name].copy()
+                                    mode["attributes"][attr_type][attr_id].update({"name": attr_name})
+                                    if isinstance(attr_val, dict):
+                                        # Override preset values
+                                        del attr_val["preset"]
+                                        mode["attributes"][attr_type][attr_id].update(attr_val)
+                                    corpus_def[attr_type][i] = attr_id
+
+                            # Inline attribute definition
+                            elif isinstance(attr_val, dict):
+                                attr_hash = get_hash((attr_name, json.dumps(attr_val, sort_keys=True), attr_type))
+                                if attr_hash in hash_to_attr:  # Identical attribute has previously been used
+                                    corpus_def[attr_type][i] = hash_to_attr[attr_hash]
+                                else:
+                                    attr_id = get_new_attr_name(attr_name)
+                                    hash_to_attr[attr_hash] = attr_id
+                                    attr_val.update({"name": attr_name})
+                                    mode["attributes"][attr_type][attr_id] = attr_val
+                                    corpus_def[attr_type][i] = attr_id
+                    for i in reversed(to_delete):
+                        del corpus_def[attr_type][i]
+            corpus_modes = [mode for mode in corpus_def.get("mode", []) if mode["name"] == mode_name]
+            if corpus_modes:
+                corpus_mode_settings = corpus_modes.pop()
+            else:
+                corpus_mode_settings = {}
+
+            # Skip corpus if it should only appear in lab mode, and we're not in lab mode
+            if config.LAB_MODE or not corpus_mode_settings.get("lab_only", False):
+                # Remove some keys from corpus config, as they are only used to create the full configuration
+                corpus = {k: v for k, v in corpus_def.items() if k not in ("mode",)}
+
+                folders = corpus_mode_settings.get("folder", [])
+                if not isinstance(folders, list):
+                    folders = [folders]
+                for folder in folders:
+                    try:
+                        _add_corpus_to_folder(mode.get("folders"), folder, corpus_id)
+                    except KeyError:
+                        warnings.add(f"The folder '{folder}' referred to by the corpus '{corpus_id}' doesn't exist.")
+
+                # Add corpus configuration to mode
+                mode["corpora"][corpus_id] = corpus
+
+    if corpora and "preselected_corpora" in mode:
+        del mode["preselected_corpora"]
+
+    _remove_empty_folders(mode)
+    if warnings:
+        mode["warnings"] = list(warnings)
+
+    return mode
+
+
+def _add_corpus_to_folder(folders: dict, target_folder: str, corpus: str) -> None:
+    """Add corpus to target_folder in folders.
+
+    target_folder is a path with . as separator.
+    """
+    if not (target_folder and folders):
+        return
+    target = {"subfolders": folders}
+    parts = target_folder.split(".")
+    for part in parts:
+        target.setdefault("subfolders", {})
+        target = target["subfolders"][part]
+    target.setdefault("corpora", [])
+    target["corpora"].append(corpus)
+
+
+def _remove_empty_folders(mode) -> None:
+    """Remove empty folders from mode."""
+
+    def should_include(folder):
+        """Recurseively check for content in this folder or its subfolders."""
+        include = "corpora" in folder
+
+        for subfolder_name, subfolder in list(folder.get("subfolders", {}).items()):
+            include_subfolder = should_include(subfolder)
+            if not include_subfolder:
+                del folder["subfolders"][subfolder_name]
+            if not include:
+                # If current folder has no content but one of its subfolder has, it should be included
+                include = include_subfolder
+        return include
+
+    mode_folders = mode.get("folders", {})
+    for folder_id, f in list(mode_folders.items()):
+        if not should_include(f):
+            del mode_folders[folder_id]
 
 
 def check_authentication(corpora):
