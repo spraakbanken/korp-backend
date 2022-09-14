@@ -325,3 +325,165 @@ Use the following table layout:
 
     Indexes:  
         (corpus, datefrom, dateto)
+
+
+## Corpus Configuration for the Korp Frontend
+
+The corpus configuration used by the Korp frontend is served by the backend. In `config.py`, the variable
+`CORPUS_CONFIG_DIR` should point to a directory having the following structure:
+
+```
+.
+├── attributes
+│   ├── positional
+│   │   ├── lemma.yaml
+│   │   ├── msd.yaml
+│   │   ├── ...
+│   │   └── pos.yaml
+│   └── structural
+│       ├── author.yaml
+│       ├── title.yaml
+│       ├── ...
+│       └── year.yaml
+├── corpora
+│   ├── corpus1.yaml
+│   ├── corpus2.yaml
+│   ├── ...
+│   └── yet-another-corpus.yaml
+└── modes
+    ├── default.yaml
+    ├── another.yaml
+    ├── ...
+    └── other.yaml
+```
+
+- The **modes** directory contains one YAML file per mode in Korp.
+- The **corpora** directory contains one YAML file per corpus.
+- The **attributes** directory contains two subdirectories: **positional** and **structural**, containing optional
+  attribute presets referred to by the corpus configurations.
+
+For some inspiration, [here](https://github.com/spraakbanken/korp-config) are the config files used by the Korp instance
+at Språkbanken Text.
+
+**Note:**  
+Most settings in these files referring to labels or descriptions can optionally be localized using ISO 639-3 language
+codes. For example, a label can look both like this:
+
+    label: author
+
+... and like this:
+
+    label:
+      eng: author
+      swe: författare
+
+### Mode Configuration
+
+At least one mode file is required, and that file must be named `default.yaml`. This is the mode that will be loaded
+when no mode is explicitly requested.
+
+**Required:**
+
+- **label**: The name of the mode, which will be shown in the interface.
+
+**Optional:**
+
+- **order**: A number used for sorting the modes in the interface. Modes without an order will end up last.
+- **folders**: A folder structure for the corpus selector. These folders can then be referenced by individual corpora.
+  The folder structure can be of any depth, and folders can have any number of sub-folders (using the key `subfolders`).
+  You may use HTML in the descriptions. Example:
+  ```
+  folders:
+    novels:
+      title:
+        eng: Novels
+        swe: Skönlitteratur
+      description:
+        eng: Corpora consisting of novels.
+        swe: Korpusar bestående av skönlitteratur.
+      subfolders:
+        classics:
+          title:
+            eng: Classics
+            swe: Klassiker
+        scifi:
+          title: Science-Fiction
+  ```
+- **preselected_corpora**: A list of corpus IDs which will be pre-selected when the user enters the mode. You may also
+  refer to folders by using the prefix `__`, and dot-notation for refering to subfolders. Example:
+  ```
+  preselected_corpora:
+    - my-corpus
+    - __novels.scifi
+  ```
+- Other than the above, you can also override almost all the global settings set in the frontend's `config.yaml`. See
+  [the documentation for the
+  frontend](https://github.com/spraakbanken/korp-frontend/blob/master/doc/frontend_devel.md#settings-in-configyml) for a
+  list of available settings.
+
+### Corpus Configuration
+
+Corpus configuration files are placed in the `corpora` folder, and the filename of each configuration file should
+correspond to a corpus ID in lowercase, followed by `.yaml`, e.g. `mycorpus.yaml`.
+
+**Required:**
+
+- **id**: The corpus' system name, same as the configuration file name (minus `.yaml`).
+- **title**: Title of the corpus.
+- **description**: Description of the corpus. HTML can be used.
+- **modes**: A list of the modes in which the corpus will be included, optionally specifying a folder. Example:
+  ```
+  mode:
+    - name: default
+      folder: novels.classics
+  ```
+
+**Optional:**
+
+- **within**: Use this to override **default_within** (set in the global or mode config). **within** is a list of
+ structural elements to use as boundaries when searching, ordered from smaller to bigger. Example:
+  ```
+  within:
+    - label:
+        eng: sentence
+        swe: mening
+      value: sentence
+    - label:
+        eng: paragraph
+        swe: stycke
+      value: paragraph
+  ```
+- **context**: Use this to override **default_context** (set in the global or mode config). **context** is a list of
+  structural elements that can be used as context in the displaying of the search results, ordered from smaller to
+  bigger. Example:
+  ```
+  context:
+    - label:
+        eng: 1 sentence
+        swe: 1 mening
+      value: 1 sentence
+    - label:
+        eng: 1 paragraph
+        swe: 1 stycke
+      value: 1 paragraph
+  ```
+- **attribute_filters**: A list of structural attributes on which the user will be able to filter the search results,
+  using menus in both simple and extended search.
+- **pos_attributes** and **struct_attributes**: Lists of positional and structural attributes. Every item in each list
+  should be an object with one key. The key should be the ID of the attribute, e.g. `msd` for positional attributes or
+  `text_title` for structural. The value should be either 1) an object with a complete attribute definition, or 2) a
+  string referring to an attribute preset containing such a definition, e.g. `msd` to refer to
+  `attributes/positional/msd.yaml`. The attribute definition is what tells the Korp frontend how to handle each
+  attribute, like how it should be presented in the sidebar and what interface widget to use in extended search. For
+  more information about what options are available for attribute definitions, see the [Korp frontend
+  documentation](https://github.com/spraakbanken/korp-frontend/blob/master/doc/frontend_devel.md#attribute-settings).
+- **custom_attributes**: See [Custom
+  attributes](https://github.com/spraakbanken/korp-frontend/blob/master/doc/frontend_devel.md#custom-attributes).
+- **reading_mode**: See [Reading
+  mode](https://github.com/spraakbanken/korp-frontend/blob/master/doc/frontend_devel.md#reading-mode).
+- **limited_access**: Set to `true` to indicate that this corpus requires the user to be logged in and having the right
+  permissions.
+
+### Attribute Presets
+
+See **pos_attributes** and **struct_attributes** above.
