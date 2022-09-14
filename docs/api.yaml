@@ -1,7 +1,7 @@
 openapi: 3.0.2
 info: 
   title: Korp API
-  version: 8.0.1
+  version: 8.1.0
   description: |
     # Introduction
     
@@ -1069,6 +1069,32 @@ paths:
                         - MYDIARY 
                   time:
                     $ref: '#/components/schemas/Time'
+  /corpus_config:
+    get:
+      summary: Corpus Configuration for the Frontend
+      description: |
+        Get corpus configurations to be used by the frontend, either for a whole mode or a specific list of corpora.
+        
+        ### Example
+        
+        [`/corpus_config?mode=kubhist`](https://ws.spraakbanken.gu.se/ws/korp/v8/corpus_config?mode=kubhist)
+      parameters:
+        - name: mode
+          description: The mode for which corpus configurations should be returned.
+          schema:
+            type: string
+          in: query
+        - name: corpus
+          description: Corpora to include.
+          schema:
+            type: array
+            items:
+              type: string
+            example: [ROMI, SUC3]
+          explode: false
+          in: query
+      tags:
+        - Information
 
 security:
   - basicAuth: []
