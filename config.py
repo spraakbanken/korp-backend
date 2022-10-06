@@ -1,8 +1,7 @@
-# -*- coding: utf-8 -*-
 """
-Configuration file used by the main korp.py script.
+Default configuration file.
 
-Copy this file to config.py and change the settings below.
+Settings can be overridden by placing a copy of this file in a directory named 'instance', and editing that copy.
 """
 
 # Host and port for the WSGI server

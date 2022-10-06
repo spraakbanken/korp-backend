@@ -70,8 +70,10 @@ Install the required Python modules using `pip` with the included requirements.t
 
 ## Configuring Korp
 
-Normally nothing needs to be changed in the korp.py file, and all configuration is done by editing config.py.
-The following variables need to be set:
+The supplied `config.py` contains the default configuration. To override the default configuration, make a copy
+of `config.py` and place it in a directory named `instance` in the repo root directory, and edit that copy.
+
+The following variables need to be set for Korp to work:
 
 * `CQP_EXECUTABLE`  
 The absolute path to the CQP binary. By default `/usr/local/cwb-X.X.X/bin/cqp`
@@ -96,20 +98,20 @@ or sockets (`MEMCACHED_SERVERS`).
 
 ## Running the backend
 
-To run the backend, simply run korp.py:
+To run the backend, simply run `run.py`:
 
-    python3 korp.py
+    python3 run.py
 
-The backend should then be reachable in your web browser on the port you configured in config.py, for
+The backend should then be reachable in your web browser on the port you configured in `config.py`, for
 example `http://localhost:1234`.
 
 During development or while testing your configuration, use the flag `dev` for automatic reloading.
 
-    python3 korp.py dev
+    python3 run.py dev
 
 For deployment, [Gunicorn](http://gunicorn.org/) works well.
 
-    gunicorn --worker-class gevent --bind 0.0.0.0:1234 --workers 4 --max-requests 250 --limit-request-line 0 korp:app
+    gunicorn --worker-class gevent --bind 0.0.0.0:1234 --workers 4 --max-requests 250 --limit-request-line 0 'run:create_app()'
 
 
 ## Cache management
