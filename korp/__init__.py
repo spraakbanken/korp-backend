@@ -1,3 +1,4 @@
+import importlib
 from pathlib import Path
 
 try:
@@ -8,6 +9,7 @@ except ImportError:
     cache_disabled = True
 
 from flask import Flask
+from flask.blueprints import Blueprint
 from flask_cors import CORS
 
 from korp import utils
@@ -96,5 +98,14 @@ def create_app():
     app.register_blueprint(relations.bp)
     app.register_blueprint(struct_values.bp)
     app.register_blueprint(timespan.bp)
+
+    # Load plugins
+    for plugin in app.config["PLUGINS"]:
+        module = importlib.import_module(plugin)
+        # Find all blueprints defined in module and register them
+        for name in dir(module):
+            v = getattr(module, name)
+            if isinstance(v, Blueprint):
+                app.register_blueprint(v)
 
     return app

@@ -14,6 +14,7 @@ from collections import defaultdict
 
 from flask import Response, request, copy_current_request_context, stream_with_context
 from flask import current_app as app
+from flask.blueprints import Blueprint
 from gevent.queue import Queue, Empty
 from gevent.threadpool import ThreadPool
 
@@ -554,3 +555,11 @@ def strptime(date):
 def sql_escape(s):
     with app.app_context():
         return mysql.connection.escape_string(s).decode("utf-8") if isinstance(s, str) else s
+
+
+class Plugin(Blueprint):
+    """Simple plugin class, identical to Flask's Blueprint but with a method for accessing the plugin's
+    configuration."""
+
+    def config(self, key, default=None):
+        return app.config["PLUGINS_CONFIG"].get(self.import_name, {}).get(key, default)

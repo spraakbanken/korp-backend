@@ -70,3 +70,9 @@ CORPUS_CONFIG_DIR = ""
 
 # Set to True to enable "lab mode", potentially enabling experimental features and access to lab-only corpora
 LAB_MODE = False
+
+# Plugins to load
+PLUGINS = []
+
+# Plugin configuration
+PLUGINS_CONFIG = {}
