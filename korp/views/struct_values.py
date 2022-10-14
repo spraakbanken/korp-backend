@@ -56,7 +56,7 @@ def struct_values(args):
             for struct in structs:
                 checksum = utils.get_hash((corpus, struct, split, include_count))
                 with memcached.pool.reserve() as mc:
-                    data = mc.get("%s:struct_values_%s" % (utils.cache_prefix(corpus), checksum))
+                    data = mc.get("%s:struct_values_%s" % (utils.cache_prefix(mc, corpus), checksum))
                 if data is not None:
                     result["corpora"].setdefault(corpus, {})
                     result["corpora"][corpus][struct] = data
@@ -166,9 +166,9 @@ def struct_values(args):
                 if (corpus, struct) in from_cache:
                     continue
                 checksum = utils.get_hash((corpus, struct, split, include_count))
-                cache_key = "%s:struct_values_%s" % (utils.cache_prefix(corpus), checksum)
                 try:
                     with memcached.pool.reserve() as mc:
+                        cache_key = "%s:struct_values_%s" % (utils.cache_prefix(mc, corpus), checksum)
                         mc.add(cache_key, result["corpora"][corpus].get(struct, {}))
                 except pylibmc.TooBig:
                     pass

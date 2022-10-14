@@ -31,7 +31,7 @@ def corpus_config(args):
     # Try to fetch config from cache
     if args["cache"]:
         with memcached.pool.reserve() as mc:
-            result = mc.get("%s:corpus_config_%s" % (utils.cache_prefix(config=True), cache_checksum))
+            result = mc.get("%s:corpus_config_%s" % (utils.cache_prefix(mc, config=True), cache_checksum))
         if result:
             if "debug" in args:
                 result.setdefault("DEBUG", {})
@@ -46,7 +46,7 @@ def corpus_config(args):
     if args["cache"]:
         with memcached.pool.reserve() as mc:
             try:
-                added = mc.add("%s:corpus_config_%s" % (utils.cache_prefix(config=True), cache_checksum), result)
+                added = mc.add("%s:corpus_config_%s" % (utils.cache_prefix(mc, config=True), cache_checksum), result)
             except pylibmc.TooBig:
                 pass
             else:
@@ -133,7 +133,7 @@ def get_mode(mode_name: str, corpora: list, cache: bool):
         cached_corpus = None
         if cache:
             with memcached.pool.reserve() as mc:
-                cached_corpus = mc.get("%s:corpus_config_%s" % (utils.cache_prefix(config=True),
+                cached_corpus = mc.get("%s:corpus_config_%s" % (utils.cache_prefix(mc, config=True),
                                                                 os.path.basename(corpus_file)))
             if cached_corpus:
                 corpus_def = cached_corpus
@@ -145,7 +145,7 @@ def get_mode(mode_name: str, corpora: list, cache: bool):
             if cache:
                 with memcached.pool.reserve() as mc:
                     try:
-                        mc.add("%s:corpus_config_%s" % (utils.cache_prefix(config=True),
+                        mc.add("%s:corpus_config_%s" % (utils.cache_prefix(mc, config=True),
                                                         os.path.basename(corpus_file)), corpus_def)
                     except pylibmc.TooBig:
                         pass

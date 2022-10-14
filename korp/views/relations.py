@@ -67,7 +67,7 @@ def relations(args):
                                                  search_type,
                                                  minfreq))
                 with memcached.pool.reserve() as mc:
-                    cached_data = mc.get("%s:relations_%s" % (utils.cache_prefix(corpus), corpus_checksum))
+                    cached_data = mc.get("%s:relations_%s" % (utils.cache_prefix(mc, corpus), corpus_checksum))
                 if cached_data is not None:
                     relations_data.extend(cached_data)
                     corpora_rest.remove(corpus)
@@ -148,7 +148,7 @@ def relations(args):
         corpus_checksum = utils.get_hash((word, search_type, minfreq))
         with memcached.pool.reserve() as mc:
             try:
-                mc.add("%s:relations_%s" % (utils.cache_prefix(corpus), corpus_checksum), data)
+                mc.add("%s:relations_%s" % (utils.cache_prefix(mc, corpus), corpus_checksum), data)
             except pylibmc.TooBig:
                 pass
 

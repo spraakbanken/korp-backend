@@ -59,8 +59,8 @@ def timespan(args, no_combined_cache=False):
                                            fromdate,
                                            todate,
                                            sorted(corpora)))
-        cache_combined_key = "%s:timespan_%s" % (utils.cache_prefix(), utils.get_hash(combined_checksum))
         with memcached.pool.reserve() as mc:
+            cache_combined_key = "%s:timespan_%s" % (utils.cache_prefix(mc), utils.get_hash(combined_checksum))
             result = mc.get(cache_combined_key)
         if result is not None:
             if "debug" in args:
@@ -72,8 +72,8 @@ def timespan(args, no_combined_cache=False):
         # Look for per-corpus caches
         for corpus in corpora:
             corpus_checksum = utils.get_hash((fromdate, todate, granularity, strategy))
-            cache_key = "%s:timespan_%s" % (utils.cache_prefix(corpus), corpus_checksum)
             with memcached.pool.reserve() as mc:
+                cache_key = "%s:timespan_%s" % (utils.cache_prefix(mc, corpus), corpus_checksum)
                 corpus_cached_data = mc.get(cache_key)
 
             if corpus_cached_data is not None:
@@ -123,8 +123,8 @@ def timespan(args, no_combined_cache=False):
         if args["cache"]:
             def save_cache(corpus, data):
                 corpus_checksum = utils.get_hash((fromdate, todate, granularity, strategy))
-                cache_key = "%s:timespan_%s" % (utils.cache_prefix(corpus), corpus_checksum)
                 with memcached.pool.reserve() as mc:
+                    cache_key = "%s:timespan_%s" % (utils.cache_prefix(mc, corpus), corpus_checksum)
                     try:
                         mc.add(cache_key, data)
                     except pylibmc.TooBig:

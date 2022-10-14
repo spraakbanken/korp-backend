@@ -180,7 +180,7 @@ def query(args):
                                              free_search))
             with memcached.pool.reserve() as mc:
                 cached_corpus_hits = mc.get(
-                    "%s:query_size_%s" % (utils.cache_prefix(corpus.split("|")[0]), corpus_checksum))
+                    "%s:query_size_%s" % (utils.cache_prefix(mc, corpus.split("|")[0]), corpus_checksum))
             if cached_corpus_hits is not None:
                 saved_statistics[corpus] = cached_corpus_hits
 
@@ -344,9 +344,8 @@ def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, sh
         cache_filename = os.path.join(app.config["CACHE_DIR"], "%s:query_data_%s" % (corpus.split("|")[0], checksum))
         cache_filename_temp = cache_filename + "_" + unique_id
 
-        cache_size_key = "%s:query_size_%s" % (utils.cache_prefix(corpus.split("|")[0]), checksum)
-
         with memcached.pool.reserve() as mc:
+            cache_size_key = "%s:query_size_%s" % (utils.cache_prefix(mc, corpus.split("|")[0]), checksum)
             cache_hits = mc.get(cache_size_key)
         is_cached = cache_hits is not None and os.path.isfile(cache_filename)
         cached_no_hits = cache_hits == 0

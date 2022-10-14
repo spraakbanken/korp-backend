@@ -250,9 +250,10 @@ def setup_cache():
     return action_needed
 
 
-def cache_prefix(corpus="multi", config=False):
-    with memcached.pool.reserve() as mc:
-        return "%s:%d" % (corpus, mc.get(f"{corpus}:version{'_config' if config else ''}", 0))
+def cache_prefix(mc, corpus="multi", config=False):
+    """Get cache version to use as prefix for cache keys."""
+
+    return "%s:%d" % (corpus, mc.get(f"{corpus}:version{'_config' if config else ''}", 0))
 
 
 def query_optimize(cqp, cqpparams, find_match=True, expand=True, free_search=False):

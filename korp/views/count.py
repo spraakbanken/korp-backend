@@ -115,7 +115,7 @@ def count(args):
                                              expand_prequeries))
 
             with memcached.pool.reserve() as mc:
-                cached_size = mc.get("%s:count_size_%s" % (utils.cache_prefix(corpus), corpus_checksum))
+                cached_size = mc.get("%s:count_size_%s" % (utils.cache_prefix(mc, corpus), corpus_checksum))
             if cached_size is not None:
                 nr_hits = cached_size[0]
                 read_from_cache += 1
@@ -613,10 +613,12 @@ def count_query_worker(corpus, cqp, group_by, within, ignore_case=(), cut=None, 
                                   within,
                                   sorted(ignore_case),
                                   expand_prequeries))
-        cache_key = "%s:count_data_%s" % (utils.cache_prefix(corpus), checksum)
-        cache_size_key = "%s:count_size_%s" % (utils.cache_prefix(corpus), checksum)
 
         with memcached.pool.reserve() as mc:
+            prefix = utils.cache_prefix(mc, corpus)
+            cache_key = "%s:count_data_%s" % (prefix, checksum)
+            cache_size_key = "%s:count_size_%s" % (prefix, checksum)
+
             cached_size = mc.get(cache_size_key)
             if cached_size is not None:
                 corpus_hits, corpus_size = cached_size
