@@ -14,7 +14,7 @@ bp = Blueprint("cache", __name__)
 @bp.route("/cache", methods=["GET", "POST"])
 @utils.main_handler
 @utils.prevent_timeout
-def cache_handler():
+def cache_handler(_args):
     """Check for updated corpora and invalidate caches where needed. Also remove old disk cache."""
     if not app.config["CACHE_DIR"] or not app.config["MEMCACHED_SERVERS"] or app.config["CACHE_DISABLED"]:
         return {}
@@ -84,6 +84,9 @@ def cache_handler():
         # Remove old query data
         for cachefile in glob.glob(os.path.join(app.config["CACHE_DIR"], "*:query_data_*")):
             if os.path.getmtime(cachefile) < (now - app.config["CACHE_LIFESPAN"] * 60):
-                os.remove(cachefile)
+                try:
+                    os.remove(cachefile)
+                except FileNotFoundError:
+                    pass
                 result["files_removed"] += 1
     yield result
