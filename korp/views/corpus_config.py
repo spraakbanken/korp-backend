@@ -19,6 +19,7 @@ bp = Blueprint("corpus_config", __name__)
 
 @bp.route("/corpus_config", methods=["GET", "POST"])
 @utils.main_handler
+@utils.prevent_timeout
 def corpus_config(args):
     """Get corpus configuration for a given mode or list of corpora. To be used by the Korp frontend.
 
