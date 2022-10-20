@@ -34,7 +34,7 @@ def struct_values(args):
     per_corpus = utils.parse_bool(args, "per_corpus", True)
     combined = utils.parse_bool(args, "combined", True)
     corpora = utils.parse_corpora(args)
-    utils.check_authentication(corpora)
+    utils.check_authorization(corpora)
 
     structs = args.get("struct")
     if isinstance(structs, str):

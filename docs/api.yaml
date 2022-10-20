@@ -1045,30 +1045,6 @@ paths:
                               type: integer
                     time:
                       $ref: '#/components/schemas/Time'
-  /authenticate:
-    get:
-      summary: Authentication
-      description: Authenticate a user against an authentication system, if available. Uses basic authentication. Returns a list of protected corpora the user has access to.
-      tags:
-        - Misc
-      responses:
-       '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  corpora:
-                    type: array
-                    items:
-                      type: string
-                    example:
-                      corpora:
-                        - CLASSIFIED
-                        - MYDIARY 
-                  time:
-                    $ref: '#/components/schemas/Time'
   /corpus_config:
     get:
       summary: Corpus Configuration for the Frontend

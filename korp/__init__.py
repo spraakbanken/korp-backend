@@ -73,7 +73,6 @@ def create_app():
 
     # Register blueprints
     from .views import (
-        authenticate,
         cache,
         corpus_config,
         count,
@@ -86,7 +85,6 @@ def create_app():
         struct_values,
         timespan
     )
-    app.register_blueprint(authenticate.bp)
     app.register_blueprint(cache.bp)
     app.register_blueprint(corpus_config.bp)
     app.register_blueprint(count.bp)
@@ -107,5 +105,9 @@ def create_app():
             v = getattr(module, name)
             if isinstance(v, Blueprint):
                 app.register_blueprint(v)
+
+    # Register authorizer
+    if utils.Authorizer.auth_class:
+        utils.authorizer = utils.Authorizer.auth_class()
 
     return app

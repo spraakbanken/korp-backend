@@ -17,7 +17,7 @@ def lemgram_count(args):
     utils.assert_key("count", args, r"(lemgram|prefix|suffix)")
 
     corpora = utils.parse_corpora(args)
-    utils.check_authentication(corpora)
+    utils.check_authorization(corpora)
 
     lemgram = args.get("lemgram")
     if isinstance(lemgram, str):

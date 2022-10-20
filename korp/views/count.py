@@ -36,7 +36,7 @@ def count(args):
     incremental = utils.parse_bool(args, "incremental", False)
 
     corpora = utils.parse_corpora(args)
-    utils.check_authentication(corpora)
+    utils.check_authorization(corpora)
 
     group_by = args.get("group_by") or []
     if isinstance(group_by, str):
@@ -349,7 +349,7 @@ def count_time(args):
     per_corpus = utils.parse_bool(args, "per_corpus", True)
 
     corpora = utils.parse_corpora(args)
-    utils.check_authentication(corpora)
+    utils.check_authorization(corpora)
     within = utils.parse_within(args)
     expand_prequeries = utils.parse_bool(args, "expand_prequeries", True)
 

@@ -94,7 +94,7 @@ def loglike(args):
     set2 = set(set2)
 
     corpora = set1.union(set2)
-    utils.check_authentication(corpora)
+    utils.check_authorization(corpora)
 
     same_cqp = args.get("set1_cqp") == args.get("set2_cqp")
 

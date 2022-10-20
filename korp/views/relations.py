@@ -32,7 +32,7 @@ def relations(args):
     utils.assert_key("incremental", args, r"(true|false)")
 
     corpora = utils.parse_corpora(args)
-    utils.check_authentication(corpora)
+    utils.check_authorization(corpora)
 
     incremental = utils.parse_bool(args, "incremental", False)
 
@@ -236,7 +236,7 @@ def relations_sentences(args):
         c, i = s.split(":")
         source[c].add(i)
 
-    utils.check_authentication(source.keys())
+    utils.check_authorization(source.keys())
 
     start = int(args.get("start") or 0)
     end = int(args.get("end") or 9)

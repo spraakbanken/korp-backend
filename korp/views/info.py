@@ -44,9 +44,7 @@ def info(args):
     version = next(corpora)
     protected = []
 
-    if app.config.get("PROTECTED_FILE"):
-        with open(app.config.get("PROTECTED_FILE")) as infile:
-            protected = [x.strip() for x in infile.readlines()]
+    protected = utils.get_protected_corpora()
 
     result = {"version": korp.VERSION, "cqp_version": version, "corpora": list(corpora), "protected_corpora": protected}
 

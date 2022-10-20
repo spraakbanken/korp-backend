@@ -33,7 +33,7 @@ def timespan(args, no_combined_cache=False):
     utils.assert_key("to", args, r"^(\d{8}\d{6}?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$")
 
     corpora = utils.parse_corpora(args)
-    # check_authentication(corpora)
+    # check_authorization(corpora)
 
     granularity = (args.get("granularity") or "y").lower()
     combined = utils.parse_bool(args, "combined", True)

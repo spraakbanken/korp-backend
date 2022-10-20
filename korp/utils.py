@@ -1,8 +1,8 @@
 import datetime
-import datetime
 import functools
 import glob
 import hashlib
+import importlib
 import json
 import os
 import random
@@ -11,6 +11,8 @@ import sys
 import time
 import traceback
 from collections import defaultdict
+from typing import List, Tuple, Optional
+from abc import ABC, abstractmethod
 
 from flask import Response, request, copy_current_request_context, stream_with_context
 from flask import current_app as app
@@ -31,6 +33,8 @@ IS_NUMBER = re.compile(r"^\d+$")
 IS_IDENT = re.compile(r"^[\w\-,|]+$")
 
 QUERY_DELIM = ","
+
+authorizer: Optional["Authorizer"] = None
 
 
 def main_handler(generator):
@@ -489,7 +493,7 @@ class CQPError(Exception):
     pass
 
 
-class KorpAuthenticationError(Exception):
+class KorpAuthorizationError(Exception):
     pass
 
 
@@ -520,24 +524,27 @@ def assert_key(key, attrs, regexp, required=False):
         raise ValueError("Value(s) for key <%s> do(es) not match /%s/: %s" % ("|".join(key), pattern, value))
 
 
-def check_authentication(corpora):
-    """Take a list of corpora, and if any of them are protected, run authentication.
-    Raises an error if authentication fails."""
+def get_protected_corpora() -> List[str]:
+    """Return a list of corpora with restricted access."""
+    if authorizer:
+        return authorizer.get_protected_corpora()
+    else:
+        return []
 
-    from .views import authenticate
 
-    if app.config["PROTECTED_FILE"]:
+def check_authorization(corpora) -> None:
+    """Take a list of corpora, and if any of them are protected, check authorization.
+    Raises an error if authorization fails."""
+
+    if authorizer:
         # Split parallel corpora
         corpora = [cc for c in corpora for cc in c.split("|")]
-        with open(app.config["PROTECTED_FILE"]) as infile:
-            protected = [x.strip() for x in infile.readlines()]
-        c = [c for c in corpora if c.upper() in protected]
-        if c:
-            auth = generator_to_dict(authenticate.authenticate({}))
-            unauthorized = [x for x in c if x.upper() not in auth.get("corpora", [])]
-            if not auth or unauthorized:
-                raise KorpAuthenticationError("You do not have access to the following corpora: %s" %
-                                              ", ".join(unauthorized))
+
+        success, unauthorized, message = authorizer.check_authorization(corpora)
+        if not success:
+            if not message:
+                message = "You do not have access to the following corpora: %s" % ", ".join(unauthorized)
+            raise KorpAuthorizationError(message)
 
 
 def strptime(date):
@@ -564,3 +571,25 @@ class Plugin(Blueprint):
 
     def config(self, key, default=None):
         return app.config["PLUGINS_CONFIG"].get(self.import_name, {}).get(key, default)
+
+
+class Authorizer(ABC):
+    """Class to subclass when implementing an authorizer plugin."""
+
+    auth_class = None
+
+    def __init__(self):
+        pass
+
+    def __init_subclass__(cls):
+        Authorizer.auth_class = cls
+
+    @abstractmethod
+    def get_protected_corpora(self, use_cache: bool = True) -> List[str]:
+        """Get list of corpora with restricted access, in uppercase."""
+        pass
+
+    @abstractmethod
+    def check_authorization(self, corpora: List[str]) -> Tuple[bool, List[str], Optional[str]]:
+        """Take a list of corpora and check that the user has permission to access them."""
+        pass

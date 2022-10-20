@@ -31,7 +31,7 @@ def query_sample(args):
 
     for i in range(len(corpora)):
         corpus = corpora[i]
-        utils.check_authentication([corpus])
+        utils.check_authorization([corpus])
 
         args["corpus"] = corpus
         args["sort"] = "random"
@@ -68,7 +68,7 @@ def query(args):
 
     corpora = utils.parse_corpora(args)
 
-    utils.check_authentication(corpora)
+    utils.check_authorization(corpora)
 
     show = args.get("show") or []  # We don't use .get("show", []) since "show" might be the empty string.
     if isinstance(show, str):

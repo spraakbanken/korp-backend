@@ -41,15 +41,6 @@ DBWPTABLE = "relations"
 DBUSER = ""
 DBPASSWORD = ""
 
-# URL to authentication server
-AUTH_SERVER = ""
-
-# Secret string used when communicating with authentication server
-AUTH_SECRET = ""
-
-# A text file with names of corpora needing authentication, one per line
-PROTECTED_FILE = ""
-
 # Cache path (optional). Script must have read and write access.
 CACHE_DIR = ""
 
