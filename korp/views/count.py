@@ -704,9 +704,32 @@ def count_query_worker(corpus, cqp, group_by, within, ignore_case=(), cut=None, 
 
 
 def count_query_worker_simple(corpus, cqp, group_by, within=None, ignore_case=(), expand_prequeries=True,
-                              use_cache=False, cache_max=None):
+                              use_cache=False, cache_max=0):
     """Worker for simple statistics queries which can be run using cwb-scan-corpus.
     Currently only used for searches on [] (any word)."""
+
+    if use_cache:
+        checksum = utils.get_hash((cqp,
+                                   group_by,
+                                   within,
+                                   sorted(ignore_case),
+                                   expand_prequeries))
+
+        with memcached.get_client() as mc:
+            prefix = utils.cache_prefix(mc, corpus)
+            cache_key = "%s:count_data_%s" % (prefix, checksum)
+            cache_size_key = "%s:count_size_%s" % (prefix, checksum)
+
+            cached_size = mc.get(cache_size_key)
+            if cached_size is not None:
+                corpus_hits, corpus_size = cached_size
+                if corpus_hits == 0:
+                    return [], corpus_hits, corpus_size
+
+                cached_result = mc.get(cache_key)
+                if cached_result is not None:
+                    return cached_result, corpus_hits, corpus_size
+
     lines = list(cwb.run_cwb_scan(corpus, [g[0] for g in group_by]))
     nr_hits = 0
 
@@ -732,6 +755,17 @@ def count_query_worker_simple(corpus, cqp, group_by, within=None, ignore_case=()
             # Convert result to the same format as the regular CQP count
             lines.append("%s %s" % (c, v))
 
+    if use_cache:
+        with memcached.get_client() as mc:
+            mc.add(cache_size_key, (nr_hits, nr_hits))
+
+            # Only save actual data if number of lines doesn't exceed the limit
+            if len(lines) <= cache_max:
+                lines = tuple(lines)
+                try:
+                    mc.add(cache_key, lines)
+                except MemcacheError:
+                    pass
+
     # Corpus size equals number of hits since we count all tokens
-    corpus_size = nr_hits
-    return lines, nr_hits, corpus_size
+    return lines, nr_hits, nr_hits
