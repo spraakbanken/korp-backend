@@ -4,7 +4,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 from flask import request
 
@@ -57,7 +57,7 @@ class SBAuth(utils.Authorizer):
     def __init__(self):
         self._protected = []
 
-    def get_protected_corpora(self):
+    def get_protected_corpora(self, use_cache: bool = True):
         """Get list of protected corpora."""
         if bp.config("PROTECTED_FILE"):
             with open(bp.config("PROTECTED_FILE")) as infile:
@@ -65,7 +65,7 @@ class SBAuth(utils.Authorizer):
         else:
             return []
 
-    def check_authorization(self, corpora: List[str]) -> Tuple[bool, List[str]]:
+    def check_authorization(self, corpora: List[str]) -> Tuple[bool, List[str], Optional[str]]:
         """Take a list of corpora, and check if the user has access to them."""
 
         if bp.config("PROTECTED_FILE"):
@@ -75,5 +75,5 @@ class SBAuth(utils.Authorizer):
                 auth = utils.generator_to_dict(authenticate({}))
                 unauthorized = [x for x in c if x.upper() not in auth.get("corpora", [])]
                 if not auth or unauthorized:
-                    return False, unauthorized
-        return True, []
+                    return False, unauthorized, None
+        return True, [], None
