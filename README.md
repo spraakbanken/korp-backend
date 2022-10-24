@@ -19,10 +19,9 @@ To use the additional features such as the Word Picture you also need:
 
 * [MariaDB](https://mariadb.org/) or [MySQL](http://www.mysql.com/)
 
-For optional caching you need:
+For optional (but strongly recommended) caching you need:
 
 * [Memcached](https://memcached.org/)
-* libmemcached-dev
 
 
 ## Installing the required software
@@ -92,8 +91,8 @@ The name of the MySQL database where the corpus data will be stored.
 * `DBUSER & DBPASSWORD`  
 Username and password for accessing the database.
 
-For caching to work you need to specify both a cache directory (`CACHE_DIR`) and a list of Memcached servers
-or sockets (`MEMCACHED_SERVERS`).
+For caching to work you need to specify both a cache directory (`CACHE_DIR`) and a Memcached server address or socket
+(`MEMCACHED_SERVER`).
 
 
 ## Running the backend

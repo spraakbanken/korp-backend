@@ -4,12 +4,9 @@ import time
 from collections import defaultdict
 from copy import deepcopy
 
-try:
-    import pylibmc
-except ImportError:
-    pylibmc = None
 from flask import Blueprint
 from flask import current_app as app
+from pymemcache.exceptions import MemcacheError
 
 from korp import utils
 from korp.db import mysql
@@ -62,15 +59,20 @@ def relations(args):
         corpora_rest = corpora[:]
 
         if args["cache"]:
-            for corpus in corpora:
-                corpus_checksum = utils.get_hash((word,
-                                                 search_type,
-                                                 minfreq))
-                with memcached.pool.reserve() as mc:
-                    cached_data = mc.get("%s:relations_%s" % (utils.cache_prefix(mc, corpus), corpus_checksum))
-                if cached_data is not None:
-                    relations_data.extend(cached_data)
-                    corpora_rest.remove(corpus)
+            with memcached.get_client() as mc:
+                cache_prefixes = utils.cache_prefix(mc, corpora)
+                memcached_keys = {}
+                for corpus in corpora:
+                    corpus_checksum = utils.get_hash((word,
+                                                     search_type,
+                                                     minfreq))
+                    memcached_keys["%s:relations_%s" % (cache_prefixes[corpus], corpus_checksum)] = corpus
+
+                cached_data = mc.get_many(memcached_keys.keys())
+
+            for key in cached_data:
+                relations_data.extend(cached_data[key])
+                corpora_rest.remove(memcached_keys[key])
 
         selects = []
 
@@ -146,10 +148,10 @@ def relations(args):
 
     def save_cache(corpus, data):
         corpus_checksum = utils.get_hash((word, search_type, minfreq))
-        with memcached.pool.reserve() as mc:
+        with memcached.get_client() as mc:
             try:
-                mc.add("%s:relations_%s" % (utils.cache_prefix(mc, corpus), corpus_checksum), data)
-            except pylibmc.TooBig:
+                mc.add("%s:relations_%s" % (cache_prefixes[corpus], corpus_checksum), data)
+            except MemcacheError:
                 pass
 
     for row in itertools.chain(relations_data, (None,), cursor_result):

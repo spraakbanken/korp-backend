@@ -1,16 +1,13 @@
 import itertools
 import re
 from collections import defaultdict
-from copy import deepcopy
 from concurrent import futures
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 
-try:
-    import pylibmc
-except ImportError:
-    pylibmc = None
 from flask import Blueprint
 from flask import current_app as app
+from pymemcache.exceptions import MemcacheError
 
 from korp import utils
 from korp.memcached import memcached
@@ -52,20 +49,20 @@ def struct_values(args):
 
     if args["cache"]:
         all_cache = True
-        for corpus in corpora:
-            for struct in structs:
-                checksum = utils.get_hash((corpus, struct, split, include_count))
-                with memcached.pool.reserve() as mc:
+        with memcached.get_client() as mc:
+            for corpus in corpora:
+                for struct in structs:
+                    checksum = utils.get_hash((corpus, struct, split, include_count))
                     data = mc.get("%s:struct_values_%s" % (utils.cache_prefix(mc, corpus), checksum))
-                if data is not None:
-                    result["corpora"].setdefault(corpus, {})
-                    result["corpora"][corpus][struct] = data
-                    if "debug" in args:
-                        result.setdefault("DEBUG", {"caches_read": []})
-                        result["DEBUG"]["caches_read"].append("%s:%s" % (corpus, struct))
-                    from_cache.add((corpus, struct))
-                else:
-                    all_cache = False
+                    if data is not None:
+                        result["corpora"].setdefault(corpus, {})
+                        result["corpora"][corpus][struct] = data
+                        if "debug" in args:
+                            result.setdefault("DEBUG", {"caches_read": []})
+                            result["DEBUG"]["caches_read"].append("%s:%s" % (corpus, struct))
+                        from_cache.add((corpus, struct))
+                    else:
+                        all_cache = False
     else:
         all_cache = False
 
@@ -167,10 +164,10 @@ def struct_values(args):
                     continue
                 checksum = utils.get_hash((corpus, struct, split, include_count))
                 try:
-                    with memcached.pool.reserve() as mc:
+                    with memcached.get_client() as mc:
                         cache_key = "%s:struct_values_%s" % (utils.cache_prefix(mc, corpus), checksum)
                         mc.add(cache_key, result["corpora"][corpus].get(struct, {}))
-                except pylibmc.TooBig:
+                except MemcacheError:
                     pass
                 else:
                     if "debug" in args:

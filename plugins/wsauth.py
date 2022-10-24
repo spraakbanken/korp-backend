@@ -23,7 +23,7 @@ class WSAuth(utils.Authorizer):
     def get_protected_corpora(self, use_cache: bool = True) -> List[str]:
         """Get list of corpora with restricted access."""
         if use_cache:
-            with memcached.pool.reserve() as mc:
+            with memcached.get_client() as mc:
                 key = f"protected:{utils.cache_prefix(mc)}"
                 result = mc.get(key)
             if result is not None:
@@ -39,7 +39,7 @@ class WSAuth(utils.Authorizer):
                 protected_corpora.append(corpus)
 
         if use_cache:
-            with memcached.pool.reserve() as mc:
+            with memcached.get_client() as mc:
                 mc.add(key, protected_corpora)
         return protected_corpora
 

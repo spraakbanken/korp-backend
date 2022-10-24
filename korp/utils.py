@@ -2,7 +2,6 @@ import datetime
 import functools
 import glob
 import hashlib
-import importlib
 import json
 import os
 import random
@@ -10,9 +9,9 @@ import re
 import sys
 import time
 import traceback
-from collections import defaultdict
-from typing import List, Tuple, Optional
 from abc import ABC, abstractmethod
+from collections import defaultdict
+from typing import List, Tuple, Optional, Union, Dict
 
 from flask import Response, request, copy_current_request_context, stream_with_context
 from flask import current_app as app
@@ -61,7 +60,7 @@ def main_handler(generator):
             args["cache"] = bool(not app.config["CACHE_DISABLED"] and
                                  not args.get("cache", "").lower() == "false" and
                                  app.config["CACHE_DIR"] and os.path.exists(app.config["CACHE_DIR"]) and
-                                 app.config["MEMCACHED_SERVERS"])
+                                 app.config["MEMCACHED_SERVER"])
 
         if internal:
             # Function is internally used
@@ -233,31 +232,42 @@ def setup_cache():
         action_needed = True
 
     # Set up Memcached if needed
-    if app.config["MEMCACHED_SERVERS"]:
-        with memcached.pool.reserve() as mc:
-            if "multi:version" not in mc:
+    if app.config["MEMCACHED_SERVER"]:
+        with memcached.get_client() as mc:
+            if not mc.get("multi:version"):
+                memcached_data = {}
                 corpora = get_corpus_timestamps()
                 corpora_configs, config_modes, config_presets = get_corpus_config_timestamps()
-                mc.set("multi:version", 1)
-                mc.set("multi:version_config", 1)
-                mc.set("multi:corpora", set(corpora.keys()))
-                mc.set("multi:config_corpora", set(corpora_configs.keys()))
-                mc.set("multi:config_modes", config_modes)
-                mc.set("multi:config_presets", config_presets)
+                memcached_data["multi:version"] = 1
+                memcached_data["multi:version_config"] = 1
+                memcached_data["multi:corpora"] = set(corpora.keys())
+                memcached_data["multi:config_corpora"] = set(corpora_configs.keys())
+                memcached_data["multi:config_modes"] = config_modes
+                memcached_data["multi:config_presets"] = config_presets
                 for corpus in corpora:
-                    mc.set("%s:version" % corpus, 1)
-                    mc.set("%s:version_config" % corpus, 1)
-                    mc.set("%s:last_update" % corpus, corpora[corpus])
-                    mc.set("%s:last_update_config" % corpus, corpora_configs.get(corpus, 0))
+                    memcached_data["%s:version" % corpus] = 1
+                    memcached_data["%s:version_config" % corpus] = 1
+                    memcached_data["%s:last_update" % corpus] = corpora[corpus]
+                    memcached_data["%s:last_update_config" % corpus] = corpora_configs.get(corpus, 0)
                 action_needed = True
+
+                mc.set_many(memcached_data)
 
     return action_needed
 
 
-def cache_prefix(mc, corpus="multi", config=False):
+def cache_prefix(mc, corpus: Union[str, List[str]] = "multi", config: bool = False) -> Union[str, Dict[str, str]]:
     """Get cache version to use as prefix for cache keys."""
+    single = isinstance(corpus, str)
+    if single:
+        corpus = [corpus]
+    corpus_keys = {c: f"{c}:version{'_config' if config else ''}" for c in corpus}
+    versions = mc.get_many(corpus_keys.values())
 
-    return "%s:%d" % (corpus, mc.get(f"{corpus}:version{'_config' if config else ''}", 0))
+    if single:
+        return "%s:%d" % (corpus[0], versions.get(corpus_keys[corpus[0]], 0))
+    else:
+        return {c: "%s:%d" % (c, versions.get(corpus_keys[c], 0)) for c in corpus}
 
 
 def query_optimize(cqp, cqpparams, find_match=True, expand=True, free_search=False):

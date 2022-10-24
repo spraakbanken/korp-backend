@@ -3,13 +3,10 @@ import json
 import os
 from pathlib import Path
 
-try:
-    import pylibmc
-except ImportError:
-    pylibmc = None
 import yaml
 from flask import Blueprint
 from flask import current_app as app
+from pymemcache.exceptions import MemcacheError
 
 from korp import utils
 from korp.memcached import memcached
@@ -31,7 +28,7 @@ def corpus_config(args):
 
     # Try to fetch config from cache
     if args["cache"]:
-        with memcached.pool.reserve() as mc:
+        with memcached.get_client() as mc:
             result = mc.get("%s:corpus_config_%s" % (utils.cache_prefix(mc, config=True), cache_checksum))
         if result:
             if "debug" in args:
@@ -45,10 +42,10 @@ def corpus_config(args):
 
     # Save to cache
     if args["cache"]:
-        with memcached.pool.reserve() as mc:
+        with memcached.get_client() as mc:
             try:
                 added = mc.add("%s:corpus_config_%s" % (utils.cache_prefix(mc, config=True), cache_checksum), result)
-            except pylibmc.TooBig:
+            except MemcacheError:
                 pass
             else:
                 if added and "debug" in args:
@@ -133,7 +130,7 @@ def get_mode(mode_name: str, corpora: list, cache: bool):
         # Load corpus config from cache if possible
         cached_corpus = None
         if cache:
-            with memcached.pool.reserve() as mc:
+            with memcached.get_client() as mc:
                 cached_corpus = mc.get("%s:corpus_config_%s" % (utils.cache_prefix(mc, config=True),
                                                                 os.path.basename(corpus_file)))
             if cached_corpus:
@@ -144,11 +141,11 @@ def get_mode(mode_name: str, corpora: list, cache: bool):
                 corpus_def = yaml.safe_load(fp)
             # Save to cache
             if cache:
-                with memcached.pool.reserve() as mc:
+                with memcached.get_client() as mc:
                     try:
                         mc.add("%s:corpus_config_%s" % (utils.cache_prefix(mc, config=True),
                                                         os.path.basename(corpus_file)), corpus_def)
-                    except pylibmc.TooBig:
+                    except MemcacheError:
                         pass
 
         corpus_id = corpus_def["id"]

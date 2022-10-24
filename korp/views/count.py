@@ -1,16 +1,12 @@
 import itertools
-
 from collections import defaultdict
-from dateutil.relativedelta import relativedelta
 from concurrent import futures
 from concurrent.futures import ThreadPoolExecutor
+
+from dateutil.relativedelta import relativedelta
 from flask import Blueprint
 from flask import current_app as app
-
-try:
-    import pylibmc
-except ImportError:
-    pylibmc = None
+from pymemcache.exceptions import MemcacheError
 
 from korp import utils
 from korp.cwb import cwb
@@ -106,21 +102,24 @@ def count(args):
     read_from_cache = 0
 
     if args["cache"]:
-        for corpus in corpora:
-            corpus_checksum = utils.get_hash((cqp,
-                                             group_by,
-                                             within[corpus],
-                                             sorted(ignore_case),
-                                             relative_to,
-                                             expand_prequeries))
+        # Use cache to skip corpora with zero hits
+        memcached_keys = {}
+        with memcached.get_client() as mc:
+            cache_prefixes = utils.cache_prefix(mc, corpora)
+            for corpus in corpora:
+                corpus_checksum = utils.get_hash((cqp,
+                                                 group_by,
+                                                 within[corpus],
+                                                 sorted(ignore_case),
+                                                 expand_prequeries))
+                memcached_keys["%s:count_size_%s" % (cache_prefixes[corpus], corpus_checksum)] = corpus
 
-            with memcached.pool.reserve() as mc:
-                cached_size = mc.get("%s:count_size_%s" % (utils.cache_prefix(mc, corpus), corpus_checksum))
-            if cached_size is not None:
-                nr_hits = cached_size[0]
-                read_from_cache += 1
-                if nr_hits == 0:
-                    zero_hits.append(corpus)
+            cached_size = mc.get_many(memcached_keys.keys())
+        for key in cached_size:
+            nr_hits = cached_size[key][0]
+            read_from_cache += 1
+            if nr_hits == 0:
+                zero_hits.append(memcached_keys[key])
 
         if "debug" in args:
             debug["cache_coverage"] = "%d/%d" % (read_from_cache, len(corpora))
@@ -166,7 +165,7 @@ def count(args):
         future_query = dict((executor.submit(count_function, corpus=corpus, cqp=cqp, group_by=group_by,
                                              within=within[corpus], ignore_case=ignore_case,
                                              expand_prequeries=expand_prequeries,
-                                             use_cache=args["cache"]), corpus)
+                                             use_cache=args["cache"], cache_max=app.config["CACHE_MAX_STATS"]), corpus)
                             for corpus in corpora if corpus not in zero_hits)
 
         for future in futures.as_completed(future_query):
@@ -601,20 +600,20 @@ def count_time(args):
 
 def count_query_worker(corpus, cqp, group_by, within, ignore_case=(), cut=None, expand_prequeries=True,
                        use_cache=False, cache_max=0):
+    fullcqp = cqp
     subcqp = None
     if isinstance(cqp[-1], list):
         subcqp = cqp[-1]
         cqp = cqp[:-1]
 
     if use_cache:
-        checksum = utils.get_hash((cqp,
-                                  subcqp,
+        checksum = utils.get_hash((fullcqp,
                                   group_by,
                                   within,
                                   sorted(ignore_case),
                                   expand_prequeries))
 
-        with memcached.pool.reserve() as mc:
+        with memcached.get_client() as mc:
             prefix = utils.cache_prefix(mc, corpus)
             cache_key = "%s:count_data_%s" % (prefix, checksum)
             cache_size_key = "%s:count_size_%s" % (prefix, checksum)
@@ -689,16 +688,16 @@ def count_query_worker(corpus, cqp, group_by, within, ignore_case=(), cut=None, 
             break
 
     if use_cache:
-        with memcached.pool.reserve() as mc:
+        lines = list(lines)
+        with memcached.get_client() as mc:
             mc.add(cache_size_key, (nr_hits, corpus_size))
 
-        # Only save actual data if number of lines doesn't exceed the limit
-        if nr_hits <= cache_max:
-            lines = tuple(lines)
-            with memcached.pool.reserve() as mc:
+            # Only save actual data if number of lines doesn't exceed the limit
+            if len(lines) <= cache_max:
+                lines = tuple(lines)
                 try:
                     mc.add(cache_key, lines)
-                except pylibmc.TooBig:
+                except MemcacheError:
                     pass
 
     return lines, nr_hits, corpus_size

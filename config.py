@@ -47,14 +47,11 @@ CACHE_DIR = ""
 # Disk cache lifespan in minutes
 CACHE_LIFESPAN = 20
 
-# List of Memcached servers or sockets (socket paths must start with slash)
-MEMCACHED_SERVERS = []
-
-# Size of Memcached client pool
-MEMCACHED_POOL_SIZE = 25
+# Memcached server IP address and port, or path to socket file (socket path must start with slash)
+MEMCACHED_SERVER = None
 
 # Max number of rows from count command to cache
-CACHE_MAX_STATS = 5000
+CACHE_MAX_STATS = 50
 
 # Corpus configuration directory
 CORPUS_CONFIG_DIR = ""

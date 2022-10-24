@@ -2,13 +2,9 @@ import itertools
 from collections import defaultdict
 
 from dateutil.relativedelta import relativedelta
-
-try:
-    import pylibmc
-except ImportError:
-    pylibmc = None
 from flask import Blueprint
 from flask import current_app as app
+from pymemcache.exceptions import MemcacheError
 
 from korp import utils
 from korp.db import mysql
@@ -59,7 +55,7 @@ def timespan(args, no_combined_cache=False):
                                            fromdate,
                                            todate,
                                            sorted(corpora)))
-        with memcached.pool.reserve() as mc:
+        with memcached.get_client() as mc:
             cache_combined_key = "%s:timespan_%s" % (utils.cache_prefix(mc), utils.get_hash(combined_checksum))
             result = mc.get(cache_combined_key)
         if result is not None:
@@ -70,15 +66,16 @@ def timespan(args, no_combined_cache=False):
             return
 
         # Look for per-corpus caches
-        for corpus in corpora:
-            corpus_checksum = utils.get_hash((fromdate, todate, granularity, strategy))
-            with memcached.pool.reserve() as mc:
-                cache_key = "%s:timespan_%s" % (utils.cache_prefix(mc, corpus), corpus_checksum)
+        with memcached.get_client() as mc:
+            cache_prefixes = utils.cache_prefix(mc, corpora)
+            for corpus in corpora:
+                corpus_checksum = utils.get_hash((fromdate, todate, granularity, strategy))
+                cache_key = "%s:timespan_%s" % (cache_prefixes[corpus], corpus_checksum)
                 corpus_cached_data = mc.get(cache_key)
 
-            if corpus_cached_data is not None:
-                cached_data.extend(corpus_cached_data)
-                corpora_rest.remove(corpus)
+                if corpus_cached_data is not None:
+                    cached_data.extend(corpus_cached_data)
+                    corpora_rest.remove(corpus)
 
     ns = {}
 
@@ -121,28 +118,28 @@ def timespan(args, no_combined_cache=False):
             cursor = tuple()
 
         if args["cache"]:
-            def save_cache(corpus, data):
+            def save_cache(mc, corpus, data):
                 corpus_checksum = utils.get_hash((fromdate, todate, granularity, strategy))
-                with memcached.pool.reserve() as mc:
-                    cache_key = "%s:timespan_%s" % (utils.cache_prefix(mc, corpus), corpus_checksum)
-                    try:
-                        mc.add(cache_key, data)
-                    except pylibmc.TooBig:
-                        pass
+                cache_key = "%s:timespan_%s" % (cache_prefixes[corpus], corpus_checksum)
+                try:
+                    mc.add(cache_key, data)
+                except MemcacheError:
+                    pass
 
             corpus = None
             corpus_data = []
-            for row in cursor:
-                if corpus is None:
-                    corpus = row["corpus"]
-                elif not row["corpus"] == corpus:
-                    save_cache(corpus, corpus_data)
-                    corpus_data = []
-                    corpus = row["corpus"]
-                corpus_data.append(row)
-                cached_data.append(row)
-            if corpus is not None:
-                save_cache(corpus, corpus_data)
+            with memcached.get_client() as mc:
+                for row in cursor:
+                    if corpus is None:
+                        corpus = row["corpus"]
+                    elif not row["corpus"] == corpus:
+                        save_cache(mc, corpus, corpus_data)
+                        corpus_data = []
+                        corpus = row["corpus"]
+                    corpus_data.append(row)
+                    cached_data.append(row)
+                if corpus is not None:
+                    save_cache(mc, corpus, corpus_data)
 
         ns["result"] = timespan_calculator(itertools.chain(cached_data, cursor), granularity=granularity,
                                            combined=combined, per_corpus=per_corpus, strategy=strategy)
@@ -152,11 +149,11 @@ def timespan(args, no_combined_cache=False):
 
     if args["cache"] and not no_combined_cache:
         # Save cache for whole query
-        with memcached.pool.reserve() as mc:
-            try:
+        try:
+            with memcached.get_client() as mc:
                 mc.add(cache_combined_key, ns["result"])
-            except pylibmc.TooBig:
-                pass
+        except MemcacheError:
+            pass
 
     yield ns["result"]
 

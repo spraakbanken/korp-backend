@@ -1,13 +1,6 @@
 import importlib
 from pathlib import Path
 
-try:
-    import pylibmc
-    cache_disabled = False
-except ImportError:
-    print("Could not load pylibmc. Caching will be disabled.")
-    cache_disabled = True
-
 from flask import Flask
 from flask.blueprints import Blueprint
 from flask_cors import CORS
@@ -18,7 +11,7 @@ from korp.db import mysql
 from korp.memcached import memcached
 
 # The version of this script
-VERSION = "8.2.0"
+VERSION = "8.2.5"
 
 
 def create_app():
@@ -60,11 +53,10 @@ def create_app():
 
     mysql.init_app(app)
 
-    # Set up Memcached client pool
-    global cache_disabled
-    if app.config["MEMCACHED_SERVERS"] and not cache_disabled:
-        memcached.init(app.config["MEMCACHED_SERVERS"], app.config["MEMCACHED_POOL_SIZE"])
-    app.config["CACHE_DISABLED"] = True if cache_disabled or memcached.pool is None else False
+    # Set up Memcached
+    if app.config["MEMCACHED_SERVER"]:
+        memcached.init(app.config["MEMCACHED_SERVER"])
+    app.config["CACHE_DISABLED"] = not memcached.active
 
     # Set up caching
     if not app.config["CACHE_DISABLED"]:

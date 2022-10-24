@@ -1,9 +1,9 @@
-import uuid
-import binascii
 import base64
+import binascii
 import os
-import zlib
 import random
+import uuid
+import zlib
 from collections import defaultdict, OrderedDict
 from concurrent import futures
 from concurrent.futures import ThreadPoolExecutor
@@ -122,6 +122,7 @@ def query(args):
     # Parameters used for all queries
     queryparams = {"free_search": free_search,
                    "use_cache": use_cache,
+                   "cache_dir": app.config["CACHE_DIR"],
                    "show": show,
                    "show_structs": show_structs,
                    "expand_prequeries": expand_prequeries,
@@ -171,18 +172,21 @@ def query(args):
                 debug["query_data_checksum_mismatch"] = True
 
     if use_cache and not saved_statistics:
+        memcached_keys = {}
         # Query data parsing failed or was missing, so look for cached hits instead
-        for corpus in corpora:
-            corpus_checksum = utils.get_hash((cqp,
-                                             within[corpus],
-                                             cut,
-                                             expand_prequeries,
-                                             free_search))
-            with memcached.pool.reserve() as mc:
-                cached_corpus_hits = mc.get(
-                    "%s:query_size_%s" % (utils.cache_prefix(mc, corpus.split("|")[0]), corpus_checksum))
-            if cached_corpus_hits is not None:
-                saved_statistics[corpus] = cached_corpus_hits
+        with memcached.get_client() as mc:
+            cache_prefixes = utils.cache_prefix(mc, [corpus.split("|")[0] for corpus in corpora])
+            for corpus in corpora:
+                corpus_checksum = utils.get_hash((cqp,
+                                                 within[corpus],
+                                                 cut,
+                                                 expand_prequeries,
+                                                 free_search))
+                memcached_keys["%s:query_size_%s" % (cache_prefixes[corpus.split("|")[0]], corpus_checksum)] = corpus
+
+            cached_corpus_hits = mc.get_many(memcached_keys.keys())
+        for key in cached_corpus_hits:
+            saved_statistics[memcached_keys[key]] = cached_corpus_hits[key]
 
     ns.start_local = start
     ns.end_local = end
@@ -325,7 +329,7 @@ def query(args):
 
 def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, show_structs=None, start=0, end=10,
                  sort=None, random_seed=None,
-                 no_results=False, expand_prequeries=True, free_search=False, use_cache=False):
+                 no_results=False, expand_prequeries=True, free_search=False, use_cache=False, cache_dir=None):
     if use_cache:
         # Calculate checksum
         # Needs to contain all arguments that may influence the results
@@ -341,10 +345,10 @@ def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, sh
         cache_query = "query_data_%s" % checksum
         cache_query_temp = cache_query + "_" + unique_id
 
-        cache_filename = os.path.join(app.config["CACHE_DIR"], "%s:query_data_%s" % (corpus.split("|")[0], checksum))
+        cache_filename = os.path.join(cache_dir, "%s:query_data_%s" % (corpus.split("|")[0], checksum))
         cache_filename_temp = cache_filename + "_" + unique_id
 
-        with memcached.pool.reserve() as mc:
+        with memcached.get_client() as mc:
             cache_size_key = "%s:query_size_%s" % (utils.cache_prefix(mc, corpus.split("|")[0]), checksum)
             cache_hits = mc.get(cache_size_key)
         is_cached = cache_hits is not None and os.path.isfile(cache_filename)
@@ -406,7 +410,7 @@ def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, sh
     cmd = []
 
     if use_cache:
-        cmd += ['set DataDirectory "%s";' % app.config["CACHE_DIR"]]
+        cmd += ['set DataDirectory "%s";' % cache_dir]
 
     cmd += ["%s;" % corpus]
 
@@ -495,7 +499,7 @@ def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, sh
 
     if use_cache and not is_cached and not cached_no_hits:
         # Save number of hits
-        with memcached.pool.reserve() as mc:
+        with memcached.get_client() as mc:
             mc.add(cache_size_key, nr_hits)
 
         try:
@@ -674,9 +678,9 @@ def query_parse_lines(corpus, lines, attrs, show, show_structs, free_matches=Fal
 
 def query_and_parse(corpus, cqp, within=None, cut=None, context=None, show=None, show_structs=None, start=0, end=10,
                     sort=None, random_seed=None, no_results=False, expand_prequeries=True, free_search=False,
-                    use_cache=False):
+                    use_cache=False, cache_dir=None):
     lines, nr_hits, attrs = query_corpus(corpus, cqp, within, cut, context, show, show_structs, start, end, sort,
-                                         random_seed, no_results, expand_prequeries, free_search, use_cache)
+                                         random_seed, no_results, expand_prequeries, free_search, use_cache, cache_dir)
     kwic = query_parse_lines(corpus, lines, attrs, show, show_structs, free_matches=free_search)
     return kwic, nr_hits
 
