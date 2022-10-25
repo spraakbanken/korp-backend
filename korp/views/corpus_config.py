@@ -7,6 +7,10 @@ import yaml
 from flask import Blueprint
 from flask import current_app as app
 from pymemcache.exceptions import MemcacheError
+try:
+    from yaml import CSafeLoader as SafeLoader
+except ImportError:
+    from yaml import SafeLoader
 
 from korp import utils
 from korp.memcached import memcached
@@ -52,6 +56,10 @@ def corpus_config(args):
                     result.setdefault("DEBUG", {})
                     result["DEBUG"]["cache_saved"] = True
 
+    if "debug" in args:
+        result.setdefault("DEBUG", {})
+        result["DEBUG"]["yaml_loader"] = SafeLoader.__name__
+
     yield result
 
 
@@ -64,7 +72,7 @@ def get_modes(mode_name=None):
     modes = []
     for mode_file in (Path(app.config["CORPUS_CONFIG_DIR"]) / "modes").glob("*.yaml"):
         with open(mode_file, "r", encoding="utf-8") as f:
-            mode = yaml.safe_load(f)
+            mode = yaml.load(f, Loader=SafeLoader)
             # Only include hidden modes when accessed directly
             if mode.get("hidden") and not mode_name == mode_file.stem:
                 continue
@@ -89,7 +97,7 @@ def get_mode(mode_name: str, corpora: list, cache: bool):
     try:
         with open(os.path.join(app.config["CORPUS_CONFIG_DIR"], "modes", mode_name + ".yaml"), "r",
                   encoding="utf-8") as fp:
-            mode = yaml.safe_load(fp)
+            mode = yaml.load(fp, Loader=SafeLoader)
     except FileNotFoundError:
         return
 
@@ -138,7 +146,7 @@ def get_mode(mode_name: str, corpora: list, cache: bool):
 
         if not cached_corpus:
             with open(corpus_file, "r", encoding="utf-8") as fp:
-                corpus_def = yaml.safe_load(fp)
+                corpus_def = yaml.load(fp, Loader=SafeLoader)
             # Save to cache
             if cache:
                 with memcached.get_client() as mc:
@@ -175,7 +183,7 @@ def get_mode(mode_name: str, corpora: list, cache: bool):
                                             with open(os.path.join(app.config["CORPUS_CONFIG_DIR"], "attributes",
                                                                    attr_type_name, preset_name + ".yaml"),
                                                       encoding="utf-8") as f:
-                                                attr_def = yaml.safe_load(f)
+                                                attr_def = yaml.load(f, Loader=SafeLoader)
                                                 if not attr_def:
                                                     warnings.add(f"Preset {preset_name!r} is empty.")
                                                     to_delete.append(i)
