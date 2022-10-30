@@ -137,7 +137,6 @@ def timespan(args, no_combined_cache=False):
                         corpus_data = []
                         corpus = row["corpus"]
                     corpus_data.append(row)
-                    cached_data.append(row)
                 if corpus is not None:
                     save_cache(mc, corpus, corpus_data)
 
