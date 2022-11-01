@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from typing import List, Tuple, Optional
 
-import jwt  # From pyjwt
+import jwt  # From pyjwt[crypto]
 from flask import current_app as app
 from flask import request
 
@@ -36,7 +36,7 @@ class WSAuth(utils.Authorizer):
         protected_corpora = []
         for corpus, c_info in corpus_info["corpora"].items():
             if c_info["info"].get("Protected", "false").lower() == "true":
-                protected_corpora.append(corpus)
+                protected_corpora.append(corpus.upper())
 
         if use_cache:
             with memcached.get_client() as mc:
@@ -59,7 +59,7 @@ class WSAuth(utils.Authorizer):
                     return False, [], "The provided JWT has expired"
 
                 for corpus, level in user_token.get("scope", {}).get("corpora", {}).items():
-                    user_corpora.append(corpus)
+                    user_corpora.append(corpus.upper())
 
             unauthorized = [c.upper() for c in corpora if c.upper() in protected and c.upper() not in user_corpora]
             if unauthorized:
