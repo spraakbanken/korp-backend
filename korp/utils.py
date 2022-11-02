@@ -2,6 +2,7 @@ import datetime
 import functools
 import glob
 import hashlib
+import inspect
 import json
 import os
 import random
@@ -18,6 +19,7 @@ from flask import current_app as app
 from flask.blueprints import Blueprint
 from gevent.queue import Queue, Empty
 from gevent.threadpool import ThreadPool
+from gevent.event import Event
 
 from korp.db import mysql
 from korp.memcached import memcached
@@ -145,11 +147,22 @@ def main_handler(generator):
 
 def prevent_timeout(generator):
     """Decorator for long-running functions that might otherwise timeout."""
+    abortable = "abort_event" in inspect.signature(generator).parameters
+
     @functools.wraps(generator)
     def decorated(args=None, *pargs, **kwargs):
+        if abortable:
+            abort_event = Event()
+            kwargs["abort_event"] = abort_event
+
         if args["internal"]:
             # Internally used
-            yield from generator(args, *pargs, **kwargs)
+            try:
+                yield from generator(args, *pargs, **kwargs)
+            except GeneratorExit:
+                if abortable:
+                    abort_event.set()
+                raise
             return
 
         def f(queue):
@@ -157,7 +170,7 @@ def prevent_timeout(generator):
                 queue.put(response)
             queue.put("DONE")
 
-        timeout = 15
+        timeout = 5
         q = Queue()
 
         @copy_current_request_context
@@ -178,9 +191,19 @@ def prevent_timeout(generator):
                 elif isinstance(msg, tuple):
                     raise CustomTracebackException(msg)
                 else:
-                    yield msg
+                    try:
+                        yield msg
+                    except GeneratorExit:
+                        if abortable:
+                            abort_event.set()
+                        raise
             except Empty:
-                yield {}
+                try:
+                    yield {}
+                except GeneratorExit:
+                    if abortable:
+                        abort_event.set()
+                    raise
 
     return decorated
 

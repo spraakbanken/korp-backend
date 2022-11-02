@@ -1,4 +1,5 @@
 import os
+import psutil
 import subprocess
 import re
 
@@ -21,7 +22,7 @@ class CWB:
         self.locale = locale
         self.encoding = encoding
 
-    def run_cqp(self, command, attr_ignore=False):
+    def run_cqp(self, command, attr_ignore=False, abort_event=None):
         """Call the CQP binary with the given command, and the request data.
         Yield one result line at the time, disregarding empty lines.
         If there is an error, raise a CQPError exception.
@@ -36,7 +37,26 @@ class CWB:
                                    stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, env=env)
-        reply, error = process.communicate(command)
+
+        # Use a loop and timeout to be able to kill aborted searches
+        timeout = 1
+        try:
+            reply, error = process.communicate(command, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            while True:
+                if abort_event and abort_event.is_set():
+                    # Kill cqp process and its children
+                    children = psutil.Process(process.pid).children(recursive=True)
+                    process.kill()
+                    for child in children:
+                        child.kill()
+                    return
+                try:
+                    reply, error = process.communicate(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    continue
+                break
+
         if error:
             error = error.decode(self.encoding)
             # Remove newlines from the error string:
@@ -59,14 +79,26 @@ class CWB:
             if line:
                 yield line
 
-    def run_cwb_scan(self, corpus, attrs):
+    def run_cwb_scan(self, corpus, attrs, abort_event=None):
         """Call the cwb-scan-corpus binary with the given arguments.
         Yield one result line at the time, disregarding empty lines.
         If there is an error, raise a CQPError exception.
         """
         process = subprocess.Popen([self.scan_executable, "-q", "-r", self.registry, corpus] + attrs,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        reply, error = process.communicate()
+
+        # Use a loop and timeout to be able to kill aborted searches
+        timeout = 1
+        while True:
+            if abort_event and abort_event.is_set():
+                process.kill()
+                return
+            try:
+                reply, error = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                continue
+            break
+
         if error:
             # Remove newlines from the error string:
             error = re.sub(r"\s+", r" ", error.decode())

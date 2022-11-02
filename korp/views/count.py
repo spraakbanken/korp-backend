@@ -19,7 +19,7 @@ bp = Blueprint("count", __name__)
 @bp.route("/count", methods=["GET", "POST"])
 @utils.main_handler
 @utils.prevent_timeout
-def count(args):
+def count(args, abort_event=None):
     """Perform a CQP query and return a count of the given words/attributes."""
     utils.assert_key("cqp", args, r"", True)
     utils.assert_key("corpus", args, utils.IS_IDENT, True)
@@ -161,14 +161,22 @@ def count(args):
         for i in range(len(subcqp)):
             result["corpora"][corpus][i + 1]["cqp"] = subcqp[i]
 
+    if abort_event and abort_event.is_set():
+        return
+
     with ThreadPoolExecutor(max_workers=app.config["PARALLEL_THREADS"]) as executor:
         future_query = dict((executor.submit(count_function, corpus=corpus, cqp=cqp, group_by=group_by,
                                              within=within[corpus], ignore_case=ignore_case,
                                              expand_prequeries=expand_prequeries,
-                                             use_cache=args["cache"], cache_max=app.config["CACHE_MAX_STATS"]), corpus)
+                                             use_cache=args["cache"], cache_max=app.config["CACHE_MAX_STATS"],
+                                             abort_event=abort_event), corpus)
                             for corpus in corpora if corpus not in zero_hits)
 
         for future in futures.as_completed(future_query):
+            if abort_event and abort_event.is_set():
+                for f in future_query:
+                    f.cancel()
+                return
             corpus = future_query[future]
             if future.exception() is not None:
                 raise utils.CQPError(future.exception())
@@ -259,6 +267,9 @@ def count(args):
                     ns.progress_count += 1
 
     result["count"] = len(total_stats[0]["rows"])
+
+    if abort_event and abort_event.is_set():
+        return
 
     # Calculate relative numbers for the total
     for query_no in range(len(subcqp) + 1):
@@ -599,7 +610,7 @@ def count_time(args):
 
 
 def count_query_worker(corpus, cqp, group_by, within, ignore_case=(), cut=None, expand_prequeries=True,
-                       use_cache=False, cache_max=0):
+                       use_cache=False, cache_max=0, abort_event=None):
     fullcqp = cqp
     subcqp = None
     if isinstance(cqp[-1], list):
@@ -671,7 +682,7 @@ def count_query_worker(corpus, cqp, group_by, within, ignore_case=(), cut=None, 
 
     cmd += ["exit;"]
 
-    lines = cwb.run_cqp(cmd)
+    lines = cwb.run_cqp(cmd, abort_event=abort_event)
 
     # Skip CQP version
     next(lines)
@@ -704,7 +715,7 @@ def count_query_worker(corpus, cqp, group_by, within, ignore_case=(), cut=None, 
 
 
 def count_query_worker_simple(corpus, cqp, group_by, within=None, ignore_case=(), expand_prequeries=True,
-                              use_cache=False, cache_max=0):
+                              use_cache=False, cache_max=0, abort_event=None):
     """Worker for simple statistics queries which can be run using cwb-scan-corpus.
     Currently only used for searches on [] (any word)."""
 
@@ -730,7 +741,7 @@ def count_query_worker_simple(corpus, cqp, group_by, within=None, ignore_case=()
                 if cached_result is not None:
                     return cached_result, corpus_hits, corpus_size
 
-    lines = list(cwb.run_cwb_scan(corpus, [g[0] for g in group_by]))
+    lines = list(cwb.run_cwb_scan(corpus, [g[0] for g in group_by], abort_event=abort_event))
     nr_hits = 0
 
     ic_index = []

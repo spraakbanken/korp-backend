@@ -47,7 +47,7 @@ def query_sample(args):
 @bp.route("/query", methods=["GET", "POST"])
 @utils.main_handler
 @utils.prevent_timeout
-def query(args):
+def query(args, abort_event=None):
     """Perform a CQP query and return a number of matches."""
     utils.assert_key("cqp", args, r"", True)
     utils.assert_key("corpus", args, utils.IS_IDENT, True)
@@ -198,6 +198,9 @@ def query(args):
     else:
         complete_hits = False
 
+    if abort_event and abort_event.is_set():
+        return
+
     if complete_hits:
         # We have saved_statistics available for all corpora, so calculate which
         # corpora need to be queried and then query them in parallel.
@@ -213,7 +216,7 @@ def query(args):
             # If only hits in one corpus, it is faster to not use threads
             corpus, hits = list(corpora_hits.items())[0]
             result["kwic"], _ = query_and_parse(corpus, within=within[corpus], context=context[corpus],
-                                                start=hits[0], end=hits[1], **queryparams)
+                                                start=hits[0], end=hits[1], abort_event=abort_event, **queryparams)
         else:
             if incremental:
                 yield {"progress_corpora": list(corpora_hits.keys())}
@@ -221,11 +224,16 @@ def query(args):
             with ThreadPoolExecutor(max_workers=app.config["PARALLEL_THREADS"]) as executor:
                 future_query = dict(
                     (executor.submit(query_and_parse, corpus, within=within[corpus], context=context[corpus],
-                                     start=corpora_hits[corpus][0], end=corpora_hits[corpus][1], **queryparams),
+                                     start=corpora_hits[corpus][0], end=corpora_hits[corpus][1],
+                                     abort_event=abort_event, **queryparams),
                      corpus)
                     for corpus in corpora_hits)
 
                 for future in futures.as_completed(future_query):
+                    if abort_event and abort_event.is_set():
+                        for f in future_query:
+                            f.cancel()
+                        return
                     corpus = future_query[future]
                     if future.exception() is not None:
                         raise utils.CQPError(future.exception())
@@ -252,6 +260,8 @@ def query(args):
 
         # Serial until we've got all the requested rows
         for i, corpus in enumerate(corpora):
+            if abort_event and abort_event.is_set():
+                return
             if ns.end_local < 0:
                 ns.rest_corpora = corpora[i:]
                 break
@@ -264,7 +274,8 @@ def query(args):
 
             if not skip_corpus:
                 kwic, nr_hits = query_and_parse(corpus, within=within[corpus], context=context[corpus],
-                                                start=ns.start_local, end=ns.end_local, **queryparams)
+                                                start=ns.start_local, end=ns.end_local, abort_event=abort_event,
+                                                **queryparams)
 
             statistics[corpus] = nr_hits
             ns.total_hits += nr_hits
@@ -295,11 +306,16 @@ def query(args):
             with ThreadPoolExecutor(max_workers=app.config["PARALLEL_THREADS"]) as executor:
                 future_query = dict(
                     (executor.submit(query_corpus, corpus, within=within[corpus],
-                                     context=context[corpus], start=0, end=0, no_results=True, **queryparams),
+                                     context=context[corpus], start=0, end=0, no_results=True, abort_event=abort_event,
+                                     **queryparams),
                      corpus)
                     for corpus in ns.rest_corpora if corpus not in saved_statistics)
 
                 for future in futures.as_completed(future_query):
+                    if abort_event and abort_event.is_set():
+                        for f in future_query:
+                            f.cancel()
+                        return
                     corpus = future_query[future]
                     if future.exception() is not None:
                         raise utils.CQPError(future.exception())
@@ -329,7 +345,8 @@ def query(args):
 
 def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, show_structs=None, start=0, end=10,
                  sort=None, random_seed=None,
-                 no_results=False, expand_prequeries=True, free_search=False, use_cache=False, cache_dir=None):
+                 no_results=False, expand_prequeries=True, free_search=False, use_cache=False, cache_dir=None,
+                 abort_event=None):
     if use_cache:
         # Calculate checksum
         # Needs to contain all arguments that may influence the results
@@ -484,8 +501,7 @@ def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, sh
 
     ######################################################################
     # Then we call the CQP binary, and read the results
-
-    lines = cwb.run_cqp(cmd, attr_ignore=True)
+    lines = cwb.run_cqp(cmd, attr_ignore=True, abort_event=abort_event)
 
     # Skip the CQP version
     next(lines)
@@ -510,7 +526,7 @@ def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, sh
     return lines, nr_hits, attrs
 
 
-def query_parse_lines(corpus, lines, attrs, show, show_structs, free_matches=False):
+def query_parse_lines(corpus, lines, attrs, show, show_structs, free_matches=False, abort_event=None):
     """Parse concordance lines from CWB."""
 
     # Filter out unavailable attributes
@@ -524,6 +540,8 @@ def query_parse_lines(corpus, lines, attrs, show, show_structs, free_matches=Fal
 
     kwic = []
     for line in lines:
+        if abort_event and abort_event.is_set():
+            return
         linestructs = {}
         match = {}
 
@@ -678,10 +696,12 @@ def query_parse_lines(corpus, lines, attrs, show, show_structs, free_matches=Fal
 
 def query_and_parse(corpus, cqp, within=None, cut=None, context=None, show=None, show_structs=None, start=0, end=10,
                     sort=None, random_seed=None, no_results=False, expand_prequeries=True, free_search=False,
-                    use_cache=False, cache_dir=None):
+                    use_cache=False, cache_dir=None, abort_event=None):
     lines, nr_hits, attrs = query_corpus(corpus, cqp, within, cut, context, show, show_structs, start, end, sort,
-                                         random_seed, no_results, expand_prequeries, free_search, use_cache, cache_dir)
-    kwic = query_parse_lines(corpus, lines, attrs, show, show_structs, free_matches=free_search)
+                                         random_seed, no_results, expand_prequeries, free_search, use_cache, cache_dir,
+                                         abort_event)
+    kwic = query_parse_lines(corpus, lines, attrs, show, show_structs, free_matches=free_search,
+                             abort_event=abort_event)
     return kwic, nr_hits
 
 
