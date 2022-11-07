@@ -39,7 +39,7 @@ def lemgram_count(args):
     corpora_sql = " AND corpus IN (%s)" % ", ".join("'%s'" % utils.sql_escape(c) for c in corpora) if corpora else ""
 
     sql = "SELECT lemgram, " + sums + " AS freq FROM lemgram_index WHERE" + lemgram_sql + corpora_sql + \
-          " GROUP BY lemgram COLLATE utf8_bin;"
+          " GROUP BY lemgram;"
 
     result = {}
     with app.app_context():
