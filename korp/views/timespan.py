@@ -86,8 +86,12 @@ def timespan(args, no_combined_cache=False):
 
             if strategy == 1:
                 if fromdate and todate:
-                    fromto = " AND ((datefrom >= %s AND dateto <= %s) OR (datefrom <= %s AND dateto >= %s))" % (
-                        utils.sql_escape(fromdate), utils.sql_escape(todate), utils.sql_escape(fromdate), utils.sql_escape(todate))
+                    fromto = (
+                        f" AND ((datefrom >= {utils.sql_escape(fromdate)}"
+                        f" AND dateto <= {utils.sql_escape(todate)})"
+                        f" OR (datefrom <= {utils.sql_escape(fromdate)}"
+                        f" AND dateto >= {utils.sql_escape(todate)}))"
+                    )
             elif strategy == 2:
                 if todate:
                     fromto += " AND datefrom <= '%s'" % utils.sql_escape(todate)

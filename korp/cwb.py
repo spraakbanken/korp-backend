@@ -68,11 +68,14 @@ class CWB:
             # 1) "show +attr" for unknown attr,
             # 2) querying unknown structural attribute,
             # 3) calculating statistics for empty results
-            if not (attr_ignore and "No such attribute:" in error) \
-                and "is not defined for corpus" not in error \
-                and "cl->range && cl->size > 0" not in error \
-                and "neither a positional/structural attribute" not in error \
-                and "CL: major error, cannot compose string: invalid UTF8 string passed to cl_string_canonical..." not in error:
+            if (
+                not (attr_ignore and "No such attribute:" in error)
+                and "is not defined for corpus" not in error
+                and "cl->range && cl->size > 0" not in error
+                and "neither a positional/structural attribute" not in error
+                and "CL: major error, cannot compose string: invalid UTF8 string passed to cl_string_canonical..."
+                not in error
+            ):
                 raise utils.CQPError(error)
         for line in reply.decode(self.encoding, errors="ignore").split(
                 "\n"):  # We don't use splitlines() since it might split on special characters in the data
