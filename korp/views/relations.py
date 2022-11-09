@@ -38,7 +38,7 @@ def relations(args):
     minfreq = args.get("min")
     sort = args.get("sort") or "mi"
     maxresults = int(args.get("max") or 15)
-    minfreqsql = " AND freq >= %s" % minfreq if minfreq else ""
+    minfreqsql = "AND freq >= %s" % minfreq if minfreq else ""
 
     result = {}
 
@@ -76,73 +76,89 @@ def relations(args):
 
         selects = []
 
+        sql_select = """
+            SELECT STRAIGHT_JOIN
+                S1.string AS head,
+                S1.pos AS headpos,
+                F.rel,
+                S2.string AS dep,
+                S2.pos AS deppos,
+                S2.stringextra AS depextra,
+                F.freq,
+                R.freq AS rel_freq,
+                HR.freq AS head_rel_freq,
+                DR.freq AS dep_rel_freq,
+                {corpus_sql} AS corpus,
+                F.id
+        """
+        sql_from_s1 = """
+            FROM
+                `{corpus_table}_strings` AS S1
+                JOIN `{corpus_table}` AS F
+                    ON S1.id = F.head
+                JOIN `{corpus_table}_strings` AS S2
+                    ON F.dep = S2.id
+        """
+        sql_from_s2 = """
+            FROM
+                `{corpus_table}_strings` AS S2
+                JOIN `{corpus_table}` AS F
+                    ON S2.id = F.dep
+                JOIN `{corpus_table}_strings` AS S1
+                    ON F.head = S1.id
+        """
+        sql_from = """
+            JOIN `{corpus_table}_rel` AS R
+                ON F.rel = R.rel
+            JOIN `{corpus_table}_head_rel` AS HR
+                ON F.head = HR.head AND F.rel = HR.rel
+            JOIN `{corpus_table}_dep_rel` AS DR
+                ON F.dep = DR.dep AND F.rel = DR.rel
+        """
+
         if search_type == "lemgram":
-            lemgram_sql = "'%s'" % utils.sql_escape(word)
-
-            for corpus in corpora_rest:
-                corpus_sql = "'%s'" % utils.sql_escape(corpus).upper()
-                corpus_table = app.config["DBWPTABLE"] + "_" + corpus.upper()
-
-                selects.append(
-                    (
-                        corpus.upper(),
-                        "(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, "
-                        "S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, "
-                        f"DR.freq AS dep_rel_freq, {corpus_sql} AS corpus, F.id " +
-                        f"FROM `{corpus_table}_strings` AS S1, `{corpus_table}_strings` AS S2, `{corpus_table}` AS F, "
-                        f"`{corpus_table}_rel` AS R, `{corpus_table}_head_rel` AS HR, `{corpus_table}_dep_rel` AS DR "
-                        f"WHERE S1.string = {lemgram_sql} AND F.head = S1.id AND S2.id = F.dep {minfreqsql} "
-                        "AND F.bfhead = 1 AND F.bfdep = 1 AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel "
-                        "AND F.dep = DR.dep AND F.rel = DR.rel)"
-                    )
-                )
-                selects.append(
-                    (
-                        None,
-                        "(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, "
-                        "S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, "
-                        f"DR.freq AS dep_rel_freq, {corpus_sql} AS corpus, F.id "
-                        f"FROM `{corpus_table}_strings` AS S1, `{corpus_table}_strings` AS S2, `{corpus_table}` AS F, "
-                        f"`{corpus_table}_rel` AS R, `{corpus_table}_head_rel` AS HR, `{corpus_table}_dep_rel` AS DR "
-                        f"WHERE S2.string = {lemgram_sql} AND F.dep = S2.id AND S1.id = F.head {minfreqsql} "
-                        "AND F.bfhead = 1 AND F.bfdep = 1 AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel "
-                        "AND F.dep = DR.dep AND F.rel = DR.rel)"
-                    )
-                )
+            sql_where1 = sql_where2 = """
+                AND F.bfhead = 1
+                AND F.bfdep = 1
+            """
         else:
-            word_sql = "'%s'" % utils.sql_escape(word)
-            word = word
+            sql_where1 = "AND F.wfhead = 1"
+            sql_where2 = "AND F.wfdep = 1"
 
-            for corpus in corpora_rest:
-                corpus_sql = "'%s'" % utils.sql_escape(corpus).upper()
-                corpus_table = app.config["DBWPTABLE"] + "_" + corpus.upper()
+        word_sql = "'%s'" % utils.sql_escape(word)
 
-                selects.append(
-                    (
-                        corpus.upper(),
-                        "(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, "
-                        "S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, "
-                        f"DR.freq AS dep_rel_freq, {corpus_sql} AS corpus, F.id "
-                        f"FROM `{corpus_table}_strings` AS S1, `{corpus_table}_strings` AS S2, `{corpus_table}` AS F, "
-                        f"`{corpus_table}_rel` AS R, `{corpus_table}_head_rel` AS HR, `{corpus_table}_dep_rel` AS DR "
-                        f"WHERE S1.string = {word_sql} AND F.head = S1.id AND F.wfhead = 1 AND S2.id = F.dep "
-                        f"{minfreqsql} AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep "
-                        "AND F.rel = DR.rel)"
-                    )
+        for corpus in corpora_rest:
+            corpus_sql = "'%s'" % utils.sql_escape(corpus).upper()
+            corpus_table = app.config["DBWPTABLE"] + "_" + corpus.upper()
+
+            selects.append(
+                (
+                    corpus.upper(),
+                    f"""
+                    {sql_select.format(corpus_sql=corpus_sql)}
+                    {sql_from_s1.format(corpus_table=corpus_table)}
+                    {sql_from.format(corpus_table=corpus_table)}
+                    WHERE
+                        S1.string = {word_sql}
+                        {sql_where1}
+                        {minfreqsql}
+                    """
                 )
-                selects.append(
-                    (
-                        None,
-                        "(SELECT S1.string AS head, S1.pos AS headpos, F.rel, S2.string AS dep, S2.pos AS deppos, "
-                        "S2.stringextra AS depextra, F.freq, R.freq AS rel_freq, HR.freq AS head_rel_freq, "
-                        f"DR.freq AS dep_rel_freq, {corpus_sql} AS corpus, F.id "
-                        f"FROM `{corpus_table}_strings` AS S1, `{corpus_table}_strings` AS S2, `{corpus_table}` AS F, "
-                        f"`{corpus_table}_rel` AS R, `{corpus_table}_head_rel` AS HR, `{corpus_table}_dep_rel` AS DR "
-                        f"WHERE S2.string = {word_sql} AND F.dep = S2.id AND F.wfdep = 1 AND S1.id = F.head "
-                        f"{minfreqsql} AND F.rel = R.rel AND F.head = HR.head AND F.rel = HR.rel AND F.dep = DR.dep "
-                        "AND F.rel = DR.rel)"
-                    )
+            )
+            selects.append(
+                (
+                    None,
+                    f"""
+                    {sql_select.format(corpus_sql=corpus_sql)}
+                    {sql_from_s2.format(corpus_table=corpus_table)}
+                    {sql_from.format(corpus_table=corpus_table)}
+                    WHERE
+                        S2.string = {word_sql}
+                        {sql_where2}
+                        {minfreqsql}
+                    """
                 )
+            )
 
         cursor_result = []
         if corpora_rest:
@@ -156,7 +172,7 @@ def relations(args):
                         yield {"progress_%d" % progress_count: {"corpus": sql[0]}}
                         progress_count += 1
             else:
-                sql = " UNION ALL ".join(x[1] for x in selects)
+                sql = " UNION ALL ".join(f"({x[1]})" for x in selects)
                 cursor.execute(sql)
                 cursor_result = cursor
 
@@ -300,14 +316,28 @@ def relations_sentences(args):
             corpus_table_sentences = app.config["DBWPTABLE"] + f"_{corpus.upper()}_sentences"
 
             selects.append(
-                f"(SELECT S.sentence, S.start, S.end, '{utils.sql_escape(corpus.upper())}' AS corpus "
-                f"FROM `{corpus_table_sentences}` as S "
-                f"WHERE S.id IN {ids_list})"
+                f"""(
+                    SELECT
+                        S.sentence,
+                        S.start,
+                        S.end,
+                        '{utils.sql_escape(corpus.upper())}' AS corpus
+                    FROM
+                        `{corpus_table_sentences}` as S
+                    WHERE
+                        S.id IN {ids_list}
+                )"""
             )
             counts.append(
-                f"(SELECT '{utils.sql_escape(corpus.upper())}' AS corpus, COUNT(*) AS freq "
-                f"FROM `{corpus_table_sentences}` as S "
-                f"WHERE S.id IN {ids_list})"
+                f"""(
+                    SELECT
+                        '{utils.sql_escape(corpus.upper())}' AS corpus,
+                        COUNT(*) AS freq
+                FROM
+                    `{corpus_table_sentences}` as S
+                WHERE
+                    S.id IN {ids_list}
+                )"""
             )
 
         sql_count = " UNION ALL ".join(counts)
