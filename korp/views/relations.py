@@ -19,7 +19,7 @@ bp = Blueprint("relations", __name__)
 @bp.route("/relations", methods=["GET", "POST"])
 @utils.main_handler
 @utils.prevent_timeout
-def relations(args):
+def relations(args, abort_event=None):
     """Calculate word picture data."""
     utils.assert_key("corpus", args, utils.IS_IDENT, True)
     utils.assert_key("word", args, "", True)
@@ -166,12 +166,16 @@ def relations(args):
                 yield {"progress_corpora": list(corpora_rest)}
                 progress_count = 0
                 for sql in selects:
+                    if abort_event and abort_event.is_set():
+                        return
                     cursor.execute(sql[1])
                     cursor_result.extend(list(cursor))
                     if sql[0]:
                         yield {"progress_%d" % progress_count: {"corpus": sql[0]}}
                         progress_count += 1
             else:
+                if abort_event and abort_event.is_set():
+                    return
                 sql = " UNION ALL ".join(f"({x[1]})" for x in selects)
                 cursor.execute(sql)
                 cursor_result = cursor
