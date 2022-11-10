@@ -594,8 +594,7 @@ def strptime(date):
 
 
 def sql_escape(s):
-    with app.app_context():
-        return mysql.connection.escape_string(s).decode("utf-8") if isinstance(s, str) else s
+    return mysql.connection.escape_string(s).decode("utf-8") if isinstance(s, str) else s
 
 
 class Plugin(Blueprint):

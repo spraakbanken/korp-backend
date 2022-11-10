@@ -79,76 +79,75 @@ def timespan(args, no_combined_cache=False):
 
     ns = {}
 
-    with app.app_context():
-        if corpora_rest:
-            corpora_sql = "(%s)" % ", ".join("'%s'" % utils.sql_escape(c) for c in corpora_rest)
-            fromto = ""
+    if corpora_rest:
+        corpora_sql = "(%s)" % ", ".join("'%s'" % utils.sql_escape(c) for c in corpora_rest)
+        fromto = ""
 
-            if strategy == 1:
-                if fromdate and todate:
-                    fromto = (
-                        f" AND ((datefrom >= {utils.sql_escape(fromdate)}"
-                        f" AND dateto <= {utils.sql_escape(todate)})"
-                        f" OR (datefrom <= {utils.sql_escape(fromdate)}"
-                        f" AND dateto >= {utils.sql_escape(todate)}))"
-                    )
-            elif strategy == 2:
-                if todate:
-                    fromto += " AND datefrom <= '%s'" % utils.sql_escape(todate)
-                if fromdate:
-                    fromto = " AND dateto >= '%s'" % utils.sql_escape(fromdate)
-            elif strategy == 3:
-                if fromdate:
-                    fromto = " AND datefrom >= '%s'" % utils.sql_escape(fromdate)
-                if todate:
-                    fromto += " AND dateto <= '%s'" % utils.sql_escape(todate)
+        if strategy == 1:
+            if fromdate and todate:
+                fromto = (
+                    f" AND ((datefrom >= {utils.sql_escape(fromdate)}"
+                    f" AND dateto <= {utils.sql_escape(todate)})"
+                    f" OR (datefrom <= {utils.sql_escape(fromdate)}"
+                    f" AND dateto >= {utils.sql_escape(todate)}))"
+                )
+        elif strategy == 2:
+            if todate:
+                fromto += " AND datefrom <= '%s'" % utils.sql_escape(todate)
+            if fromdate:
+                fromto = " AND dateto >= '%s'" % utils.sql_escape(fromdate)
+        elif strategy == 3:
+            if fromdate:
+                fromto = " AND datefrom >= '%s'" % utils.sql_escape(fromdate)
+            if todate:
+                fromto += " AND dateto <= '%s'" % utils.sql_escape(todate)
 
-            # TODO: Skip grouping on corpus when we only are after the combined results.
-            # We do the granularity truncation and summation in the DB query if we can (depending on strategy),
-            # since it's much faster than doing it afterwards
+        # TODO: Skip grouping on corpus when we only are after the combined results.
+        # We do the granularity truncation and summation in the DB query if we can (depending on strategy),
+        # since it's much faster than doing it afterwards
 
-            timedata_corpus = "timedata_date" if granularity in ("y", "m", "d") else "timedata"
-            if strategy == 1:
-                # We need the full dates for this strategy, so no truncating of the results
-                sql = "SELECT corpus, datefrom AS df, dateto AS dt, SUM(tokens) AS sum FROM " + timedata_corpus + \
-                      " WHERE corpus IN " + corpora_sql + fromto + " GROUP BY corpus, df, dt ORDER BY NULL;"
-            else:
-                sql = "SELECT corpus, LEFT(datefrom, " + str(shorten[granularity]) + ") AS df, LEFT(dateto, " + \
-                      str(shorten[granularity]) + ") AS dt, SUM(tokens) AS sum FROM " + timedata_corpus + \
-                      " WHERE corpus IN " + corpora_sql + fromto + " GROUP BY corpus, df, dt ORDER BY NULL;"
-            cursor = mysql.connection.cursor()
-            cursor.execute(sql)
+        timedata_corpus = "timedata_date" if granularity in ("y", "m", "d") else "timedata"
+        if strategy == 1:
+            # We need the full dates for this strategy, so no truncating of the results
+            sql = "SELECT corpus, datefrom AS df, dateto AS dt, SUM(tokens) AS sum FROM " + timedata_corpus + \
+                  " WHERE corpus IN " + corpora_sql + fromto + " GROUP BY corpus, df, dt ORDER BY NULL;"
         else:
-            cursor = tuple()
+            sql = "SELECT corpus, LEFT(datefrom, " + str(shorten[granularity]) + ") AS df, LEFT(dateto, " + \
+                  str(shorten[granularity]) + ") AS dt, SUM(tokens) AS sum FROM " + timedata_corpus + \
+                  " WHERE corpus IN " + corpora_sql + fromto + " GROUP BY corpus, df, dt ORDER BY NULL;"
+        cursor = mysql.connection.cursor()
+        cursor.execute(sql)
+    else:
+        cursor = tuple()
 
-        if args["cache"]:
-            def save_cache(mc, corpus, data):
-                corpus_checksum = utils.get_hash((fromdate, todate, granularity, strategy))
-                cache_key = "%s:timespan_%s" % (cache_prefixes[corpus], corpus_checksum)
-                try:
-                    mc.add(cache_key, data)
-                except MemcacheError:
-                    pass
+    if args["cache"]:
+        def save_cache(mc, corpus, data):
+            corpus_checksum = utils.get_hash((fromdate, todate, granularity, strategy))
+            cache_key = "%s:timespan_%s" % (cache_prefixes[corpus], corpus_checksum)
+            try:
+                mc.add(cache_key, data)
+            except MemcacheError:
+                pass
 
-            corpus = None
-            corpus_data = []
-            with memcached.get_client() as mc:
-                for row in cursor:
-                    if corpus is None:
-                        corpus = row["corpus"]
-                    elif not row["corpus"] == corpus:
-                        save_cache(mc, corpus, corpus_data)
-                        corpus_data = []
-                        corpus = row["corpus"]
-                    corpus_data.append(row)
-                if corpus is not None:
+        corpus = None
+        corpus_data = []
+        with memcached.get_client() as mc:
+            for row in cursor:
+                if corpus is None:
+                    corpus = row["corpus"]
+                elif not row["corpus"] == corpus:
                     save_cache(mc, corpus, corpus_data)
+                    corpus_data = []
+                    corpus = row["corpus"]
+                corpus_data.append(row)
+            if corpus is not None:
+                save_cache(mc, corpus, corpus_data)
 
-        ns["result"] = timespan_calculator(itertools.chain(cached_data, cursor), granularity=granularity,
-                                           combined=combined, per_corpus=per_corpus, strategy=strategy)
+    ns["result"] = timespan_calculator(itertools.chain(cached_data, cursor), granularity=granularity,
+                                       combined=combined, per_corpus=per_corpus, strategy=strategy)
 
-        if corpora_rest:
-            cursor.close()
+    if corpora_rest:
+        cursor.close()
 
     if args["cache"] and not no_combined_cache:
         # Save cache for whole query

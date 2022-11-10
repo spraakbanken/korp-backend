@@ -42,9 +42,8 @@ def lemgram_count(args):
           " GROUP BY lemgram;"
 
     result = {}
-    with app.app_context():
-        cursor = mysql.connection.cursor()
-        cursor.execute(sql)
+    cursor = mysql.connection.cursor()
+    cursor.execute(sql)
 
     for row in cursor:
         # We need this check here, since a search for "hår" also returns "här" and "har".

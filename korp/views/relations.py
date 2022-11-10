@@ -42,143 +42,142 @@ def relations(args, abort_event=None):
 
     result = {}
 
-    with app.app_context():
-        cursor = mysql.connection.cursor()
-        cursor.execute("SET @@session.long_query_time = 1000;")
+    cursor = mysql.connection.cursor()
+    cursor.execute("SET @@session.long_query_time = 1000;")
 
-        # Get available tables
-        cursor.execute("SHOW TABLES LIKE '" + app.config["DBWPTABLE"] + "_%_strings';")
-        tables = set(list(r.values())[0] for r in cursor)
-        # Filter out corpora which don't exist in database
-        corpora = [c for c in corpora if app.config["DBWPTABLE"] + "_" + c.upper() + "_strings" in tables]
-        if not corpora:
-            yield {}
-            return
+    # Get available tables
+    cursor.execute("SHOW TABLES LIKE '" + app.config["DBWPTABLE"] + "_%_strings';")
+    tables = set(list(r.values())[0] for r in cursor)
+    # Filter out corpora which don't exist in database
+    corpora = [c for c in corpora if app.config["DBWPTABLE"] + "_" + c.upper() + "_strings" in tables]
+    if not corpora:
+        yield {}
+        return
 
-        relations_data = []
-        corpora_rest = corpora[:]
+    relations_data = []
+    corpora_rest = corpora[:]
 
-        if args["cache"]:
-            with memcached.get_client() as mc:
-                cache_prefixes = utils.cache_prefix(mc, corpora)
-                memcached_keys = {}
-                for corpus in corpora:
-                    corpus_checksum = utils.get_hash((word,
-                                                     search_type,
-                                                     minfreq))
-                    memcached_keys["%s:relations_%s" % (cache_prefixes[corpus], corpus_checksum)] = corpus
+    if args["cache"]:
+        with memcached.get_client() as mc:
+            cache_prefixes = utils.cache_prefix(mc, corpora)
+            memcached_keys = {}
+            for corpus in corpora:
+                corpus_checksum = utils.get_hash((word,
+                                                 search_type,
+                                                 minfreq))
+                memcached_keys["%s:relations_%s" % (cache_prefixes[corpus], corpus_checksum)] = corpus
 
-                cached_data = mc.get_many(memcached_keys.keys())
+            cached_data = mc.get_many(memcached_keys.keys())
 
-            for key in cached_data:
-                relations_data.extend(cached_data[key])
-                corpora_rest.remove(memcached_keys[key])
+        for key in cached_data:
+            relations_data.extend(cached_data[key])
+            corpora_rest.remove(memcached_keys[key])
 
-        selects = []
+    selects = []
 
-        sql_select = """
-            SELECT STRAIGHT_JOIN
-                S1.string AS head,
-                S1.pos AS headpos,
-                F.rel,
-                S2.string AS dep,
-                S2.pos AS deppos,
-                S2.stringextra AS depextra,
-                F.freq,
-                R.freq AS rel_freq,
-                HR.freq AS head_rel_freq,
-                DR.freq AS dep_rel_freq,
-                {corpus_sql} AS corpus,
-                F.id
+    sql_select = """
+        SELECT STRAIGHT_JOIN
+            S1.string AS head,
+            S1.pos AS headpos,
+            F.rel,
+            S2.string AS dep,
+            S2.pos AS deppos,
+            S2.stringextra AS depextra,
+            F.freq,
+            R.freq AS rel_freq,
+            HR.freq AS head_rel_freq,
+            DR.freq AS dep_rel_freq,
+            {corpus_sql} AS corpus,
+            F.id
+    """
+    sql_from_s1 = """
+        FROM
+            `{corpus_table}_strings` AS S1
+            JOIN `{corpus_table}` AS F
+                ON S1.id = F.head
+            JOIN `{corpus_table}_strings` AS S2
+                ON F.dep = S2.id
+    """
+    sql_from_s2 = """
+        FROM
+            `{corpus_table}_strings` AS S2
+            JOIN `{corpus_table}` AS F
+                ON S2.id = F.dep
+            JOIN `{corpus_table}_strings` AS S1
+                ON F.head = S1.id
+    """
+    sql_from = """
+        JOIN `{corpus_table}_rel` AS R
+            ON F.rel = R.rel
+        JOIN `{corpus_table}_head_rel` AS HR
+            ON F.head = HR.head AND F.rel = HR.rel
+        JOIN `{corpus_table}_dep_rel` AS DR
+            ON F.dep = DR.dep AND F.rel = DR.rel
+    """
+
+    if search_type == "lemgram":
+        sql_where1 = sql_where2 = """
+            AND F.bfhead = 1
+            AND F.bfdep = 1
         """
-        sql_from_s1 = """
-            FROM
-                `{corpus_table}_strings` AS S1
-                JOIN `{corpus_table}` AS F
-                    ON S1.id = F.head
-                JOIN `{corpus_table}_strings` AS S2
-                    ON F.dep = S2.id
-        """
-        sql_from_s2 = """
-            FROM
-                `{corpus_table}_strings` AS S2
-                JOIN `{corpus_table}` AS F
-                    ON S2.id = F.dep
-                JOIN `{corpus_table}_strings` AS S1
-                    ON F.head = S1.id
-        """
-        sql_from = """
-            JOIN `{corpus_table}_rel` AS R
-                ON F.rel = R.rel
-            JOIN `{corpus_table}_head_rel` AS HR
-                ON F.head = HR.head AND F.rel = HR.rel
-            JOIN `{corpus_table}_dep_rel` AS DR
-                ON F.dep = DR.dep AND F.rel = DR.rel
-        """
+    else:
+        sql_where1 = "AND F.wfhead = 1"
+        sql_where2 = "AND F.wfdep = 1"
 
-        if search_type == "lemgram":
-            sql_where1 = sql_where2 = """
-                AND F.bfhead = 1
-                AND F.bfdep = 1
-            """
-        else:
-            sql_where1 = "AND F.wfhead = 1"
-            sql_where2 = "AND F.wfdep = 1"
+    word_sql = "'%s'" % utils.sql_escape(word)
 
-        word_sql = "'%s'" % utils.sql_escape(word)
+    for corpus in corpora_rest:
+        corpus_sql = "'%s'" % utils.sql_escape(corpus).upper()
+        corpus_table = app.config["DBWPTABLE"] + "_" + corpus.upper()
 
-        for corpus in corpora_rest:
-            corpus_sql = "'%s'" % utils.sql_escape(corpus).upper()
-            corpus_table = app.config["DBWPTABLE"] + "_" + corpus.upper()
-
-            selects.append(
-                (
-                    corpus.upper(),
-                    f"""
-                    {sql_select.format(corpus_sql=corpus_sql)}
-                    {sql_from_s1.format(corpus_table=corpus_table)}
-                    {sql_from.format(corpus_table=corpus_table)}
-                    WHERE
-                        S1.string = {word_sql}
-                        {sql_where1}
-                        {minfreqsql}
-                    """
-                )
+        selects.append(
+            (
+                corpus.upper(),
+                f"""
+                {sql_select.format(corpus_sql=corpus_sql)}
+                {sql_from_s1.format(corpus_table=corpus_table)}
+                {sql_from.format(corpus_table=corpus_table)}
+                WHERE
+                    S1.string = {word_sql}
+                    {sql_where1}
+                    {minfreqsql}
+                """
             )
-            selects.append(
-                (
-                    None,
-                    f"""
-                    {sql_select.format(corpus_sql=corpus_sql)}
-                    {sql_from_s2.format(corpus_table=corpus_table)}
-                    {sql_from.format(corpus_table=corpus_table)}
-                    WHERE
-                        S2.string = {word_sql}
-                        {sql_where2}
-                        {minfreqsql}
-                    """
-                )
+        )
+        selects.append(
+            (
+                None,
+                f"""
+                {sql_select.format(corpus_sql=corpus_sql)}
+                {sql_from_s2.format(corpus_table=corpus_table)}
+                {sql_from.format(corpus_table=corpus_table)}
+                WHERE
+                    S2.string = {word_sql}
+                    {sql_where2}
+                    {minfreqsql}
+                """
             )
+        )
 
-        cursor_result = []
-        if corpora_rest:
-            if incremental:
-                yield {"progress_corpora": list(corpora_rest)}
-                progress_count = 0
-                for sql in selects:
-                    if abort_event and abort_event.is_set():
-                        return
-                    cursor.execute(sql[1])
-                    cursor_result.extend(list(cursor))
-                    if sql[0]:
-                        yield {"progress_%d" % progress_count: {"corpus": sql[0]}}
-                        progress_count += 1
-            else:
+    cursor_result = []
+    if corpora_rest:
+        if incremental:
+            yield {"progress_corpora": list(corpora_rest)}
+            progress_count = 0
+            for sql in selects:
                 if abort_event and abort_event.is_set():
                     return
-                sql = " UNION ALL ".join(f"({x[1]})" for x in selects)
-                cursor.execute(sql)
-                cursor_result = cursor
+                cursor.execute(sql[1])
+                cursor_result.extend(list(cursor))
+                if sql[0]:
+                    yield {"progress_%d" % progress_count: {"corpus": sql[0]}}
+                    progress_count += 1
+        else:
+            if abort_event and abort_event.is_set():
+                return
+            sql = " UNION ALL ".join(f"({x[1]})" for x in selects)
+            cursor.execute(sql)
+            cursor_result = cursor
 
     rels = {}
     counter = {}
@@ -296,72 +295,71 @@ def relations_sentences(args):
 
     querystarttime = time.time()
 
-    with app.app_context():
-        cursor = mysql.connection.cursor()
-        cursor.execute("SET @@session.long_query_time = 1000;")
-        selects = []
-        counts = []
+    cursor = mysql.connection.cursor()
+    cursor.execute("SET @@session.long_query_time = 1000;")
+    selects = []
+    counts = []
 
-        # Get available tables
-        cursor.execute("SHOW TABLES LIKE '" + app.config["DBWPTABLE"] + "_%_strings';")
-        tables = set(list(r.values())[0] for r in cursor)
-        # Filter out corpora which doesn't exist in database
-        source = sorted(
-            [c for c in iter(source.items()) if app.config["DBWPTABLE"] + "_" + c[0].upper() + "_strings" in tables])
-        if not source:
-            yield {}
-            return
-        corpora = [x[0] for x in source]
+    # Get available tables
+    cursor.execute("SHOW TABLES LIKE '" + app.config["DBWPTABLE"] + "_%_strings';")
+    tables = set(list(r.values())[0] for r in cursor)
+    # Filter out corpora which doesn't exist in database
+    source = sorted(
+        [c for c in iter(source.items()) if app.config["DBWPTABLE"] + "_" + c[0].upper() + "_strings" in tables])
+    if not source:
+        yield {}
+        return
+    corpora = [x[0] for x in source]
 
-        for s in source:
-            corpus, ids = s
-            ids = [int(i) for i in ids]
-            ids_list = "(" + ", ".join("%d" % i for i in ids) + ")"
+    for s in source:
+        corpus, ids = s
+        ids = [int(i) for i in ids]
+        ids_list = "(" + ", ".join("%d" % i for i in ids) + ")"
 
-            corpus_table_sentences = app.config["DBWPTABLE"] + f"_{corpus.upper()}_sentences"
+        corpus_table_sentences = app.config["DBWPTABLE"] + f"_{corpus.upper()}_sentences"
 
-            selects.append(
-                f"""(
-                    SELECT
-                        S.sentence,
-                        S.start,
-                        S.end,
-                        '{utils.sql_escape(corpus.upper())}' AS corpus
-                    FROM
-                        `{corpus_table_sentences}` as S
-                    WHERE
-                        S.id IN {ids_list}
-                )"""
-            )
-            counts.append(
-                f"""(
-                    SELECT
-                        '{utils.sql_escape(corpus.upper())}' AS corpus,
-                        COUNT(*) AS freq
+        selects.append(
+            f"""(
+                SELECT
+                    S.sentence,
+                    S.start,
+                    S.end,
+                    '{utils.sql_escape(corpus.upper())}' AS corpus
                 FROM
                     `{corpus_table_sentences}` as S
                 WHERE
                     S.id IN {ids_list}
-                )"""
-            )
+            )"""
+        )
+        counts.append(
+            f"""(
+                SELECT
+                    '{utils.sql_escape(corpus.upper())}' AS corpus,
+                    COUNT(*) AS freq
+            FROM
+                `{corpus_table_sentences}` as S
+            WHERE
+                S.id IN {ids_list}
+            )"""
+        )
 
-        sql_count = " UNION ALL ".join(counts)
-        cursor.execute(sql_count)
+    sql_count = " UNION ALL ".join(counts)
+    cursor.execute(sql_count)
 
-        corpus_hits = {}
-        for row in cursor:
-            corpus_hits[row["corpus"]] = int(row["freq"])
+    corpus_hits = {}
+    for row in cursor:
+        corpus_hits[row["corpus"]] = int(row["freq"])
 
-        sql = " UNION ALL ".join(selects) + (" LIMIT %d, %d" % (start, end - start + 1))
-        cursor.execute(sql)
+    sql = " UNION ALL ".join(selects) + (" LIMIT %d, %d" % (start, end - start + 1))
+    cursor.execute(sql)
 
-        querytime = time.time() - querystarttime
-        corpora_dict = {}
-        for row in cursor:
-            corpora_dict.setdefault(row["corpus"], {}).setdefault(row["sentence"], []).append(
-                (row["start"], row["end"]))
+    querytime = time.time() - querystarttime
+    corpora_dict = {}
+    for row in cursor:
+        corpora_dict.setdefault(row["corpus"], {}).setdefault(row["sentence"], []).append(
+            (row["start"], row["end"]))
 
-        cursor.close()
+    cursor.close()
 
     total_hits = sum(corpus_hits.values())
 
