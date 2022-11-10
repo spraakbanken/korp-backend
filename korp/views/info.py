@@ -29,9 +29,10 @@ def sleep(args):
 @utils.main_handler
 def info(args):
     """Get version information about list of available corpora."""
+    strict = utils.parse_bool(args, "strict", False)
     if args["cache"]:
         with memcached.get_client() as mc:
-            result = mc.get("%s:info" % utils.cache_prefix(mc))
+            result = mc.get("%s:info_%s" % (utils.cache_prefix(mc), int(strict)))
         if result:
             if "debug" in args:
                 result.setdefault("DEBUG", {})
@@ -41,6 +42,14 @@ def info(args):
 
     corpora = cwb.run_cqp("show corpora;")
     version = next(corpora)
+    # CQP "show corpora" lists all corpora in the registry, but some
+    # of them might nevertheless cause a "corpus undefined" error in
+    # CQP, for example, because of missing data, so filter them out if
+    # strict=true. However, filtering a large number of corpora slows
+    # down the info command, so it is disabled by default. Caching in
+    # _filter_undefined_corpora helps, though.
+    if strict:
+        corpora, _ = _filter_undefined_corpora(list(corpora), args["cache"])
 
     protected = utils.get_protected_corpora()
 
@@ -53,7 +62,7 @@ def info(args):
 
     if args["cache"]:
         with memcached.get_client() as mc:
-            added = mc.add("%s:info" % utils.cache_prefix(mc), result)
+            added = mc.add("%s:info_%s" % (utils.cache_prefix(mc), int(strict)), result)
         if added and "debug" in args:
             result.setdefault("DEBUG", {})
             result["DEBUG"]["cache_saved"] = True
