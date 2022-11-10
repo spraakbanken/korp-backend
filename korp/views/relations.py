@@ -47,10 +47,10 @@ def relations(args, abort_event=None):
         cursor.execute("SET @@session.long_query_time = 1000;")
 
         # Get available tables
-        cursor.execute("SHOW TABLES LIKE '" + app.config["DBWPTABLE"] + "_%';")
-        tables = set(list(x.values())[0] for x in cursor)
+        cursor.execute("SHOW TABLES LIKE '" + app.config["DBWPTABLE"] + "_%_strings';")
+        tables = set(list(r.values())[0] for r in cursor)
         # Filter out corpora which don't exist in database
-        corpora = [x for x in corpora if app.config["DBWPTABLE"] + "_" + x.upper() in tables]
+        corpora = [c for c in corpora if app.config["DBWPTABLE"] + "_" + c.upper() + "_strings" in tables]
         if not corpora:
             yield {}
             return
@@ -303,10 +303,11 @@ def relations_sentences(args):
         counts = []
 
         # Get available tables
-        cursor.execute("SHOW TABLES LIKE '" + app.config["DBWPTABLE"] + "_%';")
-        tables = set(list(x.values())[0] for x in cursor)
+        cursor.execute("SHOW TABLES LIKE '" + app.config["DBWPTABLE"] + "_%_strings';")
+        tables = set(list(r.values())[0] for r in cursor)
         # Filter out corpora which doesn't exist in database
-        source = sorted([x for x in iter(source.items()) if app.config["DBWPTABLE"] + "_" + x[0].upper() in tables])
+        source = sorted(
+            [c for c in iter(source.items()) if app.config["DBWPTABLE"] + "_" + c[0].upper() + "_strings" in tables])
         if not source:
             yield {}
             return
