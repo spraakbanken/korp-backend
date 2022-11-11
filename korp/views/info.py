@@ -41,7 +41,12 @@ def info(args):
 
     protected = utils.get_protected_corpora()
 
-    result = {"version": korp.VERSION, "cqp_version": version, "corpora": list(corpora), "protected_corpora": protected}
+    result = {
+        "version": korp.__version__,
+        "cqp_version": version,
+        "corpora": list(corpora),
+        "protected_corpora": protected
+    }
 
     if args["cache"]:
         with memcached.get_client() as mc:
