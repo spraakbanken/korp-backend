@@ -58,12 +58,12 @@ def cache_handler(_args):
 
                     # Remove outdated query data
                     for cachefile in glob.glob(os.path.join(app.config["CACHE_DIR"], "%s:*" % corpus)):
-                        if os.path.getmtime(cachefile) < corpora[corpus]:
-                            try:
+                        try:
+                            if os.path.getmtime(cachefile) < corpora[corpus]:
                                 os.remove(cachefile)
                                 result["files_removed"] += 1
-                            except FileNotFoundError:
-                                pass
+                        except FileNotFoundError:
+                            pass
 
                 if last_update_config.get(last_update_config_keys[corpus], 0) < corpora_configs.get(corpus, 0):
                     memcached_data[f"{corpus}:version_config"] = mc.get(f"{corpus}:version_config", 0) + 1
@@ -94,10 +94,10 @@ def cache_handler(_args):
 
         # Remove old query data
         for cachefile in glob.glob(os.path.join(app.config["CACHE_DIR"], "*:query_data_*")):
-            if os.path.getmtime(cachefile) < (now - app.config["CACHE_LIFESPAN"] * 60):
-                try:
+            try:
+                if os.path.getmtime(cachefile) < (now - app.config["CACHE_LIFESPAN"] * 60):
                     os.remove(cachefile)
-                except FileNotFoundError:
-                    pass
-                result["files_removed"] += 1
+                    result["files_removed"] += 1
+            except FileNotFoundError:
+                pass
     yield result
