@@ -236,12 +236,17 @@ def get_corpus_timestamps():
 
 def get_corpus_config_timestamps():
     """Get modification time of corpus config files."""
-    corpora = dict((os.path.basename(f)[:-5].upper(), os.path.getmtime(f)) for f in
-                   glob.glob(os.path.join(app.config["CORPUS_CONFIG_DIR"], "corpora", "*.yaml")))
-    modes = max(os.path.getmtime(f) for f in glob.glob(os.path.join(app.config["CORPUS_CONFIG_DIR"],
-                                                                    "modes", "*.yaml")))
+    corpora = dict(
+        (os.path.basename(f)[:-5].upper(), os.path.getmtime(f))
+        for f in glob.glob(os.path.join(app.config["CORPUS_CONFIG_DIR"], "corpora", "*.yaml"))
+    )
+    modes = max(
+        os.path.getmtime(f) for f in glob.glob(os.path.join(app.config["CORPUS_CONFIG_DIR"], "modes", "*.yaml")) or [0]
+    )
     presets = max(
-        os.path.getmtime(f) for f in glob.glob(os.path.join(app.config["CORPUS_CONFIG_DIR"], "attributes", "*/*.yaml")))
+        os.path.getmtime(f)
+        for f in glob.glob(os.path.join(app.config["CORPUS_CONFIG_DIR"], "attributes", "*/*.yaml")) or [0]
+    )
     return corpora, modes, presets
 
 
