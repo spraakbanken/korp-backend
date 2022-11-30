@@ -41,7 +41,7 @@ def corpus_config(args):
             yield result
             return
 
-    result = get_mode(mode_name, corpora, args["cache"])
+    result = get_mode(mode_name, corpora, args["cache"]) or {}
     result["modes"] = get_modes(mode_name)
 
     # Save to cache
