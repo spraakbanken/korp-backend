@@ -124,10 +124,7 @@ def get_mode(mode_name: str, corpora: list, cache: bool):
     if corpora:
         corpus_files = []
         for c in corpora:
-            path = ""
-            if ":" in c:
-                path, _, c = c.partition(":")
-            file_path = Path(app.config["CORPUS_CONFIG_DIR"]) / "corpora" / path.lower() / f"{c.lower()}.yaml"
+            file_path = Path(app.config["CORPUS_CONFIG_DIR"]) / "corpora" / f"{c.lower()}.yaml"
             if file_path.is_file():
                 corpus_files.append(file_path)
             else:
