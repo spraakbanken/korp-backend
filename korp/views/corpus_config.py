@@ -41,7 +41,9 @@ def corpus_config(args):
             yield result
             return
 
-    result = get_mode(mode_name, corpora, args["cache"]) or {}
+    result = get_mode(mode_name, corpora, args["cache"])
+    if result is None:
+        raise NameError(f"The mode {mode_name!r} does not exist.")
     result["modes"] = get_modes(mode_name)
 
     # Save to cache
