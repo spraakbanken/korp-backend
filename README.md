@@ -475,10 +475,25 @@ correspond to a corpus ID in lowercase, followed by `.yaml`, e.g. `mycorpus.yaml
   should be an object with one key. The key should be the ID of the attribute, e.g. `msd` for positional attributes or
   `text_title` for structural. The value should be either 1) an object with a complete attribute definition, or 2) a
   string referring to an attribute preset containing such a definition, e.g. `msd` to refer to
-  `attributes/positional/msd.yaml`. The attribute definition is what tells the Korp frontend how to handle each
-  attribute, like how it should be presented in the sidebar and what interface widget to use in extended search. For
-  more information about what options are available for attribute definitions, see the [Korp frontend
+  `attributes/positional/msd.yaml`. With option 1, you may also refer to a preset by using the key
+  `preset` and then extend/override that preset. The attribute definition is what tells the Korp frontend how to handle
+  each attribute, like how it should be presented in the sidebar and what interface widget to use in extended search.
+  For more information about what options are available for attribute definitions, see the [Korp frontend
   documentation](https://github.com/spraakbanken/korp-frontend/blob/master/doc/frontend_devel.md#attribute-settings).
+  Example:
+  ```
+  struct_attributes:
+    - text_title: title
+    - text_type:
+        label:
+          eng: type
+          swe: typ
+    - text_source:
+        preset: url
+        label:
+          eng: source
+          swe: källa
+  ```
 - **custom_attributes**: See [Custom
   attributes](https://github.com/spraakbanken/korp-frontend/blob/master/doc/frontend_devel.md#custom-attributes).
 - **reading_mode**: See [Reading
