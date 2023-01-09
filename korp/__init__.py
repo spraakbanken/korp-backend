@@ -74,7 +74,7 @@ def create_app():
         misc,
         query,
         relations,
-        struct_values,
+        attr_values,
         timespan
     )
     app.register_blueprint(cache.bp)
@@ -86,7 +86,7 @@ def create_app():
     app.register_blueprint(misc.bp)
     app.register_blueprint(query.bp)
     app.register_blueprint(relations.bp)
-    app.register_blueprint(struct_values.bp)
+    app.register_blueprint(attr_values.bp)
     app.register_blueprint(timespan.bp)
 
     # Load plugins

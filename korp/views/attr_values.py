@@ -13,16 +13,17 @@ from korp import utils
 from korp.memcached import memcached
 from . import count
 
-bp = Blueprint("struct_values", __name__)
+bp = Blueprint("attr_values", __name__)
 
 
+@bp.route("/attr_values", methods=["GET", "POST"])
 @bp.route("/struct_values", methods=["GET", "POST"])
 @utils.main_handler
 @utils.prevent_timeout
-def struct_values(args):
+def attr_values(args):
     """Get all available values for one or more structural attributes."""
     utils.assert_key("corpus", args, utils.IS_IDENT, True)
-    utils.assert_key("struct", args, re.compile(r"^[\w_\d,>]+$"), True)
+    utils.assert_key(("attr", "struct"), args, re.compile(r"^[\w_,>]+$"), True)
     utils.assert_key("incremental", args, r"(true|false)")
 
     incremental = utils.parse_bool(args, "incremental", False)
@@ -33,9 +34,9 @@ def struct_values(args):
     corpora = utils.parse_corpora(args)
     utils.check_authorization(corpora)
 
-    structs = args.get("struct")
-    if isinstance(structs, str):
-        structs = structs.split(utils.QUERY_DELIM)
+    attrs = args.get("attr") or args.get("struct")
+    if isinstance(attrs, str):
+        attrs = attrs.split(utils.QUERY_DELIM)
 
     split = args.get("split", "")
     if isinstance(split, str):
@@ -51,16 +52,16 @@ def struct_values(args):
         all_cache = True
         with memcached.get_client() as mc:
             for corpus in corpora:
-                for struct in structs:
-                    checksum = utils.get_hash((corpus, struct, split, include_count))
-                    data = mc.get("%s:struct_values_%s" % (utils.cache_prefix(mc, corpus), checksum))
+                for attr in attrs:
+                    checksum = utils.get_hash((corpus, attr, split, include_count))
+                    data = mc.get("%s:attr_values_%s" % (utils.cache_prefix(mc, corpus), checksum))
                     if data is not None:
                         result["corpora"].setdefault(corpus, {})
-                        result["corpora"][corpus][struct] = data
+                        result["corpora"][corpus][attr] = data
                         if "debug" in args:
                             result.setdefault("DEBUG", {"caches_read": []})
-                            result["DEBUG"]["caches_read"].append("%s:%s" % (corpus, struct))
-                        from_cache.add((corpus, struct))
+                            result["DEBUG"]["caches_read"].append("%s:%s" % (corpus, attr))
+                        from_cache.add((corpus, attr))
                     else:
                         all_cache = False
     else:
@@ -73,12 +74,12 @@ def struct_values(args):
 
         with ThreadPoolExecutor(max_workers=app.config["PARALLEL_THREADS"]) as executor:
             future_query = dict((executor.submit(count.count_query_worker_simple, corpus, cqp=None,
-                                                 group_by=[(s, True) for s in struct.split(">")],
-                                                 use_cache=args["cache"]), (corpus, struct))
-                                for corpus in corpora for struct in structs if not (corpus, struct) in from_cache)
+                                                 group_by=[(s, True) for s in attr.split(">")],
+                                                 use_cache=args["cache"]), (corpus, attr))
+                                for corpus in corpora for attr in attrs if not (corpus, attr) in from_cache)
 
             for future in futures.as_completed(future_query):
-                corpus, struct = future_query[future]
+                corpus, attr = future_query[future]
                 if future.exception() is not None:
                     raise utils.CQPError(future.exception())
                 else:
@@ -86,16 +87,16 @@ def struct_values(args):
 
                     corpus_stats = {} if include_count else set()
                     vals_dict = {}
-                    struct_list = struct.split(">")
+                    attr_list = attr.split(">")
 
                     for line in lines:
                         freq, val = line.lstrip().split(" ", 1)
 
-                        if ">" in struct:
+                        if ">" in attr:
                             vals = val.split("\t")
 
                             if split:
-                                vals = [[x for x in n.split("|") if x] if struct_list[i] in split and n else [n] for
+                                vals = [[x for x in n.split("|") if x] if attr_list[i] in split and n else [n] for
                                         i, n in enumerate(vals)]
                                 vals_prod = itertools.product(*vals)
                             else:
@@ -117,7 +118,7 @@ def struct_values(args):
                                         prev.setdefault(n, {})
                                     prev = prev[n]
                         else:
-                            if struct in split:
+                            if attr in split:
                                 vals = [x for x in val.split("|") if x] if val else [""]
                             else:
                                 vals = [val]
@@ -127,10 +128,10 @@ def struct_values(args):
                                 else:
                                     corpus_stats.add(val)
 
-                    if ">" in struct:
-                        result["corpora"][corpus][struct] = vals_dict
+                    if ">" in attr:
+                        result["corpora"][corpus][attr] = vals_dict
                     elif corpus_stats:
-                        result["corpora"][corpus][struct] = corpus_stats if include_count else sorted(corpus_stats)
+                        result["corpora"][corpus][attr] = corpus_stats if include_count else sorted(corpus_stats)
 
                     if incremental:
                         yield {"progress_%d" % ns.progress_count: corpus}
@@ -159,21 +160,21 @@ def struct_values(args):
 
     if args["cache"] and not all_cache:
         for corpus in corpora:
-            for struct in structs:
-                if (corpus, struct) in from_cache:
+            for attr in attrs:
+                if (corpus, attr) in from_cache:
                     continue
-                checksum = utils.get_hash((corpus, struct, split, include_count))
+                checksum = utils.get_hash((corpus, attr, split, include_count))
                 try:
                     with memcached.get_client() as mc:
-                        cache_key = "%s:struct_values_%s" % (utils.cache_prefix(mc, corpus), checksum)
-                        mc.add(cache_key, result["corpora"][corpus].get(struct, {}))
+                        cache_key = "%s:attr_values_%s" % (utils.cache_prefix(mc, corpus), checksum)
+                        mc.add(cache_key, result["corpora"][corpus].get(attr, {}))
                 except MemcacheError:
                     pass
                 else:
                     if "debug" in args:
                         result.setdefault("DEBUG", {})
                         result["DEBUG"].setdefault("caches_saved", [])
-                        result["DEBUG"]["caches_saved"].append("%s:%s" % (corpus, struct))
+                        result["DEBUG"]["caches_saved"].append("%s:%s" % (corpus, attr))
 
     if not per_corpus:
         del result["corpora"]
