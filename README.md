@@ -7,6 +7,7 @@ The code is distributed under the [MIT license](https://opensource.org/licenses/
 
 The Korp backend is a Python 3 WSGI application, acting as a wrapper for Corpus Workbench.
 
+To see what has changed in recent versions, see the [CHANGELOG](CHANGELOG.md).
 
 ## Requirements
 
