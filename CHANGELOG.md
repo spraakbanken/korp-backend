@@ -8,6 +8,7 @@
 - Added support for authorization plugins.
 - Improved caching for `/count`.
 - Now aborts searches if client disconnects.
+- Added `CACHE_MAX_QUERY_DATA` config variable, setting an optional max size per cached query data file.
 
 ### Changed
 

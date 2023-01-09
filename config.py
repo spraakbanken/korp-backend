@@ -53,6 +53,9 @@ MEMCACHED_SERVER = None
 # Max number of rows from count command to cache
 CACHE_MAX_STATS = 50
 
+# Max size in bytes per cached query data file (0 = no limit)
+CACHE_MAX_QUERY_DATA = 0
+
 # Corpus configuration directory
 CORPUS_CONFIG_DIR = ""
 

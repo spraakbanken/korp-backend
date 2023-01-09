@@ -506,6 +506,15 @@ def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, sh
     # Skip the CQP version
     next(lines)
 
+    # Remove cache file if it exceeds max cache file size
+    if use_cache and not is_cached and app.config.get("CACHE_MAX_QUERY_DATA"):
+        cache_file = os.path.join(app.config["CACHE_DIR"], f"{corpus}:{cache_query_temp}")
+        try:
+            if os.path.isfile(cache_file) and os.path.getsize(cache_file) > app.config["CACHE_MAX_QUERY_DATA"]:
+                os.remove(cache_file)
+        except FileNotFoundError:
+            pass
+
     # Read the attributes and their relative order
     attrs = cwb.read_attributes(lines)
 
