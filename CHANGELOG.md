@@ -23,6 +23,7 @@
 - Fixed longstanding bug in timespan caching.
 - Fixed crash when there are no corpus config files.
 - Fixed crash when trying to access non-existent mode in corpus_config.
+- Fixed crash when using semicolons at the end of CQP queries.
 
 ## [8.1.0] - 2022-09-14
 

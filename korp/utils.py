@@ -417,10 +417,18 @@ def parse_within(args):
 
 
 def parse_cqp_subcqp(args):
-    cqp = [args.get(key) for key in sorted([k for k in args.keys() if k.startswith("cqp")],
-                                           key=lambda x: int(x[3:]) if len(x) > 3 else 0)]
-    subcqp = [args.get(key) for key in sorted([k for k in args.keys() if k.startswith("subcqp")],
-                                              key=lambda x: int(x[6:]) if len(x) > 6 else 0)]
+    cqp = [
+        args.get(key).rstrip(";")
+        for key in sorted(
+            [k for k in args.keys() if k.startswith("cqp")], key=lambda x: int(x[3:]) if len(x) > 3 else 0
+        )
+    ]
+    subcqp = [
+        args.get(key).rstrip(";")
+        for key in sorted(
+            [k for k in args.keys() if k.startswith("subcqp")], key=lambda x: int(x[6:]) if len(x) > 6 else 0
+        )
+    ]
     return cqp, subcqp
 
 
