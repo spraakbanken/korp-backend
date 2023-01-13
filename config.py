@@ -34,6 +34,9 @@ DBPORT = 3306
 # Database name
 DBNAME = ""
 
+# Database character set (use "utf8mb4" for full Unicode)
+DBCHARSET = "utf8"
+
 # Word Picture table prefix
 DBWPTABLE = "relations"
 
