@@ -123,6 +123,7 @@ def query(args, abort_event=None):
     queryparams = {"free_search": free_search,
                    "use_cache": use_cache,
                    "cache_dir": app.config["CACHE_DIR"],
+                   "cache_max_query_data": app.config.get("CACHE_MAX_QUERY_DATA"),
                    "show": show,
                    "show_structs": show_structs,
                    "expand_prequeries": expand_prequeries,
@@ -346,7 +347,7 @@ def query(args, abort_event=None):
 def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, show_structs=None, start=0, end=10,
                  sort=None, random_seed=None,
                  no_results=False, expand_prequeries=True, free_search=False, use_cache=False, cache_dir=None,
-                 abort_event=None):
+                 cache_max_query_data=0, abort_event=None):
     if use_cache:
         # Calculate checksum
         # Needs to contain all arguments that may influence the results
@@ -507,10 +508,10 @@ def query_corpus(corpus, cqp, within=None, cut=None, context=None, show=None, sh
     next(lines)
 
     # Remove cache file if it exceeds max cache file size
-    if use_cache and not is_cached and app.config.get("CACHE_MAX_QUERY_DATA"):
-        cache_file = os.path.join(app.config["CACHE_DIR"], f"{corpus}:{cache_query_temp}")
+    if use_cache and not is_cached and cache_max_query_data:
+        cache_file = os.path.join(cache_dir, f"{corpus}:{cache_query_temp}")
         try:
-            if os.path.isfile(cache_file) and os.path.getsize(cache_file) > app.config["CACHE_MAX_QUERY_DATA"]:
+            if os.path.isfile(cache_file) and os.path.getsize(cache_file) > cache_max_query_data:
                 os.remove(cache_file)
         except FileNotFoundError:
             pass
@@ -705,10 +706,10 @@ def query_parse_lines(corpus, lines, attrs, show, show_structs, free_matches=Fal
 
 def query_and_parse(corpus, cqp, within=None, cut=None, context=None, show=None, show_structs=None, start=0, end=10,
                     sort=None, random_seed=None, no_results=False, expand_prequeries=True, free_search=False,
-                    use_cache=False, cache_dir=None, abort_event=None):
+                    use_cache=False, cache_dir=None, cache_max_query_data=0, abort_event=None):
     lines, nr_hits, attrs = query_corpus(corpus, cqp, within, cut, context, show, show_structs, start, end, sort,
                                          random_seed, no_results, expand_prequeries, free_search, use_cache, cache_dir,
-                                         abort_event)
+                                         cache_max_query_data, abort_event)
     kwic = query_parse_lines(corpus, lines, attrs, show, show_structs, free_matches=free_search,
                              abort_event=abort_event)
     return kwic, nr_hits
