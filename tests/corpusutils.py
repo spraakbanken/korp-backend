@@ -54,6 +54,7 @@ class CWBEncoder:
         """Encode vrt_file with corpus_id."""
         self.encode_vrt_file(corpus_id, vrt_file)
         self.cwb_make(corpus_id)
+        self.copy_info_file(corpus_id, vrt_file)
 
     def encode_vrt_file(self, corpus_id, vrt_file):
         """Run cwb-encode for vrt_file for corpus_id."""
@@ -115,3 +116,14 @@ class CWBEncoder:
             "-r", self._registrydir,
             corpus_id
         ]).check_returncode()
+
+    def copy_info_file(self, corpus_id, vrt_file):
+        """Copy corpus.info from source dir to the corpus data dir as .info."""
+        info_file = os.path.splitext(vrt_file)[0] + ".info"
+        if os.path.isfile(info_file):
+            subprocess.run([
+                "cp",
+                "-p",
+                info_file,
+                os.path.join(self._datarootdir, corpus_id, ".info")
+            ])
