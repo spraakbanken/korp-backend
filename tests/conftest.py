@@ -11,6 +11,7 @@ import pytest
 from pathlib import Path
 
 from korp import create_app
+from tests.corpusutils import CWBEncoder
 
 
 @pytest.fixture(scope="session")
@@ -41,3 +42,11 @@ def app(corpus_registry_dir):
 def client(app):
     """Create and return a test client."""
     return app.test_client()
+
+
+@pytest.fixture(scope="session")
+def corpora(corpus_data_root):
+    """Encode corpora in data/corpora/src and return their corpus ids."""
+    corpus_source_dir = Path(__file__).parent / "data" / "corpora" / "src"
+    cwb_encoder = CWBEncoder(str(corpus_data_root))
+    return cwb_encoder.encode_corpora(str(corpus_source_dir))
