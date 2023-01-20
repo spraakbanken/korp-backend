@@ -14,9 +14,11 @@ from korp import create_app
 @pytest.fixture()
 def app():
     """Create and configure a Korp app instance."""
-    app = create_app()
-    # https://flask.palletsprojects.com/en/2.2.x/config/#TESTING
-    app.config["TESTING"] = True
+    app = create_app({
+        # https://flask.palletsprojects.com/en/2.2.x/config/#TESTING
+        "TESTING": True,
+    })
+    # print(app.config)
     yield app
 
 
