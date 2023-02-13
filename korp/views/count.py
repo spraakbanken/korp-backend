@@ -213,7 +213,7 @@ def count(args, abort_event=None):
                             tokens[-1] = tokens[-1][:-1]
                             if group_by[i][0] in top:
                                 split_tokens = [[x for x in token.split("|") if x][:top[group_by[i][0]]]
-                                                if not token == "|" else ["|"] for token in tokens]
+                                                if not token == "|" else [""] for token in tokens]
                             else:
                                 split_tokens = [[x for x in token.split("|") if x] if not token == "|" else [""]
                                                 for token in tokens]
