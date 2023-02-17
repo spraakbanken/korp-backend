@@ -24,5 +24,5 @@ class TestQuery:
         data = response.get_json()
         kwic = data["kwic"]
         assert len(kwic) == data["hits"]
-        print(data)
+        # print(data)
         # assert 0

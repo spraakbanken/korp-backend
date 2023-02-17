@@ -35,7 +35,7 @@ class TestCorpusInfo:
         assert response.status_code == 200
         assert response.is_json == True
         data = response.get_json()
-        print(data)
+        # print(data)
         corpus_data = data["corpora"][corpus]
         attrs = corpus_data["attrs"]
         # TODO: Add more specific assertions and perhaps split this
