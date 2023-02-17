@@ -15,3 +15,7 @@ venv/
 
 # Instance dir
 instance/
+
+# Coverage.py
+.coverage
+*,cover
