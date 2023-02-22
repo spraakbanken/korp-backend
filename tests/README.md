@@ -53,6 +53,8 @@ This directory `tests/` contains:
   fixtures to be used by individual tests
 - [`corpusutils.py`](corpusutils.py): utility functions for setting up
   CWB corpus data
+- [`testutils.py`](testutils.py): utility functions for tests, typically
+  functionality that recur in multiple tests but that cannot be made fixtures
 
 
 ## Adding tests

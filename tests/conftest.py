@@ -14,6 +14,11 @@ from korp import create_app
 from tests.corpusutils import CWBEncoder
 
 
+# Functions in tests.utils are called by tests and contain assertions
+# that should be rewritten
+pytest.register_assert_rewrite("tests.testutils")
+
+
 @pytest.fixture(scope="session")
 def corpus_data_root(tmp_path_factory):
     """Return a corpus data root directory for a session."""
