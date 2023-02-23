@@ -1,0 +1,11 @@
+label:
+  eng: base form
+  swe: grundform
+opts:
+  contains: '_='
+  ends_with: '&='
+  is: '='
+  is_not: '!='
+  matches: '*='
+  matches_not: '!*='
+  starts_with: '^='
