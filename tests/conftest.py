@@ -19,6 +19,10 @@ from tests.corpusutils import CWBEncoder
 pytest.register_assert_rewrite("tests.testutils")
 
 
+# Test data (source) directory
+_datadir = Path(__file__).parent / "data"
+
+
 @pytest.fixture(scope="session")
 def corpus_data_root(tmp_path_factory):
     """Return a corpus data root directory for a session."""
@@ -68,6 +72,6 @@ def client(app):
 @pytest.fixture(scope="session")
 def corpora(corpus_data_root):
     """Encode corpora in data/corpora/src and return their corpus ids."""
-    corpus_source_dir = Path(__file__).parent / "data" / "corpora" / "src"
+    corpus_source_dir = _datadir / "corpora" / "src"
     cwb_encoder = CWBEncoder(str(corpus_data_root))
     return cwb_encoder.encode_corpora(str(corpus_source_dir))
