@@ -72,6 +72,8 @@ The following Pytest fixtures have been defined in
 
 - `corpus_data_root`: Return CWB corpus root directory for a session
 - `corpus_registry_dir`: Return CWB corpus registry directory for a session
+- `cache_dir`: Return Korp cache directory
+- `corpus_config_dir`: Return corpus configuration directory
 - `corpora`: Encode the corpora in `data/corpora/src` and return their ids
 - `app`: Create and configure a Korp Flask app instance
 - `client`: Create and return a test client

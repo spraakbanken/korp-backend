@@ -32,12 +32,28 @@ def corpus_registry_dir(corpus_data_root):
 
 
 @pytest.fixture()
-def app(corpus_registry_dir):
+def cache_dir(tmp_path_factory):
+    """Return a cache directory."""
+    # Should this fixture have a non-default scope?
+    return tmp_path_factory.mktemp("cache")
+
+
+@pytest.fixture()
+def corpus_config_dir(tmp_path_factory):
+    """Return a corpus configuration directory."""
+    # Should this fixture have a non-default scope (session?)?
+    return tmp_path_factory.mktemp("corpus-config")
+
+
+@pytest.fixture()
+def app(corpus_registry_dir, cache_dir, corpus_config_dir):
     """Create and configure a Korp app instance."""
     app = create_app({
         # https://flask.palletsprojects.com/en/2.2.x/config/#TESTING
         "TESTING": True,
         "CWB_REGISTRY": corpus_registry_dir,
+        "CACHE_DIR": cache_dir,
+        "CORPUS_CONFIG_DIR": corpus_config_dir,
     })
     # print(app.config)
     yield app
