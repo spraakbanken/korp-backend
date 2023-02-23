@@ -9,6 +9,7 @@ Pytest fixtures for testing the Korp backend as a Flask app.
 import pytest
 
 from pathlib import Path
+from shutil import copytree
 
 from korp import create_app
 from tests.corpusutils import CWBEncoder
@@ -75,3 +76,15 @@ def corpora(corpus_data_root):
     corpus_source_dir = _datadir / "corpora" / "src"
     cwb_encoder = CWBEncoder(str(corpus_data_root))
     return cwb_encoder.encode_corpora(str(corpus_source_dir))
+
+
+@pytest.fixture()
+def corpus_configs(corpus_config_dir):
+    """Copy corpus configs from data/corpora/config to corpus_config_dir."""
+    config_src_dir = _datadir / "corpora" / "config"
+    # KLUDGE: Remove corpus_config_dir created in the fixture so
+    # named, as shutil.copytree expects the destination not to exists.
+    # For Python 3.8+, the argument dirs_exist_ok=True could be
+    # specified, but this also supports older Pythons.
+    corpus_config_dir.rmdir()
+    copytree(str(config_src_dir), str(corpus_config_dir))

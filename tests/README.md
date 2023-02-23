@@ -49,6 +49,8 @@ This directory `tests/` contains:
   (`korp.views.*`)
 - `data/`: test data
   - [`data/corpora/src`](data/corpora/src): corpus source data
+  - [`data/corpora/config`](data/corpora/config): corpus configuration
+    data
 - [`conftest.py`](conftest.py): Pytest configuration; in particular,
   fixtures to be used by individual tests
 - [`corpusutils.py`](corpusutils.py): utility functions for setting up
@@ -74,6 +76,8 @@ The following Pytest fixtures have been defined in
 - `corpus_registry_dir`: Return CWB corpus registry directory for a session
 - `cache_dir`: Return Korp cache directory
 - `corpus_config_dir`: Return corpus configuration directory
+- `corpus_configs`: Copy corpus configurations in
+  `data/corpora/config` to a temporary directory used in tests
 - `corpora`: Encode the corpora in `data/corpora/src` and return their ids
 - `app`: Create and configure a Korp Flask app instance
 - `client`: Create and return a test client
@@ -149,6 +153,15 @@ Updated: 2023-01-20
 Note that the encoded test corpus data is placed under a temporary
 directory for the duration of a test session, so test corpora are
 isolated from any other CWB corpora in the system.
+
+
+### Corpus configuration data
+
+Corpus configuration data used in tests for the `/corpus_config`
+endpoint is under `data/corpora/config` in the format expected by
+Korp; please see [the
+documentation](../README.md#corpus-configuration-for-the-korp-frontend)
+for more information.
 
 
 ### Database data
