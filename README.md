@@ -13,35 +13,26 @@ To see what has changed in recent versions, see the [CHANGELOG](CHANGELOG.md).
 
 To use the basic features of the Korp backend you need the following:
 
-* [Python 3.6+](http://python.org/)
-* [Corpus Workbench](http://cwb.sourceforge.net/beta.php) (CWB) 3.4.12 or newer
+* [Python 3.6+](https://python.org/)
+* [Corpus Workbench](https://cwb.sourceforge.io/) (CWB) 3.4.12 or newer
 
 To use the additional features such as the Word Picture you also need:
 
-* [MariaDB](https://mariadb.org/) or [MySQL](http://www.mysql.com/)
+* [MariaDB](https://mariadb.org/) or [MySQL](https://www.mysql.com/)
 
 For optional (but strongly recommended) caching you need:
 
 * [Memcached](https://memcached.org/)
 
-
 ## Installing the required software
 
 These instructions assume you are running a UNIX-like operating system (Linux, macOS, etc).
 
-
 ### Corpus Workbench
 
-You will need the latest [beta version of CWB](http://cwb.sourceforge.net/beta.php). Install by following these steps:
-
-Check out the latest version of the source code using Subversion by running the following command in a terminal:
-
-    $ svn co http://svn.code.sf.net/p/cwb/code/cwb/trunk cwb
-
-Refer to the INSTALL text file for instructions on how to build and install on your system. The source code comes with
-a bunch of install scripts, so if you're lucky all you have to do is run one of them. For example:
-
-    $ sudo ./install-scripts/install-linux
+Download the current stable version of [Corpus Workbench](https://cwb.sourceforge.io/). Install by following the
+[*Installing the CWB Core*](https://cwb.sourceforge.io/install.php) instructions, either by using the provided
+packages or building from source. Refer to the included `INSTALL` text file for further instructions.
 
 Once CWB is installed, by default you will find it under `/usr/local/cwb-X.X.X/bin` (where `X.X.X` is the version
 number). Confirm that the installation was successful by running:
@@ -132,7 +123,7 @@ The API documentation is available as an OpenAPI specification in [docs/api.yaml
 ## Adding corpora
 
 Korp works as a layer on top of Corpus Workbench for most corpus search functionality. See the [CWB corpus encoding tutorial](http://cwb.sourceforge.net/files/CWB_Encoding_Tutorial.pdf) for information regarding encoding corpora.
-Note that Korp requires your corpora to be encoded in UTF-8.
+Note that Korp requires your corpora to be encoded in UTF-8. Values of structural attributes may not contain tab characters.
 Once CWB is aware of your corpora they will be accessible through the Korp API.
 
 ### Adding additional info about the corpus
@@ -390,6 +381,7 @@ when no mode is explicitly requested.
 
 **Optional:**
 
+- **description**: A description of the mode, shown when first entering it. May include HTML.
 - **order**: A number used for sorting the modes in the interface. Modes without an order will end up last.
 - **folders**: A folder structure for the corpus selector. These folders can then be referenced by individual corpora.
   The folder structure can be of any depth, and folders can have any number of sub-folders (using the key `subfolders`).
