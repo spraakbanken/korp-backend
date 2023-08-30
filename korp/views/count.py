@@ -1,11 +1,11 @@
 import itertools
+import re
 from collections import defaultdict
 from concurrent import futures
 from concurrent.futures import ThreadPoolExecutor
 
 from dateutil.relativedelta import relativedelta
-from flask import Blueprint
-from flask import current_app as app
+from flask import Blueprint, current_app as app
 from pymemcache.exceptions import MemcacheError
 
 from korp import utils
@@ -663,7 +663,7 @@ def count_query_worker(corpus, cqp, group_by, within, ignore_case=(), cut=None, 
     cmd += ["info; .EOL.;"]
 
     # TODO: Match targets in a better way
-    has_target = any("@[" in x for x in cqp)
+    has_target = any(re.search(r"(?:^|[ ()\]])@(?:\w+:)?\[", x) for x in cqp)
 
     cmd += ["""tabulate Last %s > "| sort | uniq -c | sort -nr";""" % ", ".join("%s %s%s" % (
         "target" if has_target else ("match" if g[1] else "match .. matchend"), g[0],
