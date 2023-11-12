@@ -62,6 +62,11 @@ CORPUS_CONFIG_DIR = ""
 # Set to True to enable "lab mode", potentially enabling experimental features and access to lab-only corpora
 LAB_MODE = False
 
+# When checking the availability of corpora, if True, try to select
+# each corpus in CQP (slower), otherwise only check the files in the
+# CWB registry directory (somewhat faster)
+CHECK_AVAILABLE_CORPORA_STRICTLY = True
+
 # Plugins to load
 PLUGINS = []
 
