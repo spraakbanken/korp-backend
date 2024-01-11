@@ -12,10 +12,10 @@ from korp import cwb, utils
 from korp import memcached
 from korp.views import info
 
-bp = utils.Plugin("wsauth", __name__)
+bp = utils.Plugin("auth_jwt", __name__)
 
 
-class WSAuth(utils.Authorizer):
+class AuthJWT(utils.Authorizer):
 
     def __init__(self):
         self._pubkey = None

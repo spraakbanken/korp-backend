@@ -52,7 +52,7 @@ def authenticate(_=None):
     yield {}
 
 
-class SBAuth(utils.Authorizer):
+class Auth(utils.Authorizer):
 
     def __init__(self):
         self._protected = []
