@@ -26,6 +26,7 @@
 - Fixed crash when trying to access non-existent mode in corpus_config.
 - Fixed crash when using semicolons at the end of CQP queries.
 - Fixed bug in `/count`, where a pipe would be returned for unannotated tokens when `top` was used.
+- Fixed caching bug in `/count` leading to wrong relative total.
 
 ## [8.1.0] - 2022-09-14
 
