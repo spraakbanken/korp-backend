@@ -1,0 +1,12 @@
+id: testcorpus
+description: Test corpus
+mode:
+  - name: default
+pos_attributes:
+  - lemma: lemma_single
+struct_attributes:
+  - text_id: text_id
+  - paragraph_id:
+      label: paragraph_id
+  - sentence_id:
+      label: sentence_id

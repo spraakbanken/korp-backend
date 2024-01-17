@@ -1,0 +1,17 @@
+<!-- #vrt positional-attributes: word lemma -->
+<!-- #vrt structural-attributes: text:0+id paragraph:0+id sentence:0+id -->
+<text id="t1">
+<paragraph id="p1">
+<sentence id="s1">
+</sentence>
+This	this
+is	be
+a	a
+test	test
+.	.
+<sentence id="s2">
+Great	great
+!	!
+</sentence>
+</paragraph>
+</text>
