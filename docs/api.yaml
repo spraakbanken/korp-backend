@@ -264,6 +264,11 @@ paths:
         - $ref: '#/components/parameters/CQPn'
         - $ref: '#/components/parameters/ExpandPrequeries'
         - $ref: '#/components/parameters/Incremental'
+        - name: query_data
+          description: The result from a query contains a `query_data` hash. Subsequent requests for further hits from the same query can be sped up by submitting the same hash back to Korp using this parameter.
+          in: query
+          schema:
+            type: string
       responses:
         '200':
           description: OK
@@ -277,12 +282,21 @@ paths:
                     description: Total number of hits.
                     example: 1422
                   corpus_hits:
+                    description: Hits per corpus.
                     type: object
                     additionalProperties:
                       type: integer
                     example:
                      ROMI: 1135
                      SUC3: 287
+                  corpus_order:
+                    description: Results are returned grouped by corpus. This lists the order of the corpora.
+                    type: array
+                    additionalProperties:
+                      type: string
+                    example:
+                      - ROMI
+                      - SUC3
                   kwic:
                     type: array
                     items:
@@ -323,6 +337,10 @@ paths:
                             items:
                               type: object
                             description: List of tokens.
+                  query_data:
+                    description: Hashed information about the distribution of the hits. Submit the same query data using the `query_data` parameter when requesting further hits from the same query, to get significantly faster results when querying multiple corpora.
+                    type: string
+                    example: eJwdxsERgCAMBMCWwnEY0Ap8OM7YAUlI_yXouK-tUV0NBKw0j8wNQ4tQJ9kXxupZWqX5RLJ0CafICvONYRE4nvs6d3T--QZ9AbXiFqk=
                   time:
                     $ref: '#/components/schemas/Time'
   /query_sample:
@@ -975,22 +993,22 @@ paths:
                 example:
                   cat..nn.1: 354
                   dog..nn.1: 85
-  /struct_values:
+  /attr_values:
     get:
-      summary: Structural Values
+      summary: Attribute Values
       description: |
-        Get all available values for one or more structural attributes, together with number of tokens for each value. Similar to `/count_all` but without relative frequencies and with support for hierarchies.
+        Get all available values for one or more attributes (structural or positional), together with number of tokens for each value. Similar to `/count_all` but without relative frequencies and with support for hierarchies.
         
         ### Example
         
         Get all authors and their titles together with token count:  
-        [`/struct_values?corpus=ROMI&struct=text_author>text_title&count=true`](https://ws.spraakbanken.gu.se/ws/korp/v8/struct_values?corpus=ROMI&struct=text_author>text_title&count=true&indent=4)
+        [`/attr_values?corpus=ROMI&attr=text_author>text_title&count=true`](https://ws.spraakbanken.gu.se/ws/korp/v8/attr_values?corpus=ROMI&attr=text_author>text_title&count=true&indent=4)
       tags:
         - Misc
       parameters:
         - $ref: '#/components/parameters/Corpus'
-        - name: struct
-          description: "Structural attribute. Each value can be either a plain attribute, or a hierarchy of two or more attributes, like so: `text_author>text_title`."
+        - name: attr
+          description: "Structural or positional attribute. Each value can be either a plain attribute, or a hierarchy of two or more attributes, like so: `text_author>text_title>pos`."
           required: true
           schema:
             type: array
@@ -1029,46 +1047,22 @@ paths:
                       description: Per corpus data.
                       type: object
                       additionalProperties:
-                        $ref: '#/paths/~1struct_values/get/responses/200/content/application~1json/schema/properties/combined'
+                        $ref: '#/paths/~1attr_values/get/responses/200/content/application~1json/schema/properties/combined'
                     combined:
                       type: object
-                      description: Structural attributes as keys. The values are either given as arrays or objects depending on if `count` is `true`.
+                      description: Structural and positional attributes as keys. The values are either given as arrays or objects depending on if `count` is `true`.
                       additionalProperties:
                         oneOf:
                           - type: array
-                            description: Structural values.
+                            description: Structural and positional values.
                             items:
                               type: string
                           - type: object
-                            description: Strucural values as keys, token counts as values.
+                            description: Structural and positional values as keys, token counts as values.
                             additionalProperties:
                               type: integer
                     time:
                       $ref: '#/components/schemas/Time'
-  /authenticate:
-    get:
-      summary: Authentication
-      description: Authenticate a user against an authentication system, if available. Uses basic authentication. Returns a list of protected corpora the user has access to.
-      tags:
-        - Misc
-      responses:
-       '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  corpora:
-                    type: array
-                    items:
-                      type: string
-                    example:
-                      corpora:
-                        - CLASSIFIED
-                        - MYDIARY 
-                  time:
-                    $ref: '#/components/schemas/Time'
   /corpus_config:
     get:
       summary: Corpus Configuration for the Frontend

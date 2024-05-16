@@ -1,8 +1,7 @@
-# -*- coding: utf-8 -*-
 """
-Configuration file used by the main korp.py script.
+Default configuration file.
 
-Copy this file to config.py and change the settings below.
+Settings can be overridden by placing a copy of this file in a directory named 'instance', and editing that copy.
 """
 
 # Host and port for the WSGI server
@@ -42,32 +41,29 @@ DBWPTABLE = "relations"
 DBUSER = ""
 DBPASSWORD = ""
 
-# URL to authentication server
-AUTH_SERVER = ""
-
-# Secret string used when communicating with authentication server
-AUTH_SECRET = ""
-
-# A text file with names of corpora needing authentication, one per line
-PROTECTED_FILE = ""
-
 # Cache path (optional). Script must have read and write access.
 CACHE_DIR = ""
 
 # Disk cache lifespan in minutes
 CACHE_LIFESPAN = 20
 
-# List of Memcached servers or sockets (socket paths must start with slash)
-MEMCACHED_SERVERS = []
-
-# Size of Memcached client pool
-MEMCACHED_POOL_SIZE = 25
+# Memcached server IP address and port, or path to socket file (socket path must start with slash)
+MEMCACHED_SERVER = None
 
 # Max number of rows from count command to cache
-CACHE_MAX_STATS = 5000
+CACHE_MAX_STATS = 50
+
+# Max size in bytes per cached query data file (0 = no limit)
+CACHE_MAX_QUERY_DATA = 0
 
 # Corpus configuration directory
 CORPUS_CONFIG_DIR = ""
 
 # Set to True to enable "lab mode", potentially enabling experimental features and access to lab-only corpora
 LAB_MODE = False
+
+# Plugins to load
+PLUGINS = []
+
+# Plugin configuration
+PLUGINS_CONFIG = {}

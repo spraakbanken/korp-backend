@@ -7,41 +7,32 @@ The code is distributed under the [MIT license](https://opensource.org/licenses/
 
 The Korp backend is a Python 3 WSGI application, acting as a wrapper for Corpus Workbench.
 
+To see what has changed in recent versions, see the [CHANGELOG](CHANGELOG.md).
 
 ## Requirements
 
 To use the basic features of the Korp backend you need the following:
 
-* [Python 3.3+](http://python.org/)
-* [Corpus Workbench](http://cwb.sourceforge.net/beta.php) (CWB) 3.4.12 or newer
+* [Python 3.6+](https://python.org/)
+* [Corpus Workbench](https://cwb.sourceforge.io/) (CWB) 3.4.12 or newer
 
 To use the additional features such as the Word Picture you also need:
 
-* [MariaDB](https://mariadb.org/) or [MySQL](http://www.mysql.com/)
+* [MariaDB](https://mariadb.org/) or [MySQL](https://www.mysql.com/)
 
-For optional caching you need:
+For optional (but strongly recommended) caching you need:
 
 * [Memcached](https://memcached.org/)
-* libmemcached-dev
-
 
 ## Installing the required software
 
 These instructions assume you are running a UNIX-like operating system (Linux, macOS, etc).
 
-
 ### Corpus Workbench
 
-You will need the latest [beta version of CWB](http://cwb.sourceforge.net/beta.php). Install by following these steps:
-
-Check out the latest version of the source code using Subversion by running the following command in a terminal:
-
-    $ svn co http://svn.code.sf.net/p/cwb/code/cwb/trunk cwb
-
-Refer to the INSTALL text file for instructions on how to build and install on your system. The source code comes with
-a bunch of install scripts, so if you're lucky all you have to do is run one of them. For example:
-
-    $ sudo ./install-scripts/install-linux
+Download the current stable version of [Corpus Workbench](https://cwb.sourceforge.io/). Install by following the
+[*Installing the CWB Core*](https://cwb.sourceforge.io/install.php) instructions, either by using the provided
+packages or building from source. Refer to the included `INSTALL` text file for further instructions.
 
 Once CWB is installed, by default you will find it under `/usr/local/cwb-X.X.X/bin` (where `X.X.X` is the version
 number). Confirm that the installation was successful by running:
@@ -70,8 +61,10 @@ Install the required Python modules using `pip` with the included requirements.t
 
 ## Configuring Korp
 
-Normally nothing needs to be changed in the korp.py file, and all configuration is done by editing config.py.
-The following variables need to be set:
+The supplied `config.py` contains the default configuration. To override the default configuration, make a copy
+of `config.py` and place it in a directory named `instance` in the repo root directory, and edit that copy.
+
+The following variables need to be set for Korp to work:
 
 * `CQP_EXECUTABLE`  
 The absolute path to the CQP binary. By default `/usr/local/cwb-X.X.X/bin/cqp`
@@ -90,26 +83,26 @@ The name of the MySQL database where the corpus data will be stored.
 * `DBUSER & DBPASSWORD`  
 Username and password for accessing the database.
 
-For caching to work you need to specify both a cache directory (`CACHE_DIR`) and a list of Memcached servers
-or sockets (`MEMCACHED_SERVERS`).
+For caching to work you need to specify both a cache directory (`CACHE_DIR`) and a Memcached server address or socket
+(`MEMCACHED_SERVER`).
 
 
 ## Running the backend
 
-To run the backend, simply run korp.py:
+To run the backend, simply run `run.py`:
 
-    python3 korp.py
+    python3 run.py
 
-The backend should then be reachable in your web browser on the port you configured in config.py, for
+The backend should then be reachable in your web browser on the port you configured in `config.py`, for
 example `http://localhost:1234`.
 
 During development or while testing your configuration, use the flag `dev` for automatic reloading.
 
-    python3 korp.py dev
+    python3 run.py dev
 
 For deployment, [Gunicorn](http://gunicorn.org/) works well.
 
-    gunicorn --worker-class gevent --bind 0.0.0.0:1234 --workers 4 --max-requests 250 --limit-request-line 0 korp:app
+    gunicorn --worker-class gevent --bind 0.0.0.0:1234 --workers 4 --max-requests 250 --limit-request-line 0 'run:create_app()'
 
 
 ## Cache management
@@ -130,7 +123,7 @@ The API documentation is available as an OpenAPI specification in [docs/api.yaml
 ## Adding corpora
 
 Korp works as a layer on top of Corpus Workbench for most corpus search functionality. See the [CWB corpus encoding tutorial](http://cwb.sourceforge.net/files/CWB_Encoding_Tutorial.pdf) for information regarding encoding corpora.
-Note that Korp requires your corpora to be encoded in UTF-8.
+Note that Korp requires your corpora to be encoded in UTF-8. Values of structural attributes may not contain tab characters.
 Once CWB is aware of your corpora they will be accessible through the Korp API.
 
 ### Adding additional info about the corpus
@@ -388,6 +381,7 @@ when no mode is explicitly requested.
 
 **Optional:**
 
+- **description**: A description of the mode, shown when first entering it. May include HTML.
 - **order**: A number used for sorting the modes in the interface. Modes without an order will end up last.
 - **folders**: A folder structure for the corpus selector. These folders can then be referenced by individual corpora.
   The folder structure can be of any depth, and folders can have any number of sub-folders (using the key `subfolders`).
@@ -473,10 +467,25 @@ correspond to a corpus ID in lowercase, followed by `.yaml`, e.g. `mycorpus.yaml
   should be an object with one key. The key should be the ID of the attribute, e.g. `msd` for positional attributes or
   `text_title` for structural. The value should be either 1) an object with a complete attribute definition, or 2) a
   string referring to an attribute preset containing such a definition, e.g. `msd` to refer to
-  `attributes/positional/msd.yaml`. The attribute definition is what tells the Korp frontend how to handle each
-  attribute, like how it should be presented in the sidebar and what interface widget to use in extended search. For
-  more information about what options are available for attribute definitions, see the [Korp frontend
+  `attributes/positional/msd.yaml`. With option 1, you may also refer to a preset by using the key
+  `preset` and then extend/override that preset. The attribute definition is what tells the Korp frontend how to handle
+  each attribute, like how it should be presented in the sidebar and what interface widget to use in extended search.
+  For more information about what options are available for attribute definitions, see the [Korp frontend
   documentation](https://github.com/spraakbanken/korp-frontend/blob/master/doc/frontend_devel.md#attribute-settings).
+  Example:
+  ```
+  struct_attributes:
+    - text_title: title
+    - text_type:
+        label:
+          eng: type
+          swe: typ
+    - text_source:
+        preset: url
+        label:
+          eng: source
+          swe: källa
+  ```
 - **custom_attributes**: See [Custom
   attributes](https://github.com/spraakbanken/korp-frontend/blob/master/doc/frontend_devel.md#custom-attributes).
 - **reading_mode**: See [Reading

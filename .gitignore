@@ -11,6 +11,7 @@ __pycache__/
 .venv/
 env/
 venv/
+.python-version
 
-# Config
-config.py
+# Instance dir
+instance/
