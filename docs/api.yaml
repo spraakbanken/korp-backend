@@ -264,6 +264,11 @@ paths:
         - $ref: '#/components/parameters/CQPn'
         - $ref: '#/components/parameters/ExpandPrequeries'
         - $ref: '#/components/parameters/Incremental'
+        - name: query_data
+          description: The result from a query contains a `query_data` hash. Subsequent requests for further hits from the same query can be sped up by submitting the same hash back to Korp using this parameter.
+          in: query
+          schema:
+            type: string
       responses:
         '200':
           description: OK
@@ -277,12 +282,21 @@ paths:
                     description: Total number of hits.
                     example: 1422
                   corpus_hits:
+                    description: Hits per corpus.
                     type: object
                     additionalProperties:
                       type: integer
                     example:
                      ROMI: 1135
                      SUC3: 287
+                  corpus_order:
+                    description: Results are returned grouped by corpus. This lists the order of the corpora.
+                    type: array
+                    additionalProperties:
+                      type: string
+                    example:
+                      - ROMI
+                      - SUC3
                   kwic:
                     type: array
                     items:
@@ -323,6 +337,10 @@ paths:
                             items:
                               type: object
                             description: List of tokens.
+                  query_data:
+                    description: Hashed information about the distribution of the hits. Submit the same query data using the `query_data` parameter when requesting further hits from the same query, to get significantly faster results when querying multiple corpora.
+                    type: string
+                    example: eJwdxsERgCAMBMCWwnEY0Ap8OM7YAUlI_yXouK-tUV0NBKw0j8wNQ4tQJ9kXxupZWqX5RLJ0CafICvONYRE4nvs6d3T--QZ9AbXiFqk=
                   time:
                     $ref: '#/components/schemas/Time'
   /query_sample:
