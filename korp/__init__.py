@@ -14,7 +14,7 @@ from korp.memcached import memcached
 __version__ = "8.2.5"
 
 
-def create_app():
+def create_app(config_override=None):
     """Application factory, creating and configuring the Flask app."""
 
     app = Flask(__name__)
@@ -31,6 +31,9 @@ def create_app():
         app.config.from_pyfile(str(instance_config_path))
     else:
         print(f"Configure Korp by copying config.py to '{app.instance_path}' and modifying that copy")
+
+    if config_override is not None:
+        app.config.update(config_override)
 
     cwb.init(
         executable=app.config["CQP_EXECUTABLE"],

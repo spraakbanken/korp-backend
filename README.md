@@ -54,9 +54,11 @@ Optionally you may set up a virtual Python environment:
     $ python3 -m venv venv
     $ source venv/bin/activate
 
-Install the required Python modules using `pip` with the included requirements.txt.
+Install the required Python modules using `pip` with the included `requirements.txt`.
 
     $ pip3 install -r requirements.txt
+
+If you wish to be able to run tests (useful mainly for Korp developers), install from `requirements-dev.txt` instead of `requirements.txt`.
 
 
 ## Configuring Korp
