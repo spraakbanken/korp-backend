@@ -119,7 +119,7 @@ paths:
                 properties:
                   corpora:
                     type: object
-                    description: List of corpora.
+                    description: An object with corpus names as keys and objects with corpus information as values.
                     additionalProperties:
                       type: object
                       properties:
@@ -292,7 +292,7 @@ paths:
                   corpus_order:
                     description: Results are returned grouped by corpus. This lists the order of the corpora.
                     type: array
-                    additionalProperties:
+                    items:
                       type: string
                     example:
                       - ROMI
@@ -302,6 +302,10 @@ paths:
                     items:
                       type: object
                       properties:
+                        corpus:
+                          description: Corpus name.
+                          type: string
+                          example: ROMI
                         match:
                           description: Specifies the position of the match in the context. If `in_order` is set to `false`, `match` will consist of a list of match objects, one per highlighted word.
                           oneOf:
@@ -1015,6 +1019,15 @@ paths:
             items:
               type: string
           in: query
+          explode: false
+        - name: split
+          description: Attributes that should be split (used for sets).
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+          example: [text_author, text_topic]
           explode: false
         - name: count
           description: Include token count. Disabled by default.
