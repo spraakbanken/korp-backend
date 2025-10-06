@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Added support for client-side caching via HTTP Cache-Control headers.
+
+### Changed
+
+### Fixed
+
 ## [8.2.0] - 2024-05-16
 
 ### Added

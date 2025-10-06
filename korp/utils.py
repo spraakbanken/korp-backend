@@ -38,7 +38,7 @@ QUERY_DELIM = ","
 authorizer: Optional["Authorizer"] = None
 
 
-def main_handler(generator):
+def main_handler(_generator=None, *, cache: bool = True):
     """Decorator wrapping all WSGI endpoints, handling errors and formatting.
 
     Global parameters are
@@ -47,102 +47,121 @@ def main_handler(generator):
      - indent: pretty-print the result with a specific indentation
      - debug: if set, return some extra information (for debugging)
     """
-    @functools.wraps(generator)  # Copy original function's information, needed by Flask
-    def decorated(args=None, *pargs, **kwargs):
-        internal = args is not None
-        if not internal:
-            if request.is_json:
-                args = request.get_json()
-            else:
-                args = request.values.to_dict()
-
-        args["internal"] = internal
-
-        if not isinstance(args.get("cache"), bool):
-            args["cache"] = bool(not app.config["CACHE_DISABLED"] and
-                                 not args.get("cache", "").lower() == "false" and
-                                 app.config["CACHE_DIR"] and os.path.exists(app.config["CACHE_DIR"]) and
-                                 app.config["MEMCACHED_SERVER"])
-
-        if internal:
-            # Function is internally used
-            return generator(args, *pargs, **kwargs)
-        else:
-            # Function is called externally
-            def error_handler():
-                """Format exception info for output to user."""
-                exc = sys.exc_info()
-                if isinstance(exc[1], CustomTracebackException):
-                    exc = exc[1].exception
-                error = {"ERROR": {"type": exc[0].__name__,
-                                   "value": str(exc[1])
-                                   }}
-                if "debug" in args:
-                    error["ERROR"]["traceback"] = "".join(traceback.format_exception(*exc)).splitlines()
-                return error
-
-            def incremental_json(ff):
-                """Incrementally yield result as JSON."""
-                if callback:
-                    yield callback + "("
-                yield "{\n"
-
-                try:
-                    for response in ff:
-                        if not response:
-                            # Yield whitespace to prevent timeout
-                            yield " \n"
-                        else:
-                            yield json.dumps(response)[1:-1] + ",\n"
-                except GeneratorExit:
-                    raise
-                except:
-                    error = error_handler()
-                    yield json.dumps(error)[1:-1] + ",\n"
-
-                yield json.dumps({"time": time.time() - starttime})[1:] + "\n"
-                if callback:
-                    yield ")"
-
-            def full_json(ff):
-                """Yield full JSON at the end, but until then keep returning newlines to prevent timeout."""
-                result = {}
-
-                try:
-                    for response in ff:
-                        if not response:
-                            # Yield whitespace to prevent timeout
-                            yield " \n"
-                        else:
-                            result.update(response)
-                except GeneratorExit:
-                    raise
-                except:
-                    result = error_handler()
-
-                result["time"] = time.time() - starttime
-
-                if callback:
-                    result = callback + "(" + json.dumps(result, indent=indent) + ")"
+    def decorator(generator):
+        @functools.wraps(generator)  # Copy original function's information, needed by Flask
+        def decorated(args=None, *pargs, **kwargs):
+            internal = args is not None
+            if not internal:
+                if request.is_json:
+                    args = request.get_json()
                 else:
-                    result = json.dumps(result, indent=indent)
-                yield result
+                    args = request.values.to_dict()
 
-            starttime = time.time()
-            incremental = parse_bool(args, "incremental", False)
-            callback = args.get("callback")
-            indent = int(args.get("indent", 0))
+            args["internal"] = internal
 
-            if incremental:
-                # Incremental response
-                return Response(stream_with_context(incremental_json(generator(args, *pargs, **kwargs))),
-                                mimetype="application/json")
+            if not isinstance(args.get("cache"), bool):
+                args["cache"] = bool(not app.config["CACHE_DISABLED"] and
+                                    not args.get("cache", "").lower() == "false" and
+                                    app.config["CACHE_DIR"] and os.path.exists(app.config["CACHE_DIR"]) and
+                                    app.config["MEMCACHED_SERVER"])
+
+            if internal:
+                # Function is internally used
+                return generator(args, *pargs, **kwargs)
             else:
-                # We still use a streaming response even when non-incremental, to prevent timeouts
-                return Response(stream_with_context(full_json(generator(args, *pargs, **kwargs))),
-                                mimetype="application/json")
+                # Function is called externally
+                def error_handler():
+                    """Format exception info for output to user."""
+                    exc = sys.exc_info()
+                    if isinstance(exc[1], CustomTracebackException):
+                        exc = exc[1].exception
+                    error = {"ERROR": {"type": exc[0].__name__,
+                                    "value": str(exc[1])
+                                    }}
+                    if "debug" in args:
+                        error["ERROR"]["traceback"] = "".join(traceback.format_exception(*exc)).splitlines()
+                    return error
 
-    return decorated
+                def incremental_json(ff):
+                    """Incrementally yield result as JSON."""
+                    if callback:
+                        yield callback + "("
+                    yield "{\n"
+
+                    try:
+                        for response in ff:
+                            if not response:
+                                # Yield whitespace to prevent timeout
+                                yield " \n"
+                            else:
+                                yield json.dumps(response)[1:-1] + ",\n"
+                    except GeneratorExit:
+                        raise
+                    except:
+                        error = error_handler()
+                        yield json.dumps(error)[1:-1] + ",\n"
+
+                    yield json.dumps({"time": time.time() - starttime})[1:] + "\n"
+                    if callback:
+                        yield ")"
+
+                def full_json(ff):
+                    """Yield full JSON at the end, but until then keep returning newlines to prevent timeout."""
+                    result = {}
+
+                    try:
+                        for response in ff:
+                            if not response:
+                                # Yield whitespace to prevent timeout
+                                yield " \n"
+                            else:
+                                result.update(response)
+                    except GeneratorExit:
+                        raise
+                    except:
+                        result = error_handler()
+
+                    result["time"] = time.time() - starttime
+
+                    if callback:
+                        result = callback + "(" + json.dumps(result, indent=indent) + ")"
+                    else:
+                        result = json.dumps(result, indent=indent)
+                    yield result
+
+                starttime = time.time()
+                incremental = parse_bool(args, "incremental", False)
+                callback = args.get("callback")
+                indent = int(args.get("indent", 0))
+
+                if incremental:
+                    # Incremental response
+                    response = Response(
+                        stream_with_context(incremental_json(generator(args, *pargs, **kwargs))),
+                        mimetype="application/json",
+                    )
+                else:
+                    # We still use a streaming response even when non-incremental, to prevent timeouts
+                    response = Response(
+                        stream_with_context(full_json(generator(args, *pargs, **kwargs))), mimetype="application/json"
+                    )
+
+                if cache and app.config["HTTP_CACHE_MAXAGE"]:
+                    # Set headers for client-side caching
+                    then = datetime.datetime.now() + datetime.timedelta(hours=app.config["HTTP_CACHE_MAXAGE"])
+                    response.headers.add("Expires", then.strftime("%a, %d %b %Y %H:%M:%S GMT"))
+                    response.headers.add(
+                        "Cache-Control", f"public,max-age={int(3600 * app.config['HTTP_CACHE_MAXAGE'])}"
+                    )
+                return response
+        return decorated
+
+    # If called as @main_handler without parentheses
+    if _generator is not None:
+        return decorator(_generator)
+
+    # If called as @main_handler(...) with parentheses
+    return decorator
 
 
 def prevent_timeout(generator):

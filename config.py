@@ -41,6 +41,9 @@ DBWPTABLE = "relations"
 DBUSER = ""
 DBPASSWORD = ""
 
+# HTTP Cache-Control header max-age value (in hours)
+HTTP_CACHE_MAXAGE = 1
+
 # Cache path (optional). Script must have read and write access.
 CACHE_DIR = ""
 

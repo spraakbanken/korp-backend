@@ -19,11 +19,11 @@ def create_app(config_override=None):
 
     app = Flask(__name__)
 
-    # Enable CORS
-    CORS(app, supports_credentials=True)
-
     # Load default config
     app.config.from_object("config")
+
+    # Enable CORS, with support for credentials and an Access-Control-Max-Age (for preflight requests) of 1 hour
+    CORS(app, supports_credentials=True, max_age=app.config["HTTP_CACHE_MAXAGE"] * 3600)
 
     # Overwrite with instance config
     instance_config_path = Path(app.instance_path) / "config.py"
