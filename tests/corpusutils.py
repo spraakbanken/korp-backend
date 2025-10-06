@@ -31,10 +31,10 @@ class CWBEncoder:
         "lex/",
     ]
 
-    def __init__(self, corpus_root, cwb_encode=None, cwb_make=None):
-        """Initialize with paths for corpus root, cwb-encode, cwb-make."""
+    def __init__(self, corpus_root, cwb_encode=None, cwb_makeall=None):
+        """Initialize with paths for corpus root, cwb-encode, cwb-makeall."""
         cwb_encode = cwb_encode or "cwb-encode"
-        cwb_make = cwb_make or "cwb-make"
+        cwb_makeall = cwb_makeall or "cwb-makeall"
         corpus_root = os.path.abspath(corpus_root)
         self._datarootdir = os.path.join(corpus_root, "data")
         self._registrydir = os.path.join(corpus_root, "registry")
@@ -53,7 +53,7 @@ class CWBEncoder:
     def encode_corpus(self, corpus_id, vrt_file):
         """Encode vrt_file with corpus_id."""
         self.encode_vrt_file(corpus_id, vrt_file)
-        self.cwb_make(corpus_id)
+        self.cwb_makeall(corpus_id)
         self.copy_info_file(corpus_id, vrt_file)
 
     def encode_vrt_file(self, corpus_id, vrt_file):
@@ -109,10 +109,10 @@ class CWBEncoder:
                         line.partition(":")[2].strip(" ->\n").split())
         return attrs
 
-    def cwb_make(self, corpus_id):
-        """Run cwb-make for corpus corpus_id."""
+    def cwb_makeall(self, corpus_id):
+        """Run cwb-makeall for corpus corpus_id."""
         subprocess.run([
-            "cwb-make",
+            "cwb-makeall",
             "-r", self._registrydir,
             corpus_id
         ]).check_returncode()

@@ -14,7 +14,7 @@ $ pip3 install -r requirements-dev.txt
 ```
 
 In addition, you need to have the Corpus Workbench (CWB), in
-particular `cwb-encode`, and the CWB Perl tools (for `cwb-make`),
+particular `cwb-encode` and `cwb-makeall`,
 installed and on `PATH` (see the [main README
 file](../README.md#corpus-workbench)). The CWB Perl tools can be
 installed from the CWB Subversion repository at
