@@ -1,7 +1,7 @@
 Flask~=2.2.3
 Flask-Cors==3.0.10
 Flask-MySQLdb==0.2.0
-mysqlclient==1.3.13
+mysqlclient==1.3.14
 gevent~=22.10.2
 psutil~=5.9.5
 pymemcache~=4.0.0

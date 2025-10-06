@@ -1,0 +1,27 @@
+
+# Korp MySQL database table information for timedata and timedata_date
+
+
+- tablename: timedata
+  filenames:
+  - 'timedata/{corpus}([_:+]timedata)?'
+  - '{corpus}/timedata'
+  exclude_filenames:
+  - '.*_date'
+  definition: |
+    `corpus` varchar(64) NOT NULL DEFAULT '',
+    `datefrom` datetime NOT NULL DEFAULT '0000-00-00 00:00:00',
+    `dateto` datetime NOT NULL DEFAULT '0000-00-00 00:00:00',
+    `tokens` int(11) NOT NULL DEFAULT 0,
+    PRIMARY KEY (`corpus`, `datefrom`, `dateto`)
+
+- tablename: timedata_date
+  filenames:
+  - 'timedata/{corpus}([_:+]timedata)?_date'
+  - '{corpus}/timedata_date'
+  definition: |
+    `corpus` varchar(64) NOT NULL DEFAULT '',
+    `datefrom` date NOT NULL DEFAULT '0000-00-00',
+    `dateto` date NOT NULL DEFAULT '0000-00-00',
+    `tokens` int(11) NOT NULL DEFAULT 0,
+    PRIMARY KEY (`corpus`, `datefrom`, `dateto`)

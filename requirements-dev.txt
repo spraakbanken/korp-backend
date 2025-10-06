@@ -1,0 +1,7 @@
+# Common requirements
+-r requirements.txt
+
+# Requirements for development
+
+coverage~=7.0
+pytest~=7.2

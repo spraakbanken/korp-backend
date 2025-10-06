@@ -1,0 +1,16 @@
+
+# Korp MySQL database table information for lemgram_index
+
+
+- tablename: lemgram_index
+  filenames:
+  - 'lemgram(s|_index)/{corpus}([_:+]lemgram(s|_index))?'
+  - '{corpus}/lemgram(s|_index)'
+  definition: |
+    `lemgram` varchar(64) NOT NULL,
+    `freq` int(11) DEFAULT NULL,
+    `freq_prefix` int(11) DEFAULT NULL,
+    `freq_suffix` int(11) DEFAULT NULL,
+    `corpus` varchar(64) NOT NULL,
+    PRIMARY KEY `lemgram_corpus` (`lemgram`, `corpus`, `freq`,
+                                  `freq_prefix`, `freq_suffix`)
