@@ -13,7 +13,7 @@ To see what has changed in recent versions, see the [CHANGELOG](CHANGELOG.md).
 
 To use the basic features of the Korp backend you need the following:
 
-* [Python 3.6+](https://python.org/)
+* [Python 3.10+](https://python.org/)
 * [Corpus Workbench](https://cwb.sourceforge.io/) (CWB) 3.4.12 or newer
 
 To use the additional features such as the Word Picture you also need:

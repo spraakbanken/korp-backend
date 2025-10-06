@@ -8,6 +8,8 @@
 
 ### Changed
 
+- Dropped support for Python versions older than 3.10.
+
 ### Fixed
 
 ## [8.2.0] - 2024-05-16
