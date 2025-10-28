@@ -61,6 +61,14 @@ privilege.
 The database user should also have the file privilege to load data
 from files.
 
+In addition, you can specify the database collation with a custom
+`pytest` command-line option:
+
+- `--db-collate=`_COLLATE_: Use _COLLATE_ as the Korp MySQL test
+  database collation. If not specified, use the default collation for
+  the database character set specified in the Korp configuration
+  variable `DBCHARSET`.
+
 If the test database cannot be created, tests using the database
 (fixture `database`) are skipped.
 

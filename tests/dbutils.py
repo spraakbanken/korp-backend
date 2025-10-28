@@ -17,7 +17,9 @@ For more information, please see the documentation in tests/README.md.
 
 
 # TODO:
-# - Specify default collation for db
+# - If --db-collate is not specified, use the collation of the Korp
+#   database (as specified in the Korp configuration) as the default
+#   collation if the database can be accessed.
 # - Remove corpus data before importing to a multi-corpus table
 
 
@@ -63,6 +65,10 @@ class KorpDatabase:
         "create-user": "Use user {} to create the Korp MySQL test database",
         "create-password": (
             "Use password {} to create the Korp MySQL test database"),
+        "collate": (
+            "Use {} as the Korp MySQL test database collation."
+            " If not specified, use the default collation for the database"
+            " character set."),
     }
     # The custom pytest command-line options
     _pytest_db_options = {}
@@ -232,12 +238,16 @@ class KorpDatabase:
                 cursor = conn.cursor()
                 dbname = self._make_db_name(cursor)
                 charset = korp_conf['DBCHARSET']
+                collate = self._db_options["collate"] or ""
+                if collate:
+                    collate = f" COLLATE {collate}"
                 user = self._db_options['user']
                 host = self._conn_params['host']
-                for sql in [
-                        f"CREATE DATABASE {dbname} CHARACTER SET {charset};",
-                        f"GRANT ALL ON {dbname}.* TO '{user}'@'{host}';",
-                ]:
+                sqls = [
+                    f"CREATE DATABASE {dbname} CHARACTER SET {charset}{collate};",
+                    f"GRANT ALL ON {dbname}.* TO '{user}'@'{host}';",
+                ]
+                for sql in sqls:
                     self.execute(sql, cursor)
         except MySQLdb.Error as exc:
             self.create_error = {
