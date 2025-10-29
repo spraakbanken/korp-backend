@@ -16,10 +16,6 @@ For more information, please see the documentation in tests/README.md.
 """
 
 
-# TODO:
-# - Remove corpus data before importing to a multi-corpus table
-
-
 import csv
 import re
 
@@ -95,6 +91,8 @@ class KorpDatabase:
         self._tableinfo = []
         # Filename patterns by table type
         self._tabletype_patts = defaultdict(list)
+        # Table info by table type
+        self._tabletype_info = defaultdict(list)
         # Initialize self._tableinfo, self._tabletype_patts
         self._read_tableinfo()
         # If True, use an existing table in the database, so do not
@@ -410,6 +408,7 @@ class KorpDatabase:
                 if not filename.startswith(".*/"):
                     filename = ".*/" + filename
                 self._tabletype_patts[info["tabletype"]].append(filename)
+            self._tabletype_info[info["tabletype"]].append(info)
         self._tableinfo = tableinfo
 
     def import_tables(self, corpora, tabletypes=None):
@@ -417,21 +416,28 @@ class KorpDatabase:
 
         Import database tables in TSV or SQL files matching patterns
         in self._tabletype_patts for the tabletypes and corpora.
+        Possibly existing tables are first dropped to avoid
+        interference between tests.
+
         corpora and tabletypes may be single strings or lists of
         strings. If tabletypes is None (default), import all types of
         tables for corpora.
         """
-        files = self._find_table_files(corpora, tabletypes)
-        self.import_table_files(files)
-
-    def _find_table_files(self, corpora, tabletypes=None):
-        """Return a list of table data file names for corpora and tabletypes."""
         if tabletypes is None:
             tabletypes = self._tabletype_patts.keys()
         elif isinstance(tabletypes, str):
             tabletypes = [tabletypes]
         if isinstance(corpora, str):
             corpora = [corpora]
+        files = self._find_table_files(corpora, tabletypes)
+        # It would probably be more efficient to delete existing data
+        # than to drop and re-create tables, but the latter is simpler
+        # to implement
+        self.drop_tables(corpora, tabletypes)
+        self.import_table_files(files)
+
+    def _find_table_files(self, corpora, tabletypes):
+        """Return a list of table data file names for corpora and tabletypes."""
         files = []
         for ext in ["sql", "tsv"]:
             for filename in self._datadir.rglob(f"*.{ext}"):
@@ -444,8 +450,29 @@ class KorpDatabase:
                                 files.append(filename)
         return files
 
+    def drop_tables(self, corpora, tabletypes):
+        """Drop possibly existing tables for tabletypes and corpora.
+
+        corpora and tabletypes are iterables of strings.
+        """
+        tables = []
+        for tabletype in tabletypes:
+            for info in self._tabletype_info[tabletype]:
+                if "{" in info["tablename"]:
+                    # Table name contains corpus id
+                    tables.extend(self._make_tablename(info, corpus)
+                                  for corpus in corpora)
+                else:
+                    tables.append(info["tablename"])
+        tablenames = ", ".join(f"`{table}`" for table in tables)
+        self.execute(f"DROP TABLE IF EXISTS {tablenames};")
+
     def import_table_files(self, tablefile_globs):
-        """Import table data from files matched by tablefile_globs."""
+        """Import table data from files matched by tablefile_globs.
+
+        Note that unlike import_tables, import_table_files does *not*
+        first drop possibly existing tables.
+        """
 
         def find_files(tablefile_glob):
             """Find files in tablefile_globs or use directly if absolute.

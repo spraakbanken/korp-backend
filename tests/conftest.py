@@ -99,7 +99,8 @@ def database_tables(database):
     The returned function takes as its arguments a list of corpora
     (corpus ids) or a single corpus id (string) whose data to import,
     and the type of table data to import (if omitted, import all
-    types).
+    types). The function drops possibly existing tables, so all the
+    tables for a test should be imported with a single call.
     """
 
     def _database_tables(corpora, tabletype=None):
