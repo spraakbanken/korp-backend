@@ -17,9 +17,6 @@ For more information, please see the documentation in tests/README.md.
 
 
 # TODO:
-# - If --db-collate is not specified, use the collation of the Korp
-#   database (as specified in the Korp configuration) as the default
-#   collation if the database can be accessed.
 # - Remove corpus data before importing to a multi-corpus table
 
 
@@ -67,8 +64,9 @@ class KorpDatabase:
             "Use password {} to create the Korp MySQL test database"),
         "collate": (
             "Use {} as the Korp MySQL test database collation."
-            " If not specified, use the default collation for the database"
-            " character set."),
+            " If not specified, use the collation of the Korp MySQL database,"
+            " or if that cannot be accessed, the default collation for the"
+            " Korp MySQL database character set."),
     }
     # The custom pytest command-line options
     _pytest_db_options = {}
@@ -227,6 +225,39 @@ class KorpDatabase:
         _make_db_name, user is taken from _db_options and host from
         _conn_params.
         """
+
+        def get_collation(korp_conf):
+            """Get the collation for the Korp test database.
+
+            If the custom Pytest command-line option --db-collate has
+            been specified, return its value.
+            Otherwise, if the Korp MySQL database can be accessed
+            (with the parameters defined in the Korp configuration
+            korp_conf), return its collation.
+            Otherwise, return the empty string to use the default
+            collation for the database character set.
+            """
+            collate = self._db_options["collate"] or ""
+            if not collate:
+                try:
+                    # Try to access the Korp database
+                    with MySQLdb.Connect(
+                            host=korp_conf["DBHOST"],
+                            port=korp_conf["DBPORT"],
+                            user=korp_conf["DBUSER"],
+                            password=korp_conf["DBPASSWORD"],
+                            database=korp_conf["DBNAME"],
+                            use_unicode=True
+                    ) as conn:
+                        cursor = conn.cursor()
+                        # Alternative ways to find out db collation:
+                        # https://stackoverflow.com/a/76490467
+                        cursor.execute("SELECT @@collation_database;")
+                        collate = cursor.fetchone()[0]
+                except MySQLdb.Error as exc:
+                    pass
+            return collate
+
         if self.dbname is not None:
             # If a database has already been created, do not create
             # another
@@ -238,7 +269,7 @@ class KorpDatabase:
                 cursor = conn.cursor()
                 dbname = self._make_db_name(cursor)
                 charset = korp_conf['DBCHARSET']
-                collate = self._db_options["collate"] or ""
+                collate = get_collation(korp_conf)
                 if collate:
                     collate = f" COLLATE {collate}"
                 user = self._db_options['user']

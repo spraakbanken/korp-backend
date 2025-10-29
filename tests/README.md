@@ -65,7 +65,9 @@ In addition, you can specify the database collation with a custom
 `pytest` command-line option:
 
 - `--db-collate=`_COLLATE_: Use _COLLATE_ as the Korp MySQL test
-  database collation. If not specified, use the default collation for
+  database collation. If not specified, use the collation of the Korp
+  MySQL database, or if the Korp MySQL database (as specified in the
+  Korp configuration) cannot be accessed, the default collation for
   the database character set specified in the Korp configuration
   variable `DBCHARSET`.
 
