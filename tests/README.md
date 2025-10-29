@@ -71,8 +71,8 @@ In addition, you can specify the database collation with a custom
   the database character set specified in the Korp configuration
   variable `DBCHARSET`.
 
-If the test database cannot be created, tests using the database
-(fixture `database`) are skipped.
+If the test database cannot be created, a warning is issued and tests
+using the database (fixture `database`) are skipped.
 
 
 ### Test coverage

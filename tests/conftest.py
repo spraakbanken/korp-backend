@@ -6,6 +6,8 @@ Pytest fixtures for testing the Korp backend as a Flask app.
 """
 
 
+import warnings
+
 import pytest
 
 from pathlib import Path
@@ -88,6 +90,7 @@ def database(_database):
             msg = "Unable to create Korp database: Error " + error["message"]
             if error["sql"] is not None:
                 msg += " when executing SQL statement: " + error["sql"]
+            warnings.warn(f"Skipping tests using Korp database: {msg}")
         pytest.skip(msg)
     yield _database
 
