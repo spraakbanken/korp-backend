@@ -32,6 +32,9 @@ class CWBEncoder:
         "ref",
         "lex/",
     ]
+    # Default name (prefix) for the rest of the positional attributes
+    # (beginning from the 9th attribute)
+    _default_pos_attr_name = "attr"
 
     def __init__(self, corpus_root, cwb_encode=None, cwb_makeall=None):
         """Initialize with paths for corpus root, cwb-encode, cwb-makeall."""
@@ -151,7 +154,11 @@ class CWBEncoder:
                     if not attrs["positional"]:
                         pos_attr_count = line.count("\t") + 1
                         attrs["positional"] = (
-                            self._default_pos_attrs[:pos_attr_count])
+                            self._default_pos_attrs[:pos_attr_count]
+                            + [self._default_pos_attr_name + str(attrnum + 1)
+                               for attrnum in range(
+                                       len(self._default_pos_attrs),
+                                       pos_attr_count)])
                         if attrs["structural"]:
                             return attrs
         attrs["structural"] = [make_struct_spec(structname,

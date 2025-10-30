@@ -216,9 +216,11 @@ Great	great
 ```
 
 If the `positional-attributes` comment is omitted, positional
-attribute names are taken from the following list: `word lemma pos msd
-deprel dephead ref lex/`, as many names as the first token line has
-tab-separated attributes.
+attribute names are first taken from the following list: `word lemma
+pos msd deprel dephead ref lex/`, as many names as the first token
+line has tab-separated attributes. If the token line has more
+attributes, the rest are named as `attr`_n_, where _n_ is the number
+of the attribute.
 
 If the `structural-attributes` comment is omitted, the structural
 attributes and their annotations are inferred based on the content of
