@@ -186,7 +186,7 @@ source VRT file _corpus_`.vrt` in `data/corpora/src`. The corpus
 source files use a slightly extended VRT (VeRticalized Text) format
 (the input format for CWB), where structures are marked with XML-style
 tags (with attributes) and each token is on its own line, token
-attributes separated by tags.
+attributes separated by tabs.
 
 The extension is that the positional and structural attributes can to
 be declared at the top of the file as XML comments as follows:
