@@ -10,8 +10,10 @@ setting up CWB corpus data.
 import glob
 import os
 import os.path
+import re
 import subprocess
 
+from collections import defaultdict
 from itertools import chain, zip_longest
 
 
@@ -64,6 +66,7 @@ class CWBEncoder:
             return [*chain(*zip_longest([], seq, fillvalue=s))]
 
         attrs = self._get_attrs(vrt_file)
+        # print(attrs)
         datadir = os.path.join(self._datarootdir, corpus_id)
         os.makedirs(datadir)
         subprocess.run([
@@ -82,7 +85,7 @@ class CWBEncoder:
         """Get the positional and strucutral attribute info from vrt_file.
 
         Assumes that vrt_file contains comments of the following kind
-        before the first token line:
+        before the first data line (token or structural attribute):
         <!-- #vrt positional-attributes: attr1 attr2 ... -->
         <!-- #vrt structural-attributes: text:0+a1+a2 sentence:0+a3+a4 ... -->
         Returns dict
@@ -91,22 +94,70 @@ class CWBEncoder:
             "structural": ["text:0+a1+a2", "sentence:0+a3+a4", ...]
         }
         """
+
+        def make_struct_spec(name, depth, attrnames):
+            """Make structural attribute specification for cwb-encode.
+
+            name is the name of the structural attribute, depth is the
+            recursive nesting depth (1-based) and attrnames the
+            annotation names.
+            """
+            return (f"{name}:{depth - 1}"
+                    + "".join(f"+{attrname}" for attrname in attrnames))
+
         attrs = {
             "positional": [],
             "structural": [],
         }
+        # Processing line before the first token or structure tag
+        in_header = True
+        # Annotation names of each structural attribute: values are
+        # dicts with dummy values to substitute ordered sets
+        struct_attrs = defaultdict(dict)
+        # The number of each structural attribute currently open
+        open_structs = defaultdict(int)
+        # For each structural attribute, the maximum nesting depth
+        struct_maxdepth = defaultdict(int)
         with open(vrt_file, "r") as vrtf:
             for line in vrtf:
-                if not line.startswith("<"):
+                if line[0] == "<":
+                    if in_header and line.startswith(
+                            ("<!-- #vrt positional-attributes:",
+                             "<!-- #vrt structural-attributes:")):
+                        attrs[line.split()[2].split("-")[0]] = (
+                            line.partition(":")[2].strip(" ->\n").split())
+                        if attrs["structural"] and attrs["positional"]:
+                            return attrs
+                    elif line[1] not in "!?":
+                        in_header = False
+                        structname = re.search(r"\w+", line).group(0)
+                        if line[1] == "/":
+                            open_structs[structname] -= 1
+                        else:
+                            open_structs[structname] += 1
+                            struct_maxdepth[structname] = max(
+                                struct_maxdepth[structname],
+                                open_structs[structname])
+                            # Should we also allow attribute values
+                            # enclosed in single quotes?
+                            attrnames = re.findall(r'(\w+?)="(?:[^"]*)"', line)
+                            # Use dict with dummy values as a substitute
+                            # for an ordered set
+                            struct_attrs[structname].update(
+                                dict((attrname, None)
+                                     for attrname in attrnames))
+                elif line[0] != "\n":
+                    in_header = False
                     if not attrs["positional"]:
                         pos_attr_count = line.count("\t") + 1
                         attrs["positional"] = (
                             self._default_pos_attrs[:pos_attr_count])
-                    return attrs
-                elif (line.startswith("<!-- #vrt positional-attributes:") or
-                      line.startswith("<!-- #vrt structural-attributes:")):
-                    attrs[line.split()[2].split("-")[0]] = (
-                        line.partition(":")[2].strip(" ->\n").split())
+                        if attrs["structural"]:
+                            return attrs
+        attrs["structural"] = [make_struct_spec(structname,
+                                                struct_maxdepth[structname],
+                                                struct_attrs[structname])
+                               for structname in struct_attrs.keys()]
         return attrs
 
     def cwb_makeall(self, corpus_id):

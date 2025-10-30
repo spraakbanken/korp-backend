@@ -188,7 +188,7 @@ source files use a slightly extended VRT (VeRticalized Text) format
 tags (with attributes) and each token is on its own line, token
 attributes separated by tags.
 
-The extension is that the positional and structural attributes need to
+The extension is that the positional and structural attributes can to
 be declared at the top of the file as XML comments as follows:
 ```
 <!-- #vrt positional-attributes: attr1 attr2 ... -->
@@ -214,6 +214,15 @@ Great	great
 </paragraph>
 </text>
 ```
+
+If the `positional-attributes` comment is omitted, positional
+attribute names are taken from the following list: `word lemma pos msd
+deprel dephead ref lex/`, as many names as the first token line has
+tab-separated attributes.
+
+If the `structural-attributes` comment is omitted, the structural
+attributes and their annotations are inferred based on the content of
+the VRT file.
 
 In addition to the VRT file _corpus_`.vrt`, a corpus should have a
 corresponding info file _corpus_`.info` containing at least the number
