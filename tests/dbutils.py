@@ -266,12 +266,12 @@ class KorpDatabase:
             with self._connect() as conn:
                 cursor = conn.cursor()
                 dbname = self._make_db_name(cursor)
-                charset = korp_conf['DBCHARSET']
+                charset = korp_conf["DBCHARSET"]
                 collate = get_collation(korp_conf)
                 if collate:
                     collate = f" COLLATE {collate}"
-                user = self._db_options['user']
-                host = self._conn_params['host']
+                user = self._db_options["user"]
+                host = self._conn_params["host"]
                 sqls = [
                     f"CREATE DATABASE {dbname} CHARACTER SET {charset}{collate};",
                     f"GRANT ALL ON {dbname}.* TO '{user}'@'{host}';",
@@ -341,7 +341,7 @@ class KorpDatabase:
 
             If a filename does not end in ".tsv", add the suffix. If a
             filename does not begin with ".*/", add the prefix.
-            Replace corpus name placeholder "{corpus}” with
+            Replace corpus name placeholder "{corpus}" with
             "(?P<corpus>[a-zA-Z0-9_-]+?)".
             """
             filenames_re = []
