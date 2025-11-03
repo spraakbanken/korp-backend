@@ -84,6 +84,15 @@ class CWBEncoder:
             *interleave("-S", attrs["structural"])
         ]).check_returncode()
 
+    def _make_struct_spec(self, name, depth, attrnames):
+        """Make structural attribute specification for cwb-encode.
+
+        name is the name of the structural attribute, depth is the
+        recursive nesting depth and attrnames the annotation names.
+        """
+        return (f"{name}:{depth}"
+                + "".join(f"+{attrname}" for attrname in attrnames))
+
     def _get_attrs(self, vrt_file):
         """Get the positional and strucutral attribute info from vrt_file.
 
@@ -97,17 +106,6 @@ class CWBEncoder:
             "structural": ["text:0+a1+a2", "sentence:0+a3+a4", ...]
         }
         """
-
-        def make_struct_spec(name, depth, attrnames):
-            """Make structural attribute specification for cwb-encode.
-
-            name is the name of the structural attribute, depth is the
-            recursive nesting depth (1-based) and attrnames the
-            annotation names.
-            """
-            return (f"{name}:{depth - 1}"
-                    + "".join(f"+{attrname}" for attrname in attrnames))
-
         attrs = {
             "positional": [],
             "structural": [],
@@ -161,10 +159,11 @@ class CWBEncoder:
                                        pos_attr_count)])
                         if attrs["structural"]:
                             return attrs
-        attrs["structural"] = [make_struct_spec(structname,
-                                                struct_maxdepth[structname],
-                                                struct_attrs[structname])
-                               for structname in struct_attrs.keys()]
+        attrs["structural"] = [
+            self._make_struct_spec(structname,
+                                   struct_maxdepth[structname] - 1,
+                                   struct_attrs[structname])
+            for structname in struct_attrs.keys()]
         return attrs
 
     def cwb_makeall(self, corpus_id):
