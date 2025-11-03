@@ -184,9 +184,10 @@ def test_lemgram_count_single_corpus(self, client, database):
 Each CWB corpus _corpus_ whose data is used in the tests should have a
 source VRT file _corpus_`.vrt` in `data/corpora/src`. The corpus
 source files use a slightly extended VRT (VeRticalized Text) format
-(the input format for CWB), where structures are marked with XML-style
-tags (with attributes) and each token is on its own line, token
-attributes separated by tabs.
+(the input format for CWB), in which structural attributes are marked
+with XML-style tags (with annotations as element attributes) and each
+token is on its own line, with positional (token) attributes separated
+by tabs.
 
 The extension is that the positional and structural attributes can to
 be declared at the top of the file as XML comments as follows:
