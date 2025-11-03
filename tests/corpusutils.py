@@ -16,6 +16,8 @@ import subprocess
 from collections import defaultdict
 from itertools import chain, zip_longest
 
+import yaml
+
 
 class CWBEncoder:
 
@@ -84,6 +86,57 @@ class CWBEncoder:
             *interleave("-S", attrs["structural"])
         ]).check_returncode()
 
+    def _get_attrs(self, fname):
+        """Return positional and structural attributes for corpus file fname.
+
+        If the file corpus.attrs.yaml exists for corpus file
+        corpus.vrt, return the attribute information in it
+        (_get_attrs_from_attrsfile); otherwise, return the attribute
+        information in (or inferred from) corpus.vrt
+        (_get_attrs_from_vrt).
+
+        Returns dict
+            { "positional": ["attr1", "attr2", ...],
+              "structural": ["text:0+a1+a2", "sentence:0+a3+a4", ...] }
+        so the attribute specifications can be used as values for
+        cwb-encode -P and -S declarations.
+        """
+        attrs_fname = os.path.splitext(fname)[0] + ".attrs.yaml"
+        if os.path.exists(attrs_fname):
+            return self._get_attrs_from_attrsfile(attrs_fname)
+        else:
+            return self._get_attrs_from_vrt(fname)
+
+    def _get_attrs_from_attrsfile(self, attrs_fname):
+        """Return attribute information declared in YAML file attrs_fname.
+
+        The content of attrs_fname should be as follows:
+            pos_attributes: ["attr1", "attr2", ...]
+            struct_attributes:
+            - text: ["a1", "a2", ...]
+            - sentence: ["a3", "a4", ...]
+            ...
+        In addition, if a structural attribute can be recursively
+        nested, its name should be followed by the recursive nesting
+        depth, separated by a space or colon:
+            - div 2: ["a5", ...]
+            - np:2: []
+        """
+        with open(attrs_fname, "r") as attrsf:
+            attr_info = yaml.safe_load(attrsf) or {}
+        attrs = {
+            "positional": attr_info.get("pos_attributes", []),
+            "structural": [],
+        }
+        for struct_attrs in attr_info.get("struct_attributes", []):
+            for structname, attrnames in struct_attrs.items():
+                parts = re.split(r"[:\s]+", structname, 1)
+                structname = parts[0]
+                depth = parts[1] if len(parts) > 1 else "0"
+                attrs["structural"].append(
+                    self._make_struct_spec(structname, depth, attrnames))
+        return attrs
+
     def _make_struct_spec(self, name, depth, attrnames):
         """Make structural attribute specification for cwb-encode.
 
@@ -93,7 +146,7 @@ class CWBEncoder:
         return (f"{name}:{depth}"
                 + "".join(f"+{attrname}" for attrname in attrnames))
 
-    def _get_attrs(self, vrt_file):
+    def _get_attrs_from_vrt(self, vrt_file):
         """Get the positional and strucutral attribute info from vrt_file.
 
         Assumes that vrt_file contains comments of the following kind

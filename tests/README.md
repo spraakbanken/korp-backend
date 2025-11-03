@@ -189,43 +189,84 @@ with XML-style tags (with annotations as element attributes) and each
 token is on its own line, with positional (token) attributes separated
 by tabs.
 
-The extension is that the positional and structural attributes can to
-be declared at the top of the file as XML comments as follows:
-```
-<!-- #vrt positional-attributes: attr1 attr2 ... -->
-<!-- #vrt structural-attributes: text:0+a1+a2 sentence:0+a3+a4 ... -->
-```
-For example:
-```
-<!-- #vrt positional-attributes: word lemma -->
-<!-- #vrt structural-attributes: text:0+id paragraph:0+id sentence:0+id -->
-<text id="t1">
-<paragraph id="p1">
-<sentence id="s1">
-</sentence>
-This	this
-is	be
-a	a
-test	test
-.	.
-<sentence id="s2">
-Great	great
-!	!
-</sentence>
-</paragraph>
-</text>
-```
+The positional and structural attributes can be specified in three
+ways:
 
-If the `positional-attributes` comment is omitted, positional
-attribute names are first taken from the following list: `word lemma
-pos msd deprel dephead ref lex/`, as many names as the first token
-line has tab-separated attributes. If the token line has more
-attributes, the rest are named as `attr`_n_, where _n_ is the number
-of the attribute.
+1. In a YAML file _corpus_`.attrs.yaml` with content like the
+   following:
+   ```yaml
+   pos_attributes:
+   - attr1
+   - attr2
+   # …
+   struct_attributes:
+   - text:
+     - a1
+     - a2
+     # …
+   - sentence:
+     - a3
+     - a4
+     # …
+   # …
+   ```
+   In addition, if a structural attribute can be recursively nested,
+   its name should be followed by the recursive nesting depth,
+   separated by a space or colon:
+   ```yaml
+   struct_attributes:
+   - div 2: ["a5", …]
+   - np:3: []
+   ```
+   If a structural attribute has no annotations, the annotations
+   should be specified as an empty list.
 
-If the `structural-attributes` comment is omitted, the structural
-attributes and their annotations are inferred based on the content of
-the VRT file.
+2. If _corpus_`.attrs.yaml` does not exist, the attributes can be
+   specified at the top of the VRT file as XML comments (an extension
+   to the VRT format):
+   ```xml
+   <!-- #vrt positional-attributes: attr1 attr2 ... -->
+   <!-- #vrt structural-attributes: text:0+a1+a2 sentence:0+a3+a4 ... -->
+   ```
+   Structural attributes are specified in the same way as for the
+   `cwb-encode` tool. For example:
+   ```xml
+   <!-- #vrt positional-attributes: word lemma -->
+   <!-- #vrt structural-attributes: text:0+id paragraph:0+id sentence:0+id -->
+   <text id="t1">
+   <paragraph id="p1">
+   <sentence id="s1">
+   </sentence>
+   This	this
+   is	be
+   a	a
+   test	test
+   .	.
+   <sentence id="s2">
+   Great	great
+   !	!
+   </sentence>
+   </paragraph>
+   </text>
+   ```
+
+3. If _corpus_`.attrs.yaml` does not exist and the VRT file does not
+   have a `positional-attributes` comment, positional attribute names
+   are first taken from the following list: `word lemma pos msd deprel
+   dephead ref lex/`, as many names as the first token line has
+   tab-separated attributes. If the token line has more attributes,
+   the rest are named as `attr`_n_, where _n_ is the number of the
+   attribute.
+
+   If the VRT file has no `structural-attributes` comment, the
+   structural attributes and their annotations are inferred based on
+   the content of the VRT file.
+
+In approaches 1 and 2, a trailing slash in the name of a positional
+attribute or structural attribute annotation is passed to `cwb-encode`
+to indicate that its values are feature sets (multi-valued). Approach
+3 does not (currently) detect that the values of an attribute are
+feature sets.
 
 In addition to the VRT file _corpus_`.vrt`, a corpus should have a
 corresponding info file _corpus_`.info` containing at least the number
