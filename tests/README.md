@@ -236,12 +236,12 @@ ways:
    <text id="t1">
    <paragraph id="p1">
    <sentence id="s1">
-   </sentence>
    This	this
    is	be
    a	a
    test	test
    .	.
+   </sentence>
    <sentence id="s2">
    Great	great
    !	!
