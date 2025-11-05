@@ -1,0 +1,15 @@
+# Positional and structural attributes in testcorpus5.vrt
+
+pos_attributes:
+- word
+- lemma
+
+struct_attributes:
+- text: []
+- paragraph:
+  - id
+- sentence:
+  - id
+  - a
+- span 2:
+  - n
