@@ -86,6 +86,8 @@ This directory `tests/` contains:
   directly under the `korp` package
 - [`functional/`](functional): functional tests, typically testing the endpoints
   (`korp.views.*`)
+- [`testing/`](testing): unit tests for functionality in test utility
+  modules (`tests.*utils`)
 - `data/`: test data
   - [`data/corpora/src`](data/corpora/src): corpus source data
   - [`data/corpora/config`](data/corpora/config): corpus configuration
