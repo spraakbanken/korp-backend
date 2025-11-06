@@ -13,10 +13,18 @@ import os.path
 import re
 import subprocess
 
+import xml.etree.ElementTree as et
+
 from collections import defaultdict
 from itertools import chain, zip_longest
+from xml.sax.saxutils import escape
 
 import yaml
+
+
+def is_feature_set_value(val):
+    """Return True if val is a CWB feature-set value."""
+    return val and val[0] == val[-1] == "|"
 
 
 class CWBEncoder:
@@ -45,32 +53,42 @@ class CWBEncoder:
         corpus_root = os.path.abspath(corpus_root)
         self._datarootdir = os.path.join(corpus_root, "data")
         self._registrydir = os.path.join(corpus_root, "registry")
+        self._tmpdir = os.path.join(corpus_root, "tmp")
         os.makedirs(self._datarootdir)
         os.makedirs(self._registrydir)
+        os.makedirs(self._tmpdir)
 
     def encode_corpora(self, corpus_src_dir):
-        """Encode all VRT data in corpus_src_dir, base name as corpus id."""
+        """Encode VRT and XML data in corpus_src_dir, base name as corpus id."""
         corpus_ids = []
-        for vrt_file in glob.glob(os.path.join(corpus_src_dir, "*.vrt")):
+        vrt_files = glob.glob(os.path.join(corpus_src_dir, "*.vrt"))
+        # Convert XML files to VRT and encode the VRT files
+        for xml_file in glob.glob(os.path.join(corpus_src_dir, "*.xml")):
+            vrt_file = os.path.join(
+                self._tmpdir,
+                os.path.splitext(os.path.basename(xml_file))[0] + ".vrt")
+            self.xml_file_to_vrt(xml_file, vrt_file)
+            vrt_files.append(vrt_file)
+        for vrt_file in vrt_files:
             corpus_id = os.path.splitext(os.path.basename(vrt_file))[0]
-            self.encode_corpus(corpus_id, vrt_file)
+            self.encode_corpus(corpus_id, vrt_file, corpus_src_dir)
             corpus_ids.append(corpus_id)
         return corpus_ids
 
-    def encode_corpus(self, corpus_id, vrt_file):
+    def encode_corpus(self, corpus_id, vrt_file, corpus_src_dir):
         """Encode vrt_file with corpus_id."""
-        self.encode_vrt_file(corpus_id, vrt_file)
+        self.encode_vrt_file(corpus_id, vrt_file, corpus_src_dir)
         self.cwb_makeall(corpus_id)
-        self.copy_info_file(corpus_id, vrt_file)
+        self.copy_info_file(corpus_id, corpus_src_dir)
 
-    def encode_vrt_file(self, corpus_id, vrt_file):
+    def encode_vrt_file(self, corpus_id, vrt_file, corpus_src_dir):
         """Run cwb-encode for vrt_file for corpus_id."""
 
         def interleave(s, seq):
             """Return [s, seq[0], s, seq[1], ... , s, seq[-1]."""
             return [*chain(*zip_longest([], seq, fillvalue=s))]
 
-        attrs = self._get_attrs(vrt_file)
+        attrs = self._get_attrs(vrt_file, corpus_src_dir)
         # print(attrs)
         datadir = os.path.join(self._datarootdir, corpus_id)
         os.makedirs(datadir)
@@ -86,7 +104,7 @@ class CWBEncoder:
             *interleave("-S", attrs["structural"])
         ]).check_returncode()
 
-    def _get_attrs(self, fname):
+    def _get_attrs(self, fname, attrsfile_dir=None):
         """Return positional and structural attributes for corpus file fname.
 
         If the file corpus.attrs.yaml exists for corpus file
@@ -95,13 +113,19 @@ class CWBEncoder:
         information in (or inferred from) corpus.vrt
         (_get_attrs_from_vrt).
 
+        If attrsfile_dir is not None, read the .attrs.yaml file from
+        there instead of the directory of fname.
+
         Returns dict
             { "positional": ["attr1", "attr2", ...],
               "structural": ["text:0+a1+a2", "sentence:0+a3+a4", ...] }
         so the attribute specifications can be used as values for
         cwb-encode -P and -S declarations.
         """
-        attrs_fname = os.path.splitext(fname)[0] + ".attrs.yaml"
+        attrs_dir = attrsfile_dir or os.path.dirname(fname)
+        attrs_fname = os.path.join(
+            attrs_dir,
+            os.path.splitext(os.path.basename(fname))[0] + ".attrs.yaml")
         if os.path.exists(attrs_fname):
             return self._get_attrs_from_attrsfile(attrs_fname)
         else:
@@ -166,8 +190,10 @@ class CWBEncoder:
         # Processing line before the first token or structure tag
         in_header = True
         # Annotation names of each structural attribute: values are
-        # dicts with dummy values to substitute ordered sets
-        struct_attrs = defaultdict(dict)
+        # dicts of booleans indicating whether the annotation is
+        # feature-set-valued (all values begin and end with "|") or
+        # not
+        struct_attrs = defaultdict(lambda: defaultdict(lambda: True))
         # The number of each structural attribute currently open
         open_structs = defaultdict(int)
         # For each structural attribute, the maximum nesting depth
@@ -194,12 +220,14 @@ class CWBEncoder:
                                 open_structs[structname])
                             # Should we also allow attribute values
                             # enclosed in single quotes?
-                            attrnames = re.findall(r'(\w+?)="(?:[^"]*)"', line)
-                            # Use dict with dummy values as a substitute
-                            # for an ordered set
+                            attrname_vals = dict(re.findall(r'(\w+?)="([^"]*)"',
+                                                            line))
                             struct_attrs[structname].update(
-                                dict((attrname, None)
-                                     for attrname in attrnames))
+                                dict((attrname,
+                                      (struct_attrs[structname][attrname]
+                                       and is_feature_set_value(attrval)))
+                                     for attrname, attrval
+                                     in attrname_vals.items()))
                 elif line[0] != "\n":
                     in_header = False
                     if not attrs["positional"]:
@@ -213,11 +241,81 @@ class CWBEncoder:
                         if attrs["structural"]:
                             return attrs
         attrs["structural"] = [
-            self._make_struct_spec(structname,
-                                   struct_maxdepth[structname] - 1,
-                                   struct_attrs[structname])
+            self._make_struct_spec(
+                structname, struct_maxdepth[structname] - 1,
+                self._make_set_valued(struct_attrs[structname]))
             for structname in struct_attrs.keys()]
         return attrs
+
+    def _make_set_valued(self, attrdict):
+        """Return list of attribute names with "/" suffixed to set-valued ones.
+
+        attrdict is a dict whose keys are (positional) attribute names
+        and boolean values indicate whether the attribute is
+        feature-set-valued or not.
+        """
+        return (attr + ("/" if is_set_valued else "")
+                for attr, is_set_valued in attrdict.items())
+
+    def xml_file_to_vrt(self, xml_fname, vrt_fname):
+        """Convert XML file named xml_fname to a VRT file named vrt_fname.
+
+        The input XML file is assumed to be in a Sparv XML export
+        format where each token is represented as a "token" element,
+        the word form as its text content and positional attributes as
+        attributes. The output VRT file has a positional-attributes
+        comment, but no structural-attributes comment, as structural
+        attributes are to be inferred from the VRT file.
+        """
+        with open(xml_fname, "r") as xmlf:
+            xml = xmlf.read()
+        vrt = self.xml_to_vrt(xml)
+        with open(vrt_fname, "w") as vrtf:
+            vrtf.write(vrt)
+
+    def xml_to_vrt(self, xml_str):
+        """Convert Sparv export XML xml_str to VRT and return as a str."""
+        # Positional attributes: key is the attribute name and value
+        # indicates if all the attribute values are feature-set values
+        pos_attrs = {"word": False}
+
+        def convert_elem(elem):
+            """Recursively convert XML elem to intermediate VRT lines.
+
+            Return a list of items corresponding to VRT lines. Tag
+            lines as strings but token lines are dicts of attributes,
+            as a token element may lack some attributes but all the
+            VRT tokens need to have the same number of attributes in
+            the same order.
+            """
+            nonlocal pos_attrs
+            if elem.tag == "token":
+                pos_attrs.update(dict((key, (pos_attrs.get(key, True)
+                                             and is_feature_set_value(val)))
+                                      for key, val in elem.items()))
+                line = dict(elem.items())
+                line["word"] = elem.text
+                return [line]
+            else:
+                lines = [f"<{elem.tag}"
+                         + "".join(f" {name}=\"" + escape(val, {"\"": "&quot;"})
+                                   + "\""
+                                   for name, val in elem.items())
+                         + ">\n"]
+                for subelem in elem:
+                    lines.extend(convert_elem(subelem))
+                lines.append(f"</{elem.tag}>\n")
+                return lines
+
+        lines = convert_elem(et.XML(xml_str))
+        pos_attrs_s = " ".join(self._make_set_valued(pos_attrs))
+        for linenr, line in enumerate(lines):
+            if isinstance(line, dict):
+                lines[linenr] = ("\t".join(escape(line.get(attr, ""))
+                                           for attr in pos_attrs)
+                                 + "\n")
+        lines[0:0] = [f"<!-- #vrt positional-attributes: {pos_attrs_s} -->\n"]
+        return "".join(lines)
 
     def cwb_makeall(self, corpus_id):
         """Run cwb-makeall for corpus corpus_id."""
@@ -227,9 +325,9 @@ class CWBEncoder:
             corpus_id
         ]).check_returncode()
 
-    def copy_info_file(self, corpus_id, vrt_file):
+    def copy_info_file(self, corpus_id, corpus_src_dir):
         """Copy corpus.info from source dir to the corpus data dir as .info."""
-        info_file = os.path.splitext(vrt_file)[0] + ".info"
+        info_file = os.path.join(corpus_src_dir, corpus_id + ".info")
         if os.path.isfile(info_file):
             subprocess.run([
                 "cp",

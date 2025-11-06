@@ -94,7 +94,7 @@ test\ttest
 .\t.
 </span>
 </sentence>
-<sentence id="s2" a="2">
+<sentence id="s2" a="|2|3|">
 <span n="5">
 Great\tgreat
 !\t!
@@ -106,7 +106,7 @@ Great\tgreat
     # Positional and structural attributes inferred from VRT
     pos_attrs_inferred = ["word", "lemma"]
     struct_attrs_inferred = [
-        "text:0", "paragraph:0+id", "sentence:0+id+a", "span:2+n"]
+        "text:0", "paragraph:0+id", "sentence:0+id+a/", "span:2+n"]
     # Positional and structural attributes comments; note that to test
     # that the attributes are taken from the comments and not inferred
     # from VRT, these differ from the inferred ones

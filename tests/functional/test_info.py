@@ -82,6 +82,12 @@ class TestCorpusInfo:
               "sentence", "sentence_id", "sentence_a",
               "span", "span1", "span2", "span_n", "span_n1", "span_n2"],
              []),
+            ("testcorpus6",
+             ["word", "baseform", "pos"],
+             ["corpus", "corpus_id", "document", "text",
+              "paragraph", "paragraph_id", "paragraph_y",
+              "sentence", "sentence_id", "sentence_x"],
+             []),
         ])
     def test_corpus_info_single_corpus(self, corpus, attrs_p, attrs_s, attrs_a,
                                        corpus_info_single):

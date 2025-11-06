@@ -184,60 +184,30 @@ def test_lemgram_count_single_corpus(self, client, database):
 ### Corpus data
 
 Each CWB corpus _corpus_ whose data is used in the tests should have a
-source VRT file _corpus_`.vrt` in `data/corpora/src`. The corpus
-source files use a slightly extended VRT (VeRticalized Text) format
-(the input format for CWB), in which structural attributes are marked
-with XML-style tags (with annotations as element attributes) and each
-token is on its own line, with positional (token) attributes separated
-by tabs.
+source file in `data/corpora/src`. Two different corpus source formats
+are supported:
 
-The positional and structural attributes can be specified in three
-ways:
+1. A slightly extended VRT (VeRticalized Text) format (the input
+   format for CWB), in which structural attributes are marked with
+   XML-style tags (with annotations as element attributes) and each
+   token is on its own line, with positional (token) attributes
+   separated by tabs. In VRT, the XML-style tags may _not_ be
+   indented.
 
-1. In a YAML file _corpus_`.attrs.yaml` with content like the
-   following:
-   ```yaml
-   pos_attributes:
-   - attr1
-   - attr2
-   # …
-   struct_attributes:
-   - text:
-     - a1
-     - a2
-     # …
-   - sentence:
-     - a3
-     - a4
-     # …
-   # …
-   ```
-   In addition, if a structural attribute can be recursively nested,
-   its name should be followed by the recursive nesting depth,
-   separated by a space or colon:
-   ```yaml
-   struct_attributes:
-   - div 2: ["a5", …]
-   - np:3: []
-   ```
-   If a structural attribute has no annotations, the annotations
-   should be specified as an empty list.
+   Since the standard VRT content does not specify the names of
+   positional attributes, the format has been extended so that their
+   names can be specified in a special XML comment at the top of the
+   file. A similar comment can also be used to specify the structural
+   attributes, even though structural attributes can also be inferred
+   from the file content. See below for more details and alternatives.
+   For example:
 
-2. If _corpus_`.attrs.yaml` does not exist, the attributes can be
-   specified at the top of the VRT file as XML comments (an extension
-   to the VRT format):
-   ```xml
-   <!-- #vrt positional-attributes: attr1 attr2 ... -->
-   <!-- #vrt structural-attributes: text:0+a1+a2 sentence:0+a3+a4 ... -->
-   ```
-   Structural attributes are specified in the same way as for the
-   `cwb-encode` tool. For example:
    ```xml
    <!-- #vrt positional-attributes: word lemma -->
    <!-- #vrt structural-attributes: text:0+id paragraph:0+id sentence:0+id -->
    <text id="t1">
    <paragraph id="p1">
-   <sentence id="s1">
+   <sentence id="s1" a="x">
    This	this
    is	be
    a	a
@@ -251,6 +221,78 @@ ways:
    </paragraph>
    </text>
    ```
+
+2. An XML format of the kind of the XML export formats produced by
+   [Sparv](https://spraakbanken.gu.se/sparv/): structural attributes
+   are represented by XML elements like in VRT (but tags can be
+   indented) and tokens by leaf-level `token` elements with the word
+   form as the text content and token attributes as element
+   attributes. For example, the following XML corresponds to the above
+   VRT:
+
+   ```xml
+   <?xml version='1.0' encoding='UTF-8'?>
+   <text id="t1">
+     <paragraph id="p1">
+       <sentence id="s1">
+         <token lemma="this">This</token>
+         <token lemma="be">is</token>
+         <token lemma="a">a</token>
+         <token lemma="test">test</token>
+         <token lemma=".">.</token>
+       </sentence>
+       <sentence id="s2" a="x">
+         <token lemma="great">Great</token>
+         <token lemma="!">!</token>
+       </sentence>
+     </paragraph>
+   </text>
+   ```
+   Possible elements above `text` are also included in the data.
+
+For VRT source files, the positional and structural attributes can be
+specified in the following three ways. For XML files, both the
+positional and structural attribute names can be inferred from the
+data as the positional attributes are named attributes of `token`
+elements. However, the first approach can also be used for XML files
+to override the inferred attributes.
+
+1. In a YAML file _corpus_`.attrs.yaml` with content like the
+   following (for the above examples):
+   ```yaml
+   pos_attributes:
+   - word
+   - lemma
+   struct_attributes:
+   - text:
+     - id
+   - sentence:
+     - id
+     - x
+   ```
+   In addition, if a structural attribute can be recursively nested,
+   its name should be followed by the recursive nesting depth,
+   separated by a space or colon:
+   ```yaml
+   struct_attributes:
+   - div 2:
+     - a5
+     # …
+   - np:3: []
+   ```
+   If a structural attribute has no annotations, the annotations
+   should be specified as an empty list.
+
+2. If _corpus_`.attrs.yaml` does not exist, the attributes can be
+   specified at the top of the VRT file as XML comments (an extension
+   to the VRT format):
+   ```xml
+   <!-- #vrt positional-attributes: attr1 attr2 ... -->
+   <!-- #vrt structural-attributes: text:0+a1+a2 sentence:0+a3+a4 ... -->
+   ```
+   Structural attributes are specified in the same way as for the
+   `cwb-encode` tool. See the VRT file example above for a concrete
+   example.
 
 3. If _corpus_`.attrs.yaml` does not exist and the VRT file does not
    have a `positional-attributes` comment, positional attribute names
@@ -266,9 +308,9 @@ ways:
 
 In approaches 1 and 2, a trailing slash in the name of a positional
 attribute or structural attribute annotation is passed to `cwb-encode`
-to indicate that its values are feature sets (multi-valued). Approach
-3 does not (currently) detect that the values of an attribute are
-feature sets.
+to indicate that its values are to be validated and normalized as
+feature sets (multi-valued). Approach 3 does not (currently) detect
+that the values of an attribute are feature sets.
 
 In addition to the VRT file _corpus_`.vrt`, a corpus should have a
 corresponding info file _corpus_`.info` containing at least the number
