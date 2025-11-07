@@ -82,29 +82,29 @@ class TestGetAttrs:
 <sentence id="s1">
 <span n="1">
 <span n="2">
-This\tthis
+This\t|this|
 </span>
 <span n="3">
 <span n="4">
-is\tbe
+is\t|be|
 </span>
-a\ta
+a\t|a|
 </span>
-test\ttest
-.\t.
+test\t|test|
+.\t|.|
 </span>
 </sentence>
 <sentence id="s2" a="|2|3|">
 <span n="5">
-Great\tgreat
-!\t!
+Great\t|great|
+!\t|!|
 </span>
 </sentence>
 </paragraph>
 </text>
 """
     # Positional and structural attributes inferred from VRT
-    pos_attrs_inferred = ["word", "lemma"]
+    pos_attrs_inferred = ["word", "lemma/"]
     struct_attrs_inferred = [
         "text:0", "paragraph:0+id", "sentence:0+id+a/", "span:2+n"]
     # Positional and structural attributes comments; note that to test
@@ -135,7 +135,7 @@ struct_attributes:
   - id
   - a
 - div 2:
-  - n
+  - n/
 """
     # The same as above, but with a colon separating the recursive
     # nesting depth from the structural attribute name
@@ -143,7 +143,7 @@ struct_attributes:
     # Positional and structural attributes from YAML attributes file
     pos_attrs_from_attrsfile = ["word", "lemma2"]
     struct_attrs_from_attrsfile = [
-        "text:0", "paragraph:0+id1", "sentence:0+id+a", "div:2+n"]
+        "text:0", "paragraph:0+id1", "sentence:0+id+a", "div:2+n/"]
 
     def _assert_get_attrs_result(self, vrt_content, attrs_content,
                                  result_pos, result_struct,
@@ -199,14 +199,18 @@ struct_attributes:
         The source VRT file has no positional-attributes comment, so
         _get_attrs returns default names.
         """
+        pos_attrs = (CWBEncoder._default_pos_attrs
+                     + [CWBEncoder._default_pos_attr_name + str(i)
+                        for i in range(9, 11)])
+        feat_set_pos_attr_nums = [4, 7, 9]
+        for i in feat_set_pos_attr_nums:
+            pos_attrs[i] += "/"
         self._assert_get_attrs_result(
-            ("<text>\n<sentence>\n" + "\t".join(str(i) for i in range(10))
+            ("<text>\n<sentence>\n"
+             + "\t".join(f"|{i}|" if i in feat_set_pos_attr_nums else f"{i}"
+                         for i in range(10))
              + "\n</sentence>\n</text>"),
-            None,
-            (CWBEncoder._default_pos_attrs
-             + [CWBEncoder._default_pos_attr_name + str(i)
-                for i in range(9, 11)]),
-            ["text:0", "sentence:0"],
+            None, pos_attrs, ["text:0", "sentence:0"],
             corpusfile, encoder)
 
     @pytest.mark.parametrize("header",

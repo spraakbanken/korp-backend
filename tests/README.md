@@ -309,8 +309,10 @@ to override the inferred attributes.
 In approaches 1 and 2, a trailing slash in the name of a positional
 attribute or structural attribute annotation is passed to `cwb-encode`
 to indicate that its values are to be validated and normalized as
-feature sets (multi-valued). Approach 3 does not (currently) detect
-that the values of an attribute are feature sets.
+feature sets (multi-valued). Approach 3 infers that a positional
+attribute or structural attribute annotation is feature-set-valued if
+all its values begin and end with a vertical bar `|`. It is also
+inferred similarly from XML data.
 
 In addition to the VRT file _corpus_`.vrt`, a corpus should have a
 corresponding info file _corpus_`.info` containing at least the number

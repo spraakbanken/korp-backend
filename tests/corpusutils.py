@@ -40,7 +40,7 @@ class CWBEncoder:
         "deprel",
         "dephead",
         "ref",
-        "lex/",
+        "lex",
     ]
     # Default name (prefix) for the rest of the positional attributes
     # (beginning from the 9th attribute)
@@ -198,6 +198,11 @@ class CWBEncoder:
         open_structs = defaultdict(int)
         # For each structural attribute, the maximum nesting depth
         struct_maxdepth = defaultdict(int)
+        # List of positional attributes: values are booleans
+        # indicating if all the attribute values are feature-set
+        # values
+        pos_attr_is_featset = []
+        pos_attr_count = 0
         with open(vrt_file, "r") as vrtf:
             for line in vrtf:
                 if line[0] == "<":
@@ -229,22 +234,35 @@ class CWBEncoder:
                                      for attrname, attrval
                                      in attrname_vals.items()))
                 elif line[0] != "\n":
-                    in_header = False
                     if not attrs["positional"]:
-                        pos_attr_count = line.count("\t") + 1
-                        attrs["positional"] = (
-                            self._default_pos_attrs[:pos_attr_count]
-                            + [self._default_pos_attr_name + str(attrnum + 1)
-                               for attrnum in range(
-                                       len(self._default_pos_attrs),
-                                       pos_attr_count)])
-                        if attrs["structural"]:
-                            return attrs
-        attrs["structural"] = [
-            self._make_struct_spec(
-                structname, struct_maxdepth[structname] - 1,
-                self._make_set_valued(struct_attrs[structname]))
-            for structname in struct_attrs.keys()]
+                        # A positional-attributes comment was not
+                        # encountered before the first token, so go
+                        # through all the data to find out which of
+                        # them are feature-set-valued
+                        pos_attrs = line[:-1].split("\t")
+                        if pos_attr_count == 0:
+                            pos_attr_count = len(pos_attrs)
+                            pos_attr_is_featset = pos_attr_count * [True]
+                            in_header = False
+                        for attrnum, attr in enumerate(pos_attrs):
+                            pos_attr_is_featset[attrnum] = (
+                                pos_attr_is_featset[attrnum]
+                                and is_feature_set_value(attr))
+        if not attrs["positional"]:
+            pos_attr_names = (
+                self._default_pos_attrs[:pos_attr_count]
+                + [self._default_pos_attr_name + str(attrnum + 1)
+                   for attrnum in range(len(self._default_pos_attrs),
+                                        pos_attr_count)])
+            attrs["positional"] = list(self._make_set_valued(
+                dict((pos_attr_names[attrnum], pos_attr_is_featset[attrnum])
+                     for attrnum in range(pos_attr_count))))
+        if not attrs["structural"]:
+            attrs["structural"] = [
+                self._make_struct_spec(
+                    structname, struct_maxdepth[structname] - 1,
+                    self._make_set_valued(struct_attrs[structname]))
+                for structname in struct_attrs.keys()]
         return attrs
 
     def _make_set_valued(self, attrdict):
@@ -276,7 +294,13 @@ class CWBEncoder:
     def xml_to_vrt(self, xml_str):
         """Convert Sparv export XML xml_str to VRT and return as a str."""
         # Positional attributes: key is the attribute name and value
-        # indicates if all the attribute values are feature-set values
+        # indicates if all the attribute values are feature-set
+        # values. Feature-set positional attributes are also inferred
+        # in _get_attrs_from_vrt, so this duplicates that
+        # functionality. However, if removed the functionality here,
+        # we would need to pass the attribute names from here to
+        # _get_attrs_from_vrt in some other way than via the
+        # positional-attributes comment.
         pos_attrs = {"word": False}
 
         def convert_elem(elem):
