@@ -140,6 +140,9 @@ struct_attributes:
     # The same as above, but with a colon separating the recursive
     # nesting depth from the structural attribute name
     attrs_content_struct_colon = attrs_content_struct.replace("div 2", "div:2")
+    # Empty positional and structural attributes
+    attrs_content_pos_empty = "\npos_attributes: []\n"
+    attrs_content_struct_empty = "\nstruct_attributes: []\n"
     # Positional and structural attributes from YAML attributes file
     pos_attrs_from_attrsfile = ["word", "lemma2"]
     struct_attrs_from_attrsfile = [
@@ -213,21 +216,59 @@ struct_attributes:
             None, pos_attrs, ["text:0", "sentence:0"],
             corpusfile, encoder)
 
-    @pytest.mark.parametrize("header",
-                             ["", pos_attr_comment + struct_attr_comment])
     @pytest.mark.parametrize(
-        "comment,attrsfile,result_pos,result_struct", [
-            ("positional and structural attributes",
+        "comment,attrsfile,header,result_pos,result_struct", [
+            ("positional and structural attributes, no VRT comments",
              attrs_content_pos + attrs_content_struct,
+             "",
              pos_attrs_from_attrsfile, struct_attrs_from_attrsfile),
-            ("positional and structural attributes (colon)",
+            ("positional and structural attributes, VRT comments",
+             attrs_content_pos + attrs_content_struct,
+             pos_attr_comment + struct_attr_comment,
+             pos_attrs_from_attrsfile, struct_attrs_from_attrsfile),
+            ("positional and structural attributes (colon), VRT comments",
              attrs_content_pos + attrs_content_struct_colon,
+             pos_attr_comment + struct_attr_comment,
              pos_attrs_from_attrsfile, struct_attrs_from_attrsfile),
-            ("positional attributes only",
-             attrs_content_pos, pos_attrs_from_attrsfile, []),
-            ("structural attributes only",
-             attrs_content_struct, [], struct_attrs_from_attrsfile),
-            ("no attributes", "", [], []),
+            ("positional attributes only, no VRT comments",
+             attrs_content_pos,
+             "",
+             pos_attrs_from_attrsfile, struct_attrs_inferred),
+            ("positional attributes only, VRT comments",
+             attrs_content_pos,
+             pos_attr_comment + struct_attr_comment,
+             pos_attrs_from_attrsfile, struct_attrs_from_comment),
+            ("structural attributes only, no VRT comments",
+             attrs_content_struct,
+             "",
+             pos_attrs_inferred, struct_attrs_from_attrsfile),
+            ("structural attributes only, VRT comments",
+             attrs_content_struct,
+             pos_attr_comment + struct_attr_comment,
+             pos_attrs_from_comment, struct_attrs_from_attrsfile),
+            ("empty positional, non-empty structural attributes, VRT comments",
+             attrs_content_pos_empty + attrs_content_struct,
+             pos_attr_comment + struct_attr_comment,
+             [], struct_attrs_from_attrsfile),
+            ("non-empty positional, empty structural attributes, VRT comments",
+             attrs_content_pos + attrs_content_struct_empty,
+             pos_attr_comment + struct_attr_comment,
+             pos_attrs_from_attrsfile, []),
+            ("empty positional attributes only, VRT comments",
+             attrs_content_pos_empty,
+             pos_attr_comment + struct_attr_comment,
+             pos_attrs_from_comment, struct_attrs_from_comment),
+            ("empty structural attributes only, VRT comments",
+             attrs_content_struct_empty,
+             pos_attr_comment + struct_attr_comment,
+             pos_attrs_from_comment, struct_attrs_from_comment),
+            ("no attributes, no VRT comments",
+             "", "",
+             pos_attrs_inferred, struct_attrs_inferred),
+            ("no attributes, VRT comments",
+             "",
+             pos_attr_comment + struct_attr_comment,
+             pos_attrs_from_comment, struct_attrs_from_comment),
         ])
     def test_get_attrs_attrsfile(self, header, comment, attrsfile,
                                  result_pos, result_struct,

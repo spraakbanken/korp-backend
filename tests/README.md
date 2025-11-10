@@ -283,6 +283,10 @@ to override the inferred attributes.
    If a structural attribute has no annotations, the annotations
    should be specified as an empty list.
 
+   If _corpus_`.attrs.yaml` lacks `pos_attributes` or
+   `struct_attributes` information, the missing information is
+   obtained with approach 2 if applicable, otherwise with approach 3.
+
 2. If _corpus_`.attrs.yaml` does not exist, the attributes can be
    specified at the top of the VRT file as XML comments (an extension
    to the VRT format):

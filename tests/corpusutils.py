@@ -108,10 +108,11 @@ class CWBEncoder:
         """Return positional and structural attributes for corpus file fname.
 
         If the file corpus.attrs.yaml exists for corpus file
-        corpus.vrt, return the attribute information in it
-        (_get_attrs_from_attrsfile); otherwise, return the attribute
-        information in (or inferred from) corpus.vrt
-        (_get_attrs_from_vrt).
+        corpus.vrt, use the attribute information in it as the basis
+        (_get_attrs_from_attrsfile). If the attributes file does not
+        exist or it does not list both positional and structural
+        attributes, amend the attribute information with that in (or
+        inferred from) corpus.vrt (_get_attrs_from_vrt).
 
         If attrsfile_dir is not None, read the .attrs.yaml file from
         there instead of the directory of fname.
@@ -126,10 +127,12 @@ class CWBEncoder:
         attrs_fname = os.path.join(
             attrs_dir,
             os.path.splitext(os.path.basename(fname))[0] + ".attrs.yaml")
+        attrs = {}
         if os.path.exists(attrs_fname):
-            return self._get_attrs_from_attrsfile(attrs_fname)
-        else:
-            return self._get_attrs_from_vrt(fname)
+            attrs = self._get_attrs_from_attrsfile(attrs_fname)
+        if "positional" not in attrs or "structural" not in attrs:
+            attrs = self._get_attrs_from_vrt(fname, attrs)
+        return attrs
 
     def _get_attrs_from_attrsfile(self, attrs_fname):
         """Return attribute information declared in YAML file attrs_fname.
@@ -148,17 +151,18 @@ class CWBEncoder:
         """
         with open(attrs_fname, "r") as attrsf:
             attr_info = yaml.safe_load(attrsf) or {}
-        attrs = {
-            "positional": attr_info.get("pos_attributes", []),
-            "structural": [],
-        }
-        for struct_attrs in attr_info.get("struct_attributes", []):
-            for structname, attrnames in struct_attrs.items():
-                parts = re.split(r"[:\s]+", structname, 1)
-                structname = parts[0]
-                depth = parts[1] if len(parts) > 1 else "0"
-                attrs["structural"].append(
-                    self._make_struct_spec(structname, depth, attrnames))
+        attrs = {}
+        if "pos_attributes" in attr_info:
+            attrs["positional"] = attr_info["pos_attributes"]
+        if "struct_attributes" in attr_info:
+            attrs["structural"] = []
+            for struct_attrs in attr_info["struct_attributes"]:
+                for structname, attrnames in struct_attrs.items():
+                    parts = re.split(r"[:\s]+", structname, 1)
+                    structname = parts[0]
+                    depth = parts[1] if len(parts) > 1 else "0"
+                    attrs["structural"].append(
+                        self._make_struct_spec(structname, depth, attrnames))
         return attrs
 
     def _make_struct_spec(self, name, depth, attrnames):
@@ -170,7 +174,7 @@ class CWBEncoder:
         return (f"{name}:{depth}"
                 + "".join(f"+{attrname}" for attrname in attrnames))
 
-    def _get_attrs_from_vrt(self, vrt_file):
+    def _get_attrs_from_vrt(self, vrt_file, attrs=None):
         """Get the positional and strucutral attribute info from vrt_file.
 
         Assumes that vrt_file contains comments of the following kind
@@ -182,11 +186,13 @@ class CWBEncoder:
             "positional": ["attr1", "attr2", ...],
             "structural": ["text:0+a1+a2", "sentence:0+a3+a4", ...]
         }
+
+        If attrs is dict and already contains "positional" or
+        "structural", preserve their values intact.
         """
-        attrs = {
-            "positional": [],
-            "structural": [],
-        }
+        attrs = attrs or {}
+        for key in ["positional", "structural"]:
+            attrs.setdefault(key, [])
         # Processing line before the first token or structure tag
         in_header = True
         # Annotation names of each structural attribute: values are
@@ -209,8 +215,10 @@ class CWBEncoder:
                     if in_header and line.startswith(
                             ("<!-- #vrt positional-attributes:",
                              "<!-- #vrt structural-attributes:")):
-                        attrs[line.split()[2].split("-")[0]] = (
-                            line.partition(":")[2].strip(" ->\n").split())
+                        type_ = line.split()[2].split("-")[0]
+                        if not attrs[type_]:
+                            attrs[type_] = (
+                                line.partition(":")[2].strip(" ->\n").split())
                         if attrs["structural"] and attrs["positional"]:
                             return attrs
                     elif line[1] not in "!?":
