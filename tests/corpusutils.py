@@ -51,6 +51,7 @@ class CWBEncoder:
         cwb_encode = cwb_encode or "cwb-encode"
         cwb_makeall = cwb_makeall or "cwb-makeall"
         corpus_root = os.path.abspath(corpus_root)
+        self._corpus_root = corpus_root
         self._datarootdir = os.path.join(corpus_root, "data")
         self._registrydir = os.path.join(corpus_root, "registry")
         self._tmpdir = os.path.join(corpus_root, "tmp")
@@ -61,19 +62,102 @@ class CWBEncoder:
     def encode_corpora(self, corpus_src_dir):
         """Encode VRT and XML data in corpus_src_dir, base name as corpus id."""
         corpus_ids = []
+        cachedir, cached_corpora = self._init_cwb_cache(corpus_src_dir)
         vrt_files = glob.glob(os.path.join(corpus_src_dir, "*.vrt"))
         # Convert XML files to VRT and encode the VRT files
         for xml_file in glob.glob(os.path.join(corpus_src_dir, "*.xml")):
-            vrt_file = os.path.join(
-                self._tmpdir,
-                os.path.splitext(os.path.basename(xml_file))[0] + ".vrt")
-            self.xml_file_to_vrt(xml_file, vrt_file)
-            vrt_files.append(vrt_file)
+            corpus_id = os.path.splitext(os.path.basename(xml_file))[0]
+            if self._cached_corpus_is_outdated(cachedir, corpus_id, xml_file):
+                vrt_file = os.path.join(self._tmpdir, f"{corpus_id}.vrt")
+                self.xml_file_to_vrt(xml_file, vrt_file)
+                vrt_files.append(vrt_file)
         for vrt_file in vrt_files:
             corpus_id = os.path.splitext(os.path.basename(vrt_file))[0]
-            self.encode_corpus(corpus_id, vrt_file, corpus_src_dir)
+            if self._cached_corpus_is_outdated(cachedir, corpus_id, vrt_file):
+                self.encode_corpus(corpus_id, vrt_file, corpus_src_dir)
+                if cachedir is not None:
+                    self._copy_corpus(self._corpus_root, cachedir, corpus_id)
             corpus_ids.append(corpus_id)
+        # print(corpus_ids)
         return corpus_ids
+
+    def _init_cwb_cache(self, corpus_src_dir):
+        """Initialize CWB data caching, copy corpora from cache.
+
+        Create a CWB data cache directory as
+        corpus_src_dir/../cwb-cache if it does not yet exits. If the
+        cache directory exists, copy corpora from the cache to the
+        corpus data directory.
+
+        Return the cache directory and a set of cached corpora ids;
+        None and empty set if the cache directory cannot be created.
+        """
+        cachedir = os.path.join(os.path.dirname(corpus_src_dir), "cwb-cache")
+        try:
+            if not os.path.exists(cachedir):
+                os.makedirs(cachedir)
+                os.makedirs(os.path.join(cachedir, "data"))
+                os.makedirs(os.path.join(cachedir, "registry"))
+        except OSError:
+            return None, set()
+        cached_corpora = self._copy_corpora_from_cache(cachedir)
+        return cachedir, cached_corpora
+
+    def _copy_corpora_from_cache(self, cachedir):
+        """Copy corpus CWB data and registry under cachedir to test corpus dir.
+
+        Return ids of copied corpora as a set.
+        """
+        cached_corpora = set(
+            os.path.basename(regfile)
+            for regfile in glob.glob(os.path.join(cachedir, "registry", "*")))
+        for corpus_id in cached_corpora:
+            self._copy_corpus(cachedir, self._corpus_root, corpus_id)
+        return cached_corpora
+
+    def _copy_corpus(self, source, target, corpus_id):
+        """Copy CWB data for corpus corpus_id from source to target dir.
+
+        The data and info paths in the corpus registry file are
+        adjusted for target.
+        """
+        subprocess.run(["cp", "-dpr",
+                        os.path.join(source, "data", corpus_id),
+                        os.path.join(target, "data")])
+        with open(os.path.join(source, "registry", corpus_id), "r") as in_regf:
+            with open(os.path.join(target, "registry", corpus_id),
+                      "w") as out_regf:
+                for line in in_regf:
+                    if line.startswith(("HOME", "INFO")):
+                        line = line.replace(source, target)
+                    out_regf.write(line)
+
+    def _cached_corpus_is_outdated(self, cachedir, corpus_id, src_file):
+        """Test if CWB data for corpus_id in cachedir is older than source.
+
+        Consider cached data outdated if cachedir does not exist, if
+        the corpus registry file does not exist or if it is older than
+        the corpus source file, its info file or its attributes YAML
+        file.
+        """
+
+        def get_mtime(fname):
+            """Get modification time for file fname; 0 if it does not exist."""
+            if not os.path.exists(fname):
+                return 0
+            return os.path.getmtime(fname)
+
+        if cachedir is None:
+            return True
+        cached_regfile = os.path.join(cachedir, "registry", corpus_id)
+        if not os.path.exists(cached_regfile):
+            return True
+        cached_regfile_mtime = os.path.getmtime(cached_regfile)
+        src_file_noext = os.path.splitext(src_file)[0]
+        return (
+            cached_regfile_mtime < get_mtime(src_file)
+            or cached_regfile_mtime < get_mtime(f"{src_file_noext}.info")
+            or cached_regfile_mtime < get_mtime(f"{src_file_noext}.attrs.yaml"))
 
     def encode_corpus(self, corpus_id, vrt_file, corpus_src_dir):
         """Encode vrt_file with corpus_id."""
@@ -91,7 +175,7 @@ class CWBEncoder:
         attrs = self._get_attrs(vrt_file, corpus_src_dir)
         # print(attrs)
         datadir = os.path.join(self._datarootdir, corpus_id)
-        os.makedirs(datadir)
+        os.makedirs(datadir, exist_ok=True)
         subprocess.run([
             "cwb-encode",
             "-f", vrt_file,

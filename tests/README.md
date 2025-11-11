@@ -92,6 +92,8 @@ This directory `tests/` contains:
   - [`data/corpora/src`](data/corpora/src): corpus source data
   - [`data/corpora/config`](data/corpora/config): corpus configuration
     data
+  - `data/corpora/cwb-cache`: cached CWB corpus data encoded from
+    corpus source data (created by the tests)
   - [`data/db`](data/db): Korp MySQL database data
   - [`data/db/tableinfo`](data/db/tableinfo): YAML files with
     information for creating Korp MySQL database tables
@@ -328,7 +330,9 @@ Updated: 2023-01-20
 
 Note that the encoded test corpus data is placed under a temporary
 directory for the duration of a test session, so test corpora are
-isolated from any other CWB corpora in the system.
+isolated from any other CWB corpora in the system. Encoded test corpus
+data is cached under `tests/data/corpora/cwb-cache` between test
+sessions, to avoid re-encoding it in each session.
 
 
 ### Corpus configuration data
