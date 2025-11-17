@@ -50,6 +50,7 @@ def create_app(config_override=None):
         MYSQL_PASSWORD=app.config["DBPASSWORD"],
         MYSQL_DB=app.config["DBNAME"],
         MYSQL_PORT=app.config["DBPORT"],
+        MYSQL_CHARSET=app.config["DBCHARSET"],
         MYSQL_USE_UNICODE=True,
         MYSQL_CURSORCLASS="DictCursor",
     )
