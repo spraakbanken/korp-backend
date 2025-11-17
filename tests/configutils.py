@@ -7,17 +7,30 @@ handling the Korp configuration.
 """
 
 
-def get_korp_config():
-    """Return the Korp configuration as a dict.
+from importlib import import_module
+from pathlib import Path
 
-    Return the Korp configuration fron module instance.config, or if
-    that is not available, from module config.
+from flask.config import Config
+
+
+def get_korp_config():
+    """Return the Korp configuration as a `flask.config.Config` object.
+
+    Return the Korp configuration from module `instance.config`, with
+    defaults from module `config` for variables not defined in
+    `instance.config`.
+
+    Note that this assumes that the instance configuration file is the
+    default one (`"{root_path}/instance/config.py"`).
     """
-    try:
-        from instance import config
-    except ImportError:
-        import config
-    # Treat all uppercase items in the config module as configuration
-    # variables and add them to the dict to return
-    return dict((key, val) for key, val in config.__dict__.items()
-                if key.isupper())
+    # Find Korp package root based on the location of the config
+    # module
+    korp_dir = Path(import_module("config").__file__).parent
+    conf = Config(str(korp_dir))
+    # Load the default configuration
+    conf.from_object("config")
+    # Try to load the instance configuration
+    instance_config_path = korp_dir / 'instance' / 'config.py'
+    if instance_config_path.is_file():
+        conf.from_pyfile(str(instance_config_path))
+    return conf
