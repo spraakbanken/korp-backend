@@ -16,11 +16,6 @@ For more information, please see the documentation in tests/README.md.
 """
 
 
-# TODO:
-# - Specify default collation for db
-# - Remove corpus data before importing to a multi-corpus table
-
-
 import csv
 import re
 
@@ -63,6 +58,11 @@ class KorpDatabase:
         "create-user": "Use user {} to create the Korp MySQL test database",
         "create-password": (
             "Use password {} to create the Korp MySQL test database"),
+        "collate": (
+            "Use {} as the Korp MySQL test database collation."
+            " If not specified, use the collation of the Korp MySQL database,"
+            " or if that cannot be accessed, the default collation for the"
+            " Korp MySQL database character set."),
     }
     # The custom pytest command-line options
     _pytest_db_options = {}
@@ -91,6 +91,8 @@ class KorpDatabase:
         self._tableinfo = []
         # Filename patterns by table type
         self._tabletype_patts = defaultdict(list)
+        # Table info by table type
+        self._tabletype_info = defaultdict(list)
         # Initialize self._tableinfo, self._tabletype_patts
         self._read_tableinfo()
         # If True, use an existing table in the database, so do not
@@ -221,6 +223,39 @@ class KorpDatabase:
         _make_db_name, user is taken from _db_options and host from
         _conn_params.
         """
+
+        def get_collation(korp_conf):
+            """Get the collation for the Korp test database.
+
+            If the custom Pytest command-line option --db-collate has
+            been specified, return its value.
+            Otherwise, if the Korp MySQL database can be accessed
+            (with the parameters defined in the Korp configuration
+            korp_conf), return its collation.
+            Otherwise, return the empty string to use the default
+            collation for the database character set.
+            """
+            collate = self._db_options["collate"] or ""
+            if not collate:
+                try:
+                    # Try to access the Korp database
+                    with MySQLdb.Connect(
+                            host=korp_conf["DBHOST"],
+                            port=korp_conf["DBPORT"],
+                            user=korp_conf["DBUSER"],
+                            password=korp_conf["DBPASSWORD"],
+                            database=korp_conf["DBNAME"],
+                            use_unicode=True
+                    ) as conn:
+                        cursor = conn.cursor()
+                        # Alternative ways to find out db collation:
+                        # https://stackoverflow.com/a/76490467
+                        cursor.execute("SELECT @@collation_database;")
+                        collate = cursor.fetchone()[0]
+                except MySQLdb.Error as exc:
+                    pass
+            return collate
+
         if self.dbname is not None:
             # If a database has already been created, do not create
             # another
@@ -231,13 +266,17 @@ class KorpDatabase:
             with self._connect() as conn:
                 cursor = conn.cursor()
                 dbname = self._make_db_name(cursor)
-                charset = korp_conf['DBCHARSET']
-                user = self._db_options['user']
-                host = self._conn_params['host']
-                for sql in [
-                        f"CREATE DATABASE {dbname} CHARACTER SET {charset};",
-                        f"GRANT ALL ON {dbname}.* TO '{user}'@'{host}';",
-                ]:
+                charset = korp_conf["DBCHARSET"]
+                collate = get_collation(korp_conf)
+                if collate:
+                    collate = f" COLLATE {collate}"
+                user = self._db_options["user"]
+                host = self._conn_params["host"]
+                sqls = [
+                    f"CREATE DATABASE {dbname} CHARACTER SET {charset}{collate};",
+                    f"GRANT ALL ON {dbname}.* TO '{user}'@'{host}';",
+                ]
+                for sql in sqls:
                     self.execute(sql, cursor)
         except MySQLdb.Error as exc:
             self.create_error = {
@@ -302,7 +341,7 @@ class KorpDatabase:
 
             If a filename does not end in ".tsv", add the suffix. If a
             filename does not begin with ".*/", add the prefix.
-            Replace corpus name placeholder "{corpus}” with
+            Replace corpus name placeholder "{corpus}" with
             "(?P<corpus>[a-zA-Z0-9_-]+?)".
             """
             filenames_re = []
@@ -369,6 +408,7 @@ class KorpDatabase:
                 if not filename.startswith(".*/"):
                     filename = ".*/" + filename
                 self._tabletype_patts[info["tabletype"]].append(filename)
+            self._tabletype_info[info["tabletype"]].append(info)
         self._tableinfo = tableinfo
 
     def import_tables(self, corpora, tabletypes=None):
@@ -376,21 +416,28 @@ class KorpDatabase:
 
         Import database tables in TSV or SQL files matching patterns
         in self._tabletype_patts for the tabletypes and corpora.
+        Possibly existing tables are first dropped to avoid
+        interference between tests.
+
         corpora and tabletypes may be single strings or lists of
         strings. If tabletypes is None (default), import all types of
         tables for corpora.
         """
-        files = self._find_table_files(corpora, tabletypes)
-        self.import_table_files(files)
-
-    def _find_table_files(self, corpora, tabletypes=None):
-        """Return a list of table data file names for corpora and tabletypes."""
         if tabletypes is None:
             tabletypes = self._tabletype_patts.keys()
         elif isinstance(tabletypes, str):
             tabletypes = [tabletypes]
         if isinstance(corpora, str):
             corpora = [corpora]
+        files = self._find_table_files(corpora, tabletypes)
+        # It would probably be more efficient to delete existing data
+        # than to drop and re-create tables, but the latter is simpler
+        # to implement
+        self.drop_tables(corpora, tabletypes)
+        self.import_table_files(files)
+
+    def _find_table_files(self, corpora, tabletypes):
+        """Return a list of table data file names for corpora and tabletypes."""
         files = []
         for ext in ["sql", "tsv"]:
             for filename in self._datadir.rglob(f"*.{ext}"):
@@ -403,8 +450,29 @@ class KorpDatabase:
                                 files.append(filename)
         return files
 
+    def drop_tables(self, corpora, tabletypes):
+        """Drop possibly existing tables for tabletypes and corpora.
+
+        corpora and tabletypes are iterables of strings.
+        """
+        tables = []
+        for tabletype in tabletypes:
+            for info in self._tabletype_info[tabletype]:
+                if "{" in info["tablename"]:
+                    # Table name contains corpus id
+                    tables.extend(self._make_tablename(info, corpus)
+                                  for corpus in corpora)
+                else:
+                    tables.append(info["tablename"])
+        tablenames = ", ".join(f"`{table}`" for table in tables)
+        self.execute(f"DROP TABLE IF EXISTS {tablenames};")
+
     def import_table_files(self, tablefile_globs):
-        """Import table data from files matched by tablefile_globs."""
+        """Import table data from files matched by tablefile_globs.
+
+        Note that unlike import_tables, import_table_files does *not*
+        first drop possibly existing tables.
+        """
 
         def find_files(tablefile_glob):
             """Find files in tablefile_globs or use directly if absolute.

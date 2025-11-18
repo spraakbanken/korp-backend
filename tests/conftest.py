@@ -6,6 +6,8 @@ Pytest fixtures for testing the Korp backend as a Flask app.
 """
 
 
+import warnings
+
 import pytest
 
 from pathlib import Path
@@ -88,6 +90,7 @@ def database(_database):
             msg = "Unable to create Korp database: Error " + error["message"]
             if error["sql"] is not None:
                 msg += " when executing SQL statement: " + error["sql"]
+            warnings.warn(f"Skipping tests using Korp database: {msg}")
         pytest.skip(msg)
     yield _database
 
@@ -99,7 +102,8 @@ def database_tables(database):
     The returned function takes as its arguments a list of corpora
     (corpus ids) or a single corpus id (string) whose data to import,
     and the type of table data to import (if omitted, import all
-    types).
+    types). The function drops possibly existing tables, so all the
+    tables for a test should be imported with a single call.
     """
 
     def _database_tables(corpora, tabletype=None):
