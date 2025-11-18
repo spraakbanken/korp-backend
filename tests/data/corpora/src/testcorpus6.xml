@@ -1,0 +1,35 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<corpus id="testcorpus6">
+  <document>
+    <text>
+      <paragraph id="p1">
+        <sentence id="s1">
+          <token baseform="time" pos="|nn|vb|">Time</token>
+          <token baseform="fly" pos="|vb|nn|">flies</token>
+          <token baseform="like" pos="|cn|vb|">like</token>
+          <token baseform="an" pos="|at|">an</token>
+          <token baseform="arrow" pos="|nn|">arrow</token>
+          <token baseform="." pos="|pt|">arrow</token>
+        </sentence>
+        <sentence id="s2" x="2">
+          <token baseform="who" pos="|pn|">Who</token>
+          <token baseform="say" pos="|vb|">said</token>
+          <token baseform="so" pos="|ab|">so</token>
+          <token baseform="?" pos="|">?</token>
+        </sentence>
+      </paragraph>
+      <paragraph id="p2" y="&lt;&quot;&amp;&gt;">
+        <sentence id="s3">
+          <token baseform="test" pos="|vb|">Testing</token>
+          <token baseform="predefine" pos="|vb|">predefined</token>
+          <token baseform="XML" pos="|acr|">XML</token>
+          <token baseform=":" pos="|pt|">:</token>
+          <token baseform="&lt;" pos="|pt|">&lt;</token>
+          <token baseform="&quot;" pos="|pt|">&quot;</token>
+          <token baseform="&amp;" pos="|pt|">&amp;</token>
+          <token baseform="&gt;" pos="|pt|">&gt;</token>
+        </sentence>
+      </paragraph>
+    </text>
+  </document>
+</corpus>
