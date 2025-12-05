@@ -17,8 +17,8 @@ from typing import List, Tuple, Optional, Union, Dict
 from flask import Response, request, copy_current_request_context, stream_with_context
 from flask import current_app as app
 from flask.blueprints import Blueprint
+from gevent import spawn
 from gevent.queue import Queue, Empty
-from gevent.threadpool import ThreadPool
 from gevent.event import Event
 
 from korp.db import mysql
@@ -199,8 +199,7 @@ def prevent_timeout(generator):
             except Exception:
                 q.put(sys.exc_info())
 
-        pool = ThreadPool(1)
-        pool.spawn(error_catcher, f, q)
+        worker = spawn(error_catcher, f, q)
 
         while True:
             try:
@@ -223,6 +222,8 @@ def prevent_timeout(generator):
                     if abortable:
                         abort_event.set()
                     raise
+
+        worker.join()
 
     return decorated
 
