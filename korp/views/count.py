@@ -202,6 +202,13 @@ def count(args, abort_event=None):
                     else:
                         ngram_groups = [ngram]
 
+                    # Sanity check: ngram_groups must match expected number of group_by columns
+                    if len(ngram_groups) != len(group_by):
+                        raise ValueError(
+                            f"Error parsing result for corpus '{corpus}'. This is most likely due to a structural "
+                            "attribute containing tabs, which is not supported."
+                        )
+
                     all_ngrams = []
                     relative_to_pos = []
 
