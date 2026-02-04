@@ -1,16 +1,22 @@
 # Changelog
 
-## [Unreleased]
+## [8.3.0] - 2026-02-04
 
 ### Added
 
 - Added support for client-side caching via HTTP Cache-Control headers.
+- Added tests (thanks to @janiemi for the contribution!).
 
 ### Changed
 
 - Dropped support for Python versions older than 3.10.
+- Updated dependencies for compatibility with newer Python versions.
+- Better error message when structural attributes contain tabs.
 
 ### Fixed
+
+- Made corrections to the API documentation.
+- Fixed bug when using the `/count` parameter `relative_to_struct` with multiple tokens.
 
 ## [8.2.0] - 2024-05-16
 
@@ -67,3 +73,6 @@
 - `/loglike` parameters `group_by` and `group_by_struct` are now optional.
 - Removed backward compatible parameters for all endpoints.
 - Better representation of structural attributes on token level in `/query`.
+
+[8.3.0]: https://github.com/spraakbanken/korp-backend/releases/tag/v8.3.0
+[8.2.0]: https://github.com/spraakbanken/korp-backend/releases/tag/v8.2.0
