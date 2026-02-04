@@ -248,7 +248,8 @@ def count(args, abort_event=None):
                         total_stats[query_no]["sums"]["absolute"] += int(freq)
 
                         if relative_to:
-                            relativeto_ngram = tuple(ngram[pos] for pos in relative_to_pos)
+                            # Only use the first token of each relative_to_struct attribute
+                            relativeto_ngram = tuple(ngram[pos][0:1] for pos in relative_to_pos)
                             corpus_stats[query_no]["rows"][ngram]["relative"] += int(freq) / float(
                                 relative_to_freqs["corpora"][corpus][relativeto_ngram]) * 1000000
                             corpus_stats[query_no]["sums"]["relative"] += int(freq) / float(
