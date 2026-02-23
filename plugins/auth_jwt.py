@@ -1,75 +1,129 @@
-"""Authorization using JWT."""
+"""Authorization using JWT.
+
+This plugin checks if the user has access to protected corpora based on JWT token scopes. It retrieves the list of
+protected corpora from CWB info and checks the user's JWT token for the allowed corpora in the scopes. If the user
+tries to access a protected corpus that is not in their allowed scopes, access is denied.
+
+The plugin expects the JWT to be provided in the Authorization header as a Bearer token, and it uses a public key
+to validate the token. The public key file can be configured using the "pubkey_file" setting in the plugin
+configuration.
+
+To use this plugin, you need to install the `pyjwt[crypto]` package.
+"""
 
 import time
+from functools import cached_property
 from pathlib import Path
-from typing import List, Tuple, Optional
 
-import jwt  # From pyjwt[crypto]
-from flask import current_app as app
-from flask import request
+import jwt  # type: ignore
 
-from korp import cwb, utils
-from korp import memcached
-from korp.views import info
+from korp import utils
 
 bp = utils.Plugin("auth_jwt", __name__)
 
 
 class AuthJWT(utils.Authorizer):
+    """Authorizer plugin using JWT token scopes."""
 
-    def __init__(self):
-        self._pubkey = None
+    def get_protected_corpora(self, auth_ctx: utils.AuthContext) -> list[str]:
+        """Get list of corpora with restricted access.
 
-    def get_protected_corpora(self, use_cache: bool = True) -> List[str]:
-        """Get list of corpora with restricted access."""
-        if use_cache:
-            with memcached.get_client() as mc:
-                key = f"protected:{utils.cache_prefix(mc)}"
+        Args:
+            auth_ctx: The authentication context.
+
+        Returns:
+            A list of protected corpora.
+        """
+        key = None
+        if auth_ctx.cache_enabled:
+            with self.cache.get_client() as mc:
+                key = f"protected:{utils.cache_prefix_sync(mc)}"
                 result = mc.get(key)
             if result is not None:
                 return result
 
-        # Get list of all corpora from CWB
-        corpora = cwb.run_cqp("show corpora;")
-        next(corpora)  # Skip version number
-        corpus_info = utils.generator_to_dict(info.corpus_info({"corpus": list(corpora)}))
-        protected_corpora = []
-        for corpus, c_info in corpus_info["corpora"].items():
-            if c_info["info"].get("Protected", "false").lower() == "true":
-                protected_corpora.append(corpus.upper())
+        corpora_lines = self.cwb.run_cqp("show corpora;")
+        next(corpora_lines, None)  # Skip version number
 
-        if use_cache:
-            with memcached.get_client() as mc:
+        protected_corpora = [corpus.upper() for corpus in corpora_lines if self._is_protected(corpus)]
+
+        if auth_ctx.cache_enabled and key:
+            with self.cache.get_client() as mc:
                 mc.add(key, protected_corpora)
         return protected_corpora
 
-    def check_authorization(self, corpora: List[str]) -> Tuple[bool, List[str], Optional[str]]:
-        protected = self.get_protected_corpora()
+    def _is_protected(self, corpus: str) -> bool:
+        """Check whether a corpus is marked as protected in CWB info.
+
+        Args:
+            corpus: The name of the corpus to check.
+
+        Returns:
+            True if the corpus is protected, False otherwise.
+        """
+        lines = self.cwb.run_cqp([f"{corpus};", "info; .EOL.;", "exit;"])
+        next(lines, None)  # Skip version number
+
+        for line in lines:
+            if line == utils.END_OF_LINE:
+                break
+            if ":" in line and not line.endswith(":"):
+                key, value = (part.strip() for part in line.split(":", 1))
+                if key == "Protected":
+                    return value.lower() == "true"
+        return False
+
+    def check_authorization(
+        self, corpora: list[str], auth_ctx: utils.AuthContext
+    ) -> tuple[bool, list[str], str | None]:
+        """Check if the user has access to the specified corpora based on JWT scopes.
+
+        Args:
+            corpora: A list of corpora to check access for.
+            auth_ctx: The authentication context containing the request and other info.
+
+        Returns:
+            A tuple containing:
+                - A boolean indicating if access is granted.
+                - A list of unauthorized corpora (if access is denied).
+                - An optional message (e.g., for errors).
+        """
+        protected = self.get_protected_corpora(auth_ctx)
         if protected:
             user_corpora = []
 
             # Get authorization header
-            auth_header = request.headers.get("Authorization")
+            auth_header = auth_ctx.request.headers.get("Authorization")
             if auth_header and " " in auth_header:
                 auth_token = auth_header.split(" ")[1]
 
                 # Parse JWT
-                user_token = jwt.decode(auth_token, key=self.jwt_key, algorithms=["RS256"])
-                if user_token["exp"] < time.time():
+                if not self.jwt_key:
+                    return False, [], "JWT public key is not configured."
+                try:
+                    user_token = jwt.decode(auth_token, key=self.jwt_key, algorithms=["RS256"])
+                except jwt.ExpiredSignatureError:
+                    return False, [], "The provided JWT has expired"
+                except jwt.InvalidTokenError:
+                    return False, [], "Could not validate the provided JWT."
+
+                if user_token.get("exp") and user_token["exp"] < time.time():
                     return False, [], "The provided JWT has expired"
 
-                for corpus, level in user_token.get("scope", {}).get("corpora", {}).items():
-                    user_corpora.append(corpus.upper())
+                user_corpora.extend(corpus.upper() for corpus in user_token.get("scope", {}).get("corpora", {}))
 
             unauthorized = [c.upper() for c in corpora if c.upper() in protected and c.upper() not in user_corpora]
             if unauthorized:
                 return False, unauthorized, None
         return True, [], None
 
-    @property
-    def jwt_key(self):
+    @cached_property
+    def jwt_key(self) -> str | None:
         """Return the public key for validating JWTs."""
-        if not self._pubkey:
-            if bp.config("pubkey_file"):
-                self._pubkey = open(Path(app.instance_path) / bp.config("pubkey_file")).read()
-        return self._pubkey
+        pubkey_file = bp.config("pubkey_file")
+        if not pubkey_file:
+            return None
+        return Path(pubkey_file).read_text(encoding="utf-8")
+
+
+AUTHORIZER_CLASS = AuthJWT

@@ -1,9 +1,0 @@
-Flask~=3.1.2
-Flask-Cors==6.0.1
-Flask-MySQLdb==2.0.0
-mysqlclient==2.2.7
-gevent~=25.9.1
-psutil~=7.1.0
-pymemcache~=4.0.0
-python-dateutil~=2.9.0
-PyYAML~=6.0.3

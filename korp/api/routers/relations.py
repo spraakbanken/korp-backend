@@ -1,25 +1,28 @@
-"""Views for Word Picture queries."""
+"""Routes for Word Picture queries."""
 
 import math
 import operator
 import time
 from collections import Counter, defaultdict
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Container, Mapping, Sequence
 from copy import deepcopy
-from typing import Any, Literal
+from enum import StrEnum
+from typing import Annotated, Any, TypeAlias, cast
 
-import gevent.event
-from flask import Blueprint
-from flask import current_app as app
-from pymemcache.exceptions import MemcacheError
+from fastapi import APIRouter, Query
+from pydantic import BeforeValidator
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from korp import utils
-from korp.db import mysql
-from korp.memcached import memcached
+from korp.api import params
+from korp.api.routers import info
+from korp.config import settings
+from korp.memcached import CacheError
 
 from . import query, timespan
 
-bp = Blueprint("relations", __name__)
+router = APIRouter(tags=["Word Picture"])
 
 
 # (role, head_id, head_pos, rel, dep_id, dep_pos, dep_extra)
@@ -29,6 +32,52 @@ RelationKey = tuple[str, int, str, str, int, str, str]
 RMI_MULTIPLIER = 1_000
 FREQ_RELATIVE_MULTIPLIER = 1_000_000
 SPLIT_SUFFIX = "_yearly"
+
+
+class RelationType(StrEnum):
+    """Relation lookup type."""
+
+    word = "word"
+    lemgram = "lemgram"
+
+
+class RelationsSort(StrEnum):
+    """Allowed sort fields for relations."""
+
+    freq = "freq"
+    freq_relative = "freq_relative"
+    mi = "mi"
+    rmi = "rmi"
+
+
+class PeriodAlign(StrEnum):
+    """Allowed period alignment values."""
+
+    oldest = "oldest"
+    newest = "newest"
+
+
+class MaxScope(StrEnum):
+    """How max-result limiting is scoped."""
+
+    overall = "overall"
+    per_period = "per_period"
+
+
+class Measures(StrEnum):
+    """Available types of measures to include in the response."""
+
+    freq = "freq"
+    freq_relative = "freq_relative"
+    mi = "mi"
+    rmi = "rmi"
+
+
+MeasuresParam: TypeAlias = Annotated[
+    Sequence[Measures],
+    Query(description="Comma-separated list of measures to include in the response."),
+    BeforeValidator(utils.split_csv),
+]
 
 
 def _calc_freq_relative(freq: int, corpus_size: int) -> float:
@@ -62,28 +111,34 @@ def _calc_mi(freq: int, head_rel_freq: int, dep_rel_freq: int, rel_freq: int) ->
     return freq * math.log2((rel_freq * freq) / (head_rel_freq * dep_rel_freq))
 
 
-def _relation_output(entry: dict[str, object]) -> dict[str, object]:
+def _relation_output(entry: dict, measures: Container[Measures]) -> dict[str, str | int | float]:
     """Build the standard relation output dictionary.
 
     Args:
         entry: Dictionary containing relation data.
+        measures: Set of measures to include in the output.
 
     Returns:
         Dictionary with the standard output fields.
     """
-    return {
+    output: dict[str, str | int | float] = {
         "head": entry["head"],
         "headpos": entry["headpos"],
         "rel": entry["rel"],
         "dep": entry["dep"],
         "deppos": entry["deppos"],
         "depextra": entry["depextra"],
-        "freq": entry["freq"],
-        "freq_relative": entry["freq_relative"],
-        "mi": entry["mi"],
-        "rmi": entry["rmi"],
         "source": entry["source"],
     }
+    if Measures.freq in measures:
+        output["freq"] = entry["freq"]
+    if Measures.freq_relative in measures:
+        output["freq_relative"] = entry["freq_relative"]
+    if Measures.mi in measures:
+        output["mi"] = entry["mi"]
+    if Measures.rmi in measures:
+        output["rmi"] = entry["rmi"]
+    return output
 
 
 def _table_names(corpus: str, *, split: bool) -> dict[str, str]:
@@ -93,7 +148,7 @@ def _table_names(corpus: str, *, split: bool) -> dict[str, str]:
         corpus: Corpus identifier.
         split: If `True`, return the per-year (split) table names; otherwise overall tables.
     """
-    prefix = f"{app.config['DBWPTABLE']}_{corpus.upper()}"
+    prefix = f"{settings.DB_WP_TABLE}_{corpus.upper()}"
     main_prefix = f"{prefix}{SPLIT_SUFFIX}" if split else prefix
     return {
         "strings": f"{prefix}_strings",  # Shared between split and overall
@@ -121,25 +176,34 @@ def _lemgram_clause(lemgram: bool, *, second: bool = False) -> str:
     return " f.wfhead = 1"
 
 
-def _year_clause(column: str, start_year: int | None, end_year: int | None) -> tuple[str, list[int]]:
+def _year_clause(
+    column: str,
+    start_year: int | None,
+    end_year: int | None,
+    *,
+    prefix: str,
+) -> tuple[str, dict[str, int]]:
     """Return SQL clause for year range selection.
 
     Args:
         column: The column name to apply the year constraints to.
         start_year: The start year (inclusive) or `None`.
         end_year: The end year (inclusive) or `None`.
+        prefix: Prefix for parameter names to avoid collisions.
 
     Returns:
-        A tuple containing the SQL clause as a string and a list of parameters.
+        A tuple containing the SQL clause as a string and a dictionary of parameters.
     """
     clauses: list[str] = []
-    params: list[int] = []
+    params: dict[str, int] = {}
     if start_year is not None:
-        clauses.append(f"{column} >= %s")
-        params.append(start_year)
+        param_name = f"{prefix}_start_year"
+        clauses.append(f"{column} >= :{param_name}")
+        params[param_name] = start_year
     if end_year is not None:
-        clauses.append(f"{column} <= %s")
-        params.append(end_year)
+        param_name = f"{prefix}_end_year"
+        clauses.append(f"{column} <= :{param_name}")
+        params[param_name] = end_year
     if not clauses:
         return "", params
     combined = " AND ".join(clauses)
@@ -151,7 +215,7 @@ def _build_overall_triples_query(
     *,
     lemgram: bool,
     min_freq: int | None = None,
-) -> tuple[str, list[object]]:
+) -> tuple[str, dict[str, object]]:
     """Build combined SQL query for overall relations (no year splitting).
 
     Args:
@@ -160,7 +224,7 @@ def _build_overall_triples_query(
         min_freq: Minimum frequency filter or `None` (no minimum).
 
     Returns:
-        A tuple containing the SQL query as a string and a list of parameters.
+        A tuple containing the SQL query as a string and a dictionary of parameters.
     """
     tables = _table_names(corpus, split=False)
     strings = tables["strings"]
@@ -172,10 +236,10 @@ def _build_overall_triples_query(
     lemgram_clause_2 = f"AND{_lemgram_clause(lemgram, second=True)}"
     corpus_label = utils.sql_escape(corpus.upper())
     freq_clause = ""
-    freq_params: list[object] = []
+    params: dict[str, object] = {}
     if min_freq is not None:
-        freq_clause = " AND f.freq >= %s"
-        freq_params.append(min_freq)
+        freq_clause = " AND f.freq >= :min_freq"
+        params["min_freq"] = min_freq
 
     head_select = f"""
     SELECT STRAIGHT_JOIN
@@ -202,7 +266,7 @@ def _build_overall_triples_query(
     JOIN `{head_rel}` AS hr ON f.head = hr.head AND f.rel = hr.rel
     JOIN `{dep_rel}` AS dr ON f.dep = dr.dep AND f.rel = dr.rel
     WHERE
-        s1.string = %s
+        s1.string = :word
         {lemgram_clause_1}
         {freq_clause}
     """
@@ -232,13 +296,13 @@ def _build_overall_triples_query(
     JOIN `{head_rel}` AS hr ON f.head = hr.head AND f.rel = hr.rel
     JOIN `{dep_rel}` AS dr ON f.dep = dr.dep AND f.rel = dr.rel
     WHERE
-        s2.string = %s
+        s2.string = :word
         {lemgram_clause_2}
         {freq_clause}
     """
 
     sql = f"{head_select} UNION ALL {dep_select}"
-    return sql, freq_params
+    return sql, params
 
 
 def _build_split_triples_query(
@@ -248,7 +312,7 @@ def _build_split_triples_query(
     min_freq: int | None = None,
     start_year: int | None = None,
     end_year: int | None = None,
-) -> tuple[str, list[int]]:
+) -> tuple[str, dict[str, int]]:
     """Build SQL query for relation triples (split tables only).
 
     Args:
@@ -259,27 +323,26 @@ def _build_split_triples_query(
         end_year: End year (inclusive) or `None`.
 
     Returns:
-        A tuple containing the SQL query as a string and a list of parameters.
+        A tuple containing the SQL query as a string and a dictionary of parameters.
     """
     tables = _table_names(corpus, split=True)
     lemgram_clause_1 = _lemgram_clause(lemgram)
     lemgram_clause_2 = _lemgram_clause(lemgram, second=True)
     freq_clause = ""
-    freq_params: list[int] = []
+    params: dict[str, int] = {}
     if min_freq is not None:
-        freq_clause = " AND f.freq >= %s"
-        freq_params = [min_freq]
-    year_clause, year_params = _year_clause("f.yearfrom", start_year, end_year)
+        freq_clause = " AND f.freq >= :min_freq"
+        params["min_freq"] = min_freq
+    year_clause, year_params = _year_clause("f.yearfrom", start_year, end_year, prefix="triple")
+    params.update(year_params)
     if year_clause:
         year_clause = "AND " + year_clause
-    select_params = year_params + freq_params
-    params = select_params + select_params
     corpus_label = utils.sql_escape(corpus.upper())
     sql = f"""
     WITH target AS (
         SELECT s.id
         FROM `{tables["strings"]}` AS s
-        WHERE s.string = %s
+        WHERE s.string = :word
     )
     SELECT
         'head' AS role,
@@ -339,7 +402,7 @@ def _build_head_query(
     lemgram: bool,
     start_year: int | None = None,
     end_year: int | None = None,
-) -> tuple[str, list[int]]:
+) -> tuple[str, dict[str, int]]:
     """Build SQL query for head relations (split tables only).
 
     Args:
@@ -349,20 +412,20 @@ def _build_head_query(
         end_year: End year (inclusive) or `None`.
 
     Returns:
-        A tuple containing the SQL query as a string and a list of parameters.
+        A tuple containing the SQL query as a string and a dictionary of parameters.
     """
     tables = _table_names(corpus, split=True)
     lemgram_clause_1 = _lemgram_clause(lemgram)
     lemgram_clause_2 = _lemgram_clause(lemgram, second=True)
-    scope_clause, scope_params = _year_clause("f.yearfrom", start_year, end_year)
+    scope_clause, scope_params = _year_clause("f.yearfrom", start_year, end_year, prefix="scope")
     if scope_clause:
         scope_clause = "AND " + scope_clause
-    year_clause, year_params = _year_clause("hr.yearfrom", start_year, end_year)
+    year_clause, year_params = _year_clause("hr.yearfrom", start_year, end_year, prefix="head")
     sql = f"""
     WITH target AS (
         SELECT s.id
         FROM `{tables["strings"]}` AS s
-        WHERE s.string = %s
+        WHERE s.string = :word
     ),
     head_scope AS (
         SELECT DISTINCT f.head, f.rel
@@ -398,7 +461,9 @@ def _build_head_query(
     {"WHERE " + year_clause if year_clause else ""}
     ORDER BY hr.head, hr.rel, hr.yearfrom
     """
-    params: list[int] = scope_params + scope_params + year_params
+    params: dict[str, int] = {}
+    params.update(scope_params)
+    params.update(year_params)
     return sql, params
 
 
@@ -408,7 +473,7 @@ def _build_dep_query(
     lemgram: bool,
     start_year: int | None = None,
     end_year: int | None = None,
-) -> tuple[str, list[int]]:
+) -> tuple[str, dict[str, int]]:
     """Build SQL query for dependent relations (split tables only).
 
     Args:
@@ -418,20 +483,20 @@ def _build_dep_query(
         end_year: End year (inclusive) or `None`.
 
     Returns:
-        A tuple containing the SQL query as a string and a list of parameters.
+        A tuple containing the SQL query as a string and a dictionary of parameters.
     """
     tables = _table_names(corpus, split=True)
     lemgram_clause_1 = _lemgram_clause(lemgram)
     lemgram_clause_2 = _lemgram_clause(lemgram, second=True)
-    scope_clause, scope_params = _year_clause("f.yearfrom", start_year, end_year)
+    scope_clause, scope_params = _year_clause("f.yearfrom", start_year, end_year, prefix="scope")
     if scope_clause:
         scope_clause = "AND " + scope_clause
-    year_clause, year_params = _year_clause("dr.yearfrom", start_year, end_year)
+    year_clause, year_params = _year_clause("dr.yearfrom", start_year, end_year, prefix="dep")
     sql = f"""
     WITH target AS (
         SELECT s.id
         FROM `{tables["strings"]}` AS s
-        WHERE s.string = %s
+        WHERE s.string = :word
     ),
     dep_scope AS (
         SELECT DISTINCT f.dep, f.rel
@@ -467,7 +532,9 @@ def _build_dep_query(
     {"WHERE " + year_clause if year_clause else ""}
     ORDER BY dr.dep, dr.rel, dr.yearfrom
     """
-    params: list[int] = scope_params + scope_params + year_params
+    params: dict[str, int] = {}
+    params.update(scope_params)
+    params.update(year_params)
     return sql, params
 
 
@@ -476,7 +543,7 @@ def _build_rel_query(
     *,
     start_year: int | None = None,
     end_year: int | None = None,
-) -> tuple[str, list[int]]:
+) -> tuple[str, dict[str, int]]:
     """Build SQL query for relation frequencies in split tables.
 
     Args:
@@ -485,10 +552,10 @@ def _build_rel_query(
         end_year: End year (inclusive) or `None`.
 
     Returns:
-        A tuple containing the SQL query as a string and a list of parameters.
+        A tuple containing the SQL query as a string and a dictionary of parameters.
     """
     tables = _table_names(corpus, split=True)
-    year_clause, year_params = _year_clause("yearfrom", start_year, end_year)
+    year_clause, year_params = _year_clause("yearfrom", start_year, end_year, prefix="rel")
     sql = f"""
     SELECT rel, yearfrom, freq AS rel_freq
     FROM `{tables["rel"]}`
@@ -504,7 +571,7 @@ def _compute_period_bounds(
     end_year: int | None,
     available_years: list[int],
     *,
-    align: Literal["oldest", "newest"] = "newest",
+    align: PeriodAlign = PeriodAlign.newest,
 ) -> tuple[int, int, int]:
     """Compute the period bounds for the query.
 
@@ -529,7 +596,7 @@ def _compute_period_bounds(
         raise ValueError("span_length must be at least 1.")
     if min_year > max_year:
         raise ValueError("start_year is greater than end_year.")
-    period_origin = min_year if align == "oldest" else max_year - span_length + 1
+    period_origin = min_year if align is PeriodAlign.oldest else max_year - span_length + 1
     return min_year, max_year, period_origin
 
 
@@ -540,7 +607,8 @@ def _build_overall_only_relations(
     sort_field: str,
     max_results: int,
     corpus_size: int,
-) -> list[dict[str, str | int | float | None]]:
+    measures: Container[Measures],
+) -> list[dict[str, str | int | float]]:
     """Build aggregated relation statistics for overall (non-split) data, based on the results from multiple corpora.
 
     Args:
@@ -549,6 +617,7 @@ def _build_overall_only_relations(
         sort_field: The field to sort by.
         max_results: Maximum number of results per relation and direction.
         corpus_size: Total size of the corpora for relative frequency calculation.
+        measures: Set of measures to include in the output.
 
     Returns:
         List of overall relation statistics.
@@ -589,19 +658,19 @@ def _build_overall_only_relations(
 
     # Compute MI and build entries
     for row in triples:
-        head = row["head"]
-        head_pos = row["head_pos"]
-        dep = row["dep"]
-        dep_pos = row["dep_pos"]
-        dep_extra = row["dep_extra"]
-        rel = row["rel"]
-        freq = row["freq"]
+        head = cast(int, row["head"])
+        head_pos = cast(str, row["head_pos"])
+        dep = cast(int, row["dep"])
+        dep_pos = cast(str, row["dep_pos"])
+        dep_extra = cast(str, row["dep_extra"])
+        rel = cast(str, row["rel"])
+        freq = cast(int, row["freq"])
 
         if freq == 0:
             continue
 
-        head_rel_freq = head_rel_map[(head, head_pos, rel)]
-        dep_rel_freq = dep_rel_map[(dep, dep_pos, dep_extra, rel)]
+        head_rel_freq = head_rel_map[head, head_pos, rel]
+        dep_rel_freq = dep_rel_map[dep, dep_pos, dep_extra, rel]
         rel_freq = rel_map[rel]
         mi_value = _calc_mi(freq, head_rel_freq, dep_rel_freq, rel_freq)
 
@@ -639,7 +708,7 @@ def _build_overall_only_relations(
             continue
         selected_entries.append(entry)
 
-    return [_relation_output(entry) for entry in selected_entries]
+    return [_relation_output(entry, measures) for entry in selected_entries]
 
 
 class _WordPictureAccumulator:
@@ -722,7 +791,7 @@ class _WordPictureAccumulator:
         dated_years = sorted(year for year in years_set if year is not None)
         return dated_years, has_undated
 
-    def _get_years_for_relation(self, rel: str) -> list[int | None]:
+    def _get_years_for_relation(self, rel: str) -> Sequence[int | None]:
         """Get sorted years for a specific relation, with None at the end if present.
 
         Args:
@@ -732,9 +801,9 @@ class _WordPictureAccumulator:
             List of years (int or None) for this relation.
         """
         rel_years_raw = self.years_by_rel.get(rel, set())
-        rel_years: list[int | None] = sorted(year for year in rel_years_raw if year is not None)
+        rel_years = sorted(year for year in rel_years_raw if year is not None)
         if None in rel_years_raw:
-            rel_years.append(None)
+            return [*rel_years, None]
         return rel_years
 
     def _get_freqs_for_year(self, key: RelationKey, year: int | None) -> tuple[int, int, int, int]:
@@ -859,7 +928,7 @@ class _WordPictureAccumulator:
 
     @staticmethod
     def _finalize_periods(
-        period_accumulator: dict[tuple[RelationKey, int | None], dict]
+        period_accumulator: dict[tuple[RelationKey, int | None], dict],
     ) -> dict[RelationKey, list[dict]]:
         """Convert period accumulator to final per-period map.
 
@@ -895,7 +964,8 @@ class _WordPictureAccumulator:
             )
         return per_period_map
 
-    def _finalize_overall(self, overall_accumulator: dict[RelationKey, dict]) -> dict[RelationKey, dict]:
+    @staticmethod
+    def _finalize_overall(overall_accumulator: dict[RelationKey, dict]) -> dict[RelationKey, dict]:
         """Convert overall accumulator to final overall map.
 
         Args:
@@ -931,7 +1001,7 @@ class _WordPictureAccumulator:
         *,
         start_year: int | None = None,
         end_year: int | None = None,
-        period_align: str = "newest",
+        period_align: PeriodAlign = PeriodAlign.newest,
         compute_overall: bool = True,
     ) -> tuple[
         dict[RelationKey, dict],
@@ -1031,11 +1101,21 @@ class _WordPictureAccumulator:
         return overall_map, per_year_map, per_period_map, bounds
 
 
-def _fetch_split_relation_rows(
-    cursor,
+async def _fetch_mappings(
+    conn: AsyncConnection,
+    sql: str,
+    params: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Execute SQL and return mapping rows as plain dictionaries."""  # noqa: DOC201
+    result = await conn.execute(text(sql), params or {})
+    return [dict(row) for row in result.mappings().all()]
+
+
+async def _fetch_split_relation_rows(
+    conn: AsyncConnection,
     corpus: str,
     word: str,
-    lemgram: bool,
+    is_lemgram: bool,
     min_freq: int | None,
     start_year: int | None = None,
     end_year: int | None = None,
@@ -1043,10 +1123,10 @@ def _fetch_split_relation_rows(
     """Fetch split (yearly) relation rows for a specific corpus.
 
     Args:
-        cursor: Database cursor.
+        conn: Async SQLAlchemy connection.
         corpus: The corpus name.
         word: The target word.
-        lemgram: If `True`, select lemgrams; if `False`, select wordforms.
+        is_lemgram: If `True`, select lemgrams; if `False`, select wordforms.
         min_freq: Minimum frequency filter or `None`.
         start_year: Start year (inclusive) or `None`.
         end_year: End year (inclusive) or `None`.
@@ -1056,25 +1136,21 @@ def _fetch_split_relation_rows(
     """
     triple_sql, triple_params = _build_split_triples_query(
         corpus,
-        lemgram=lemgram,
+        lemgram=is_lemgram,
         min_freq=min_freq,
         start_year=start_year,
         end_year=end_year,
     )
-    cursor.execute(triple_sql, [word, *triple_params])
-    triples = cursor.fetchall()
+    triples = await _fetch_mappings(conn, triple_sql, {"word": word, **triple_params})
 
-    head_sql, head_params = _build_head_query(corpus, lemgram=lemgram, start_year=start_year, end_year=end_year)
-    cursor.execute(head_sql, [word, *head_params])
-    heads = cursor.fetchall()
+    head_sql, head_params = _build_head_query(corpus, lemgram=is_lemgram, start_year=start_year, end_year=end_year)
+    heads = await _fetch_mappings(conn, head_sql, {"word": word, **head_params})
 
-    dep_sql, dep_params = _build_dep_query(corpus, lemgram=lemgram, start_year=start_year, end_year=end_year)
-    cursor.execute(dep_sql, [word, *dep_params])
-    deps = cursor.fetchall()
+    dep_sql, dep_params = _build_dep_query(corpus, lemgram=is_lemgram, start_year=start_year, end_year=end_year)
+    deps = await _fetch_mappings(conn, dep_sql, {"word": word, **dep_params})
 
     rel_sql, rel_params = _build_rel_query(corpus, start_year=start_year, end_year=end_year)
-    cursor.execute(rel_sql, [*rel_params])
-    rels = cursor.fetchall()
+    rels = await _fetch_mappings(conn, rel_sql, rel_params)
 
     return {
         "triples": triples,
@@ -1084,28 +1160,27 @@ def _fetch_split_relation_rows(
     }
 
 
-def _fetch_overall_relation_rows(
-    cursor,
+async def _fetch_overall_relation_rows(
+    conn: AsyncConnection,
     corpus: str,
     word: str,
-    lemgram: bool,
+    is_lemgram: bool,
     min_freq: int | None,
 ) -> dict[str, object]:
     """Fetch combined overall relation rows using query optimized for overall data.
 
     Args:
-        cursor: Database cursor.
+        conn: Async SQLAlchemy connection.
         corpus: The corpus name.
         word: The target word.
-        lemgram: If `True`, select lemgrams; if `False`, select wordforms.
+        is_lemgram: If `True`, select lemgrams; if `False`, select wordforms.
         min_freq: Minimum frequency filter or `None`.
 
     Returns:
         A dictionary containing relation rows and frequency maps.
     """
-    sql, params = _build_overall_triples_query(corpus, lemgram=lemgram, min_freq=min_freq)
-    cursor.execute(sql, [word, *params, word, *params])
-    rows = cursor.fetchall()
+    sql, params = _build_overall_triples_query(corpus, lemgram=is_lemgram, min_freq=min_freq)
+    rows = await _fetch_mappings(conn, sql, {"word": word, **params})
 
     triples: list[dict[str, object]] = []
     # Maps for deduplicating head/dep/rel frequencies across rows
@@ -1241,8 +1316,7 @@ def _limit_rows_per_bucket(
         counters: Counter[tuple[str, str]] = Counter()
         bucket_limited: list[dict[str, object]] = []
         for row in bucket_rows:
-            rel_name = str(row["rel"])
-            counter_key = (rel_name, row["role"])
+            counter_key = (cast(str, row["rel"]), cast(str, row["role"]))
             counters[counter_key] += 1
             if counters[counter_key] > max_results:
                 continue
@@ -1252,108 +1326,93 @@ def _limit_rows_per_bucket(
     return limited
 
 
-@bp.route("/relations", methods=["GET", "POST"])
-@utils.main_handler
-@utils.prevent_timeout
-def relations(args: dict[str, Any], abort_event: gevent.event.Event | None = None) -> Iterator[dict]:
-    """Calculate word picture data.
+SourceParam = Annotated[
+    list[str],
+    Query(description="Source IDs in the format `CORPUS:ID`, repeated or comma-separated."),
+    BeforeValidator(utils.split_csv),
+]
+
+
+async def _existing_tables(conn: AsyncConnection, pattern: str) -> set[str]:
+    rows = await _fetch_mappings(conn, "SHOW TABLES LIKE :pattern", {"pattern": pattern})
+    return {str(next(iter(row.values()))) for row in rows}
+
+
+async def _relations_impl(
+    ctx: utils.CtxDep,
+    corpora: list[str],
+    word: str,
+    relation_type: RelationType,
+    min_freq: int | None,
+    sort_field: RelationsSort,
+    max_results: int,
+    include_split: bool,
+    period_size: int,
+    period_align: PeriodAlign,
+    start_year: int | None,
+    end_year: int | None,
+    include_overall: bool,
+    max_scope: MaxScope,
+    measures: Container[Measures],
+    abort_signal: utils.AbortSignal | None = None,
+) -> AsyncIterator[dict]:
+    """Shared implementation for /relations and /relations_time.
 
     Args:
-        args: Dictionary of request arguments.
-        abort_event: Optional event to signal abortion of processing.
+        ctx: Common dependencies.
+        corpora: List of corpus names.
+        word: The target word or lemgram.
+        relation_type: Whether the target is a word or lemgram.
+        min_freq: Minimum frequency filter or `None`.
+        sort_field: The field to sort results by.
+        max_results: Maximum number of results per relation and direction.
+        include_split: Whether to include split (per-year) data.
+        period_size: The size of periods in years for split data.
+        period_align: Alignment for periods ("oldest" or "newest").
+        start_year: Optional start year filter for split data.
+        end_year: Optional end year filter for split data.
+        include_overall: Whether to include overall (non-split) data.
+        max_scope: How max-result limiting is scoped ("overall" or "per_period").
+        measures: Which measures to include in the output.
+        abort_signal: Optional signal for aborting long-running operations.
 
     Yields:
-        Dictionary containing the results or progress updates.
+        Progress updates as dictionaries with keys like "progress_corpora" or "progress_{index}",
+        and finally a dictionary containing the results.
     """
-    utils.assert_key("corpus", args, utils.IS_IDENT, True)
-    utils.assert_key("word", args, "", True)
-    utils.assert_key("type", args, r"(word|lemgram)", False)
-    utils.assert_key("min", args, utils.IS_NUMBER, False)
-    utils.assert_key("max", args, utils.IS_NUMBER, False)
-    utils.assert_key("sort", args, r"(freq|freq_relative|mi|rmi)", False)
-    utils.assert_key("incremental", args, r"(true|false)")
-    utils.assert_key("split", args, r"(true|false)", False)
-    utils.assert_key("period_size", args, utils.IS_NUMBER, False)
-    utils.assert_key("period_align", args, r"(oldest|newest)", False)
-    utils.assert_key("start_year", args, utils.IS_NUMBER, False)
-    utils.assert_key("end_year", args, utils.IS_NUMBER, False)
-    utils.assert_key("overall", args, r"(true|false)", False)
-    utils.assert_key("max_scope", args, r"(overall|per_period)", False)
-
-    corpora = utils.parse_corpora(args)
-    utils.check_authorization(corpora)
-
-    incremental = utils.parse_bool(args, "incremental", False)
-
-    word = args["word"]
-    lemgram: bool = args.get("type", "") == "lemgram"
-    min_freq_value = args.get("min")
-    min_freq = int(min_freq_value) if min_freq_value else None
-    sort_field = args.get("sort") or "mi"
-    max_results = int(args.get("max") or 15)
-    period_size = max(int(args.get("period_size") or 1), 1)
-    period_align = (args.get("period_align") or "newest").lower()
-    start_year_value = args.get("start_year")
-    start_year = int(start_year_value) if start_year_value not in {None, ""} else None
-    end_year_value = args.get("end_year")
-    end_year = int(end_year_value) if end_year_value not in {None, ""} else None
-    include_split = utils.parse_bool(args, "split", False)
-    include_overall = utils.parse_bool(args, "overall", True)
-    max_scope = (args.get("max_scope") or "per_period").lower()
-    # If false, time-sliced results are scoped to the overall selection instead of per-period limits
-    limit_per_period = max_scope == "per_period"
-
-    time_filter = start_year is not None or end_year is not None
-    # Use split tables whenever split output or year filtering is requested
-    use_split_data = include_split or time_filter
+    utils.check_authorization(corpora, ctx)
 
     if not include_split and not include_overall:
         yield {"ERROR": "Both split and overall results are disabled."}
         return
 
+    is_lemgram = relation_type == RelationType.lemgram
+    limit_per_period = max_scope == MaxScope.per_period
+    time_filter = start_year is not None or end_year is not None
+    # Use split tables whenever split output or year filtering is requested
+    use_split_data = include_split or time_filter
     overall_only = not include_split
 
-    result = {}
-
-    cursor = mysql.connection.cursor()
-    cursor.execute("SET @@session.long_query_time = 1000;")
-
-    # Get available tables
-    cursor.execute("SHOW TABLES LIKE '" + app.config["DBWPTABLE"] + "_%_head_rel';")
-    tables = {next(iter(r.values())) for r in cursor}
-
-    # Filter out corpora which don't exist in database
-    corpora = [
-        c
-        for c in corpora
-        if app.config["DBWPTABLE"] + "_" + c.upper() + (f"{SPLIT_SUFFIX}_head_rel" if use_split_data else "_head_rel")
-        in tables
-    ]
-    if not corpora:
-        yield {"ERROR": "No word picture data available for the selected corpora."}
-        return
-
-    corpora_rest = corpora[:]
-    corpus_results: dict[str, dict] = {}
-    cache_prefixes = {}
+    result: dict[str, Any] = {}
+    corpora_rest = corpora.copy()
+    corpus_results: dict[str, dict[str, Any]] = {}
+    cache_prefixes: dict[str, str] = {}
     memcached_keys: dict[str, str] = {}
-    cache_checksum = None
+    cache_checksum: str | None = None
 
-    if args["cache"]:
-        cache_checksum = utils.get_hash((word, lemgram, min_freq_value, use_split_data, start_year, end_year))
-        with memcached.get_client() as mc:
-            cache_prefixes: dict[str, str] = utils.cache_prefix(mc, corpora)  # type: ignore
-            for corpus in corpora:
-                key = f"{cache_prefixes[corpus]}:relations_{cache_checksum}"
-                memcached_keys[key] = corpus
-            cached_data = mc.get_many(memcached_keys.keys())
-
+    if ctx.common.cache:
+        cache_checksum = utils.get_hash((word, is_lemgram, min_freq, use_split_data, start_year, end_year))
+        cache_prefixes = await utils.cache_prefix(ctx.cache, corpora)
+        for corpus in corpora:
+            cache_key = f"{cache_prefixes[corpus]}:relations_{cache_checksum}"
+            memcached_keys[cache_key] = corpus
+        cached_data = await ctx.cache.get_many(memcached_keys.keys())
         expected_keys = (
             {"triples", "heads", "deps", "rels"}
             if use_split_data
             else {"triples", "head_rel_map", "dep_rel_map", "rel_map"}
         )
-        for key, data in (cached_data or {}).items():
+        for key, data in cached_data.items():
             corpus_name = memcached_keys.get(key)
             if not corpus_name or not isinstance(data, dict):
                 continue
@@ -1363,50 +1422,87 @@ def relations(args: dict[str, Any], abort_event: gevent.event.Event | None = Non
             if corpus_name in corpora_rest:
                 corpora_rest.remove(corpus_name)
 
-    progress_index = 0
+    async with ctx.db.async_connection() as conn:
+        await conn.execute(text("SET @@session.long_query_time = 1000;"))
+        tables = await _existing_tables(conn, f"{settings.DB_WP_TABLE}_%_head_rel")
+        table_suffix = f"{SPLIT_SUFFIX}_head_rel" if use_split_data else "_head_rel"
 
-    # Fetch per-corpus rows from the chosen table family
-    if corpora_rest:
-        if incremental:
+        # Filter out corpora which don't exist in database
+        corpora = [c for c in corpora if f"{settings.DB_WP_TABLE}_{c.upper()}{table_suffix}" in tables]
+        corpora_rest = [c for c in corpora_rest if c in corpora]
+
+        if not corpora:
+            yield {"ERROR": "No word picture data available for the selected corpora."}
+            return
+
+        if corpora_rest and ctx.common.incremental:
             yield {"progress_corpora": list(corpora_rest)}
+
+        progress_index = 0
+
+        # Fetch per-corpus rows from the chosen table family
         for corpus in corpora_rest:
-            if abort_event and abort_event.is_set():
-                cursor.close()
+            if abort_signal and abort_signal.is_set():
                 return
-            if not use_split_data:
-                # Neither split output nor year filtering requested: use overall-optimized query
-                data = _fetch_overall_relation_rows(cursor, corpus, word, lemgram, min_freq)
-            else:
-                data = _fetch_split_relation_rows(
-                    cursor,
+            if use_split_data:
+                data = await _fetch_split_relation_rows(
+                    conn,
                     corpus,
                     word,
-                    lemgram,
+                    is_lemgram,
                     min_freq,
                     start_year=start_year,
                     end_year=end_year,
                 )
+            else:
+                # Neither split output nor year filtering requested: use overall-optimized query
+                data = await _fetch_overall_relation_rows(conn, corpus, word, is_lemgram, min_freq)
             corpus_results[corpus] = data
-            if args["cache"]:
+            if ctx.common.cache and cache_checksum is not None:
                 cache_key = f"{cache_prefixes[corpus]}:relations_{cache_checksum}"
-                with memcached.get_client() as mc:
-                    try:
-                        mc.add(cache_key, data)
-                    except MemcacheError:
-                        pass
-            if incremental:
+                try:
+                    await ctx.cache.add(cache_key, data)
+                except CacheError:
+                    pass
+            if ctx.common.incremental:
                 yield {f"progress_{progress_index}": {"corpus": corpus}}
                 progress_index += 1
 
-    cursor.close()
+    # Fast path: overall-only with no year filtering
+    if overall_only and not use_split_data:
+        if Measures.freq_relative in measures:
+            # Avoid calling CWB if relative frequencies are not needed, to be able to test the endpoint without CWB
+            corpus_data = await info.get_corpus_info(ctx=ctx, corpora=corpora, no_combined_cache=True)
+            total_corpus_size = sum(int(corpus_data["corpora"][corpus]["info"]["Size"]) for corpus in corpora)
+        else:
+            total_corpus_size = 0
+
+        result["relations"] = _build_overall_only_relations(
+            corpora,
+            corpus_results,
+            sort_field=sort_field.value,
+            max_results=max_results,
+            corpus_size=total_corpus_size,
+            measures=measures,
+        )
+        yield result
+        return
+
+    # Everything past this point uses the accumulator for split/overall data
 
     # Get yearly size of corpora to be able to compute relative frequencies
-    corpus_timedata = utils.generator_to_dict(
-        timespan.timespan(args={"corpus": corpora, "granularity": "y", "cache": args["cache"]}, no_combined_cache=True)
+    corpus_timedata = await timespan.get_timespan(
+        ctx,
+        corpora,
+        granularity=params.GranularityValues.year,
+        combined=False,
+        per_corpus=True,
+        no_combined_cache=True,
     )
+
     # Sum up total frequencies per year
     corpus_size_per_year: dict[int | None, int] = defaultdict(int)
-    for corpus in corpus_timedata["corpora"]:
+    for corpus in corpus_timedata.get("corpora", {}):
         for year, freq in corpus_timedata["corpora"][corpus].items():
             corpus_size_per_year[int(year) if year != "" else None] += freq
 
@@ -1426,27 +1522,11 @@ def relations(args: dict[str, Any], abort_event: gevent.event.Event | None = Non
     # Total corpus size across (possibly filtered) years
     total_corpus_size = sum(corpus_size_per_year.values())
 
-    # Fast path: overall-only with no year filtering
-    if overall_only and not use_split_data:
-        relations_rows = _build_overall_only_relations(
-            corpora,
-            corpus_results,
-            sort_field=sort_field,
-            max_results=max_results,
-            corpus_size=total_corpus_size,
-        )
-        result["relations"] = relations_rows
-        yield result
-        return
-
-    # Everything past this point uses the accumulator for split/overall data
-
     # Aggregate split rows for overall + time-sliced outputs
     acc = _WordPictureAccumulator()
     for corpus in corpora:
-        if not (corpus_data := corpus_results.get(corpus)):
-            continue
-        acc.add_corpus_rows(corpus, corpus_data)
+        if corpus_data := corpus_results.get(corpus):
+            acc.add_corpus_rows(corpus, corpus_data)
 
     include_years = include_split and period_size == 1
     include_periods = include_split and period_size > 1
@@ -1462,7 +1542,7 @@ def relations(args: dict[str, Any], abort_event: gevent.event.Event | None = Non
         end_year=end_year,
     )
 
-    overall_relation_entries: list[dict[str, object]] = []
+    overall_relation_entries = []
     if overall_map:
         for key, bucket in overall_map.items():
             strings = acc.triple_strings.get(key)
@@ -1487,7 +1567,7 @@ def relations(args: dict[str, Any], abort_event: gevent.event.Event | None = Non
                 }
             )
 
-    selected_entries: list[dict[str, object]] = []
+    selected_entries: list[dict[str, dict]] = []
     selected_keys: list[tuple] = []
 
     if overall_relation_entries:
@@ -1496,20 +1576,20 @@ def relations(args: dict[str, Any], abort_event: gevent.event.Event | None = Non
 
         # Sort overall entries by relation and the chosen sort field, then apply max_results per relation and role.
         overall_relation_entries.sort(
-            key=lambda entry: (entry["rel"], entry.get(sort_field, entry["mi"])), reverse=True
+            key=lambda entry: (entry["rel"], entry.get(sort_field.value, entry["mi"])), reverse=True
         )
         counters: Counter[tuple[object, str]] = Counter()
         for entry in overall_relation_entries:
-            key = (entry["rel"], entry["role"])
+            key = (cast(str, entry["rel"]), cast(str, entry["role"]))
             counters[key] += 1
             if max_results and counters[key] > max_results:
                 continue
             selected_entries.append(entry)
         if include_overall:
-            result["relations"] = [_relation_output(entry) for entry in selected_entries]
+            result["relations"] = [_relation_output(entry, measures) for entry in selected_entries]
         if not limit_per_period:
             # max_scope=overall: time results must be scoped to selected overall relations
-            selected_keys = [entry["key"] for entry in selected_entries]
+            selected_keys = [cast(RelationKey, entry["key"]) for entry in selected_entries]
     else:
         # No overall entries available
         if include_overall:
@@ -1531,7 +1611,7 @@ def relations(args: dict[str, Any], abort_event: gevent.event.Event | None = Non
 
         if per_period_rows:
             if limit_per_period and max_results:
-                per_period_rows = _limit_rows_per_bucket(per_period_rows, "period_start", sort_field, max_results)
+                per_period_rows = _limit_rows_per_bucket(per_period_rows, "period_start", sort_field.value, max_results)
             per_period_rows.sort(
                 key=lambda row: (
                     row["rel"],
@@ -1546,12 +1626,12 @@ def relations(args: dict[str, Any], abort_event: gevent.event.Event | None = Non
             result["period_size"] = period_size
             grouped_time_result = {}
             for row in per_period_rows:
-                key = (
+                bucket_key = (
                     f"{row['period_start']}-{row['period_end']}"
                     if period_size > 1
                     else str(row["period_start"] if row["period_start"] is not None else "")
                 )
-                grouped_time_result.setdefault(key, []).append(_relation_output(row))
+                grouped_time_result.setdefault(bucket_key, []).append(_relation_output(row, measures))
             result["relations_time"] = grouped_time_result
         else:
             result["relations_time"] = {}
@@ -1559,171 +1639,222 @@ def relations(args: dict[str, Any], abort_event: gevent.event.Event | None = Non
     yield result
 
 
-@bp.route("/relations_time", methods=["GET", "POST"])
-@utils.main_handler
-@utils.prevent_timeout
-def relations_time(args: dict[str, Any]) -> Iterator[dict]:
+@router.get("/relations", response_model=None)
+@router.post("/relations", response_model=None, include_in_schema=False)
+@utils.api_handler
+async def relations(
+    ctx: utils.CtxDep,
+    corpus: params.CorpusParam,
+    word: str,
+    relation_type: Annotated[RelationType, Query(alias="type")] = RelationType.word,
+    min_freq: Annotated[int | None, Query(alias="min", ge=0)] = None,
+    max_results: Annotated[int, Query(alias="max", ge=0)] = 15,
+    sort: RelationsSort = RelationsSort.mi,
+    split: bool = False,
+    period_size: Annotated[int, Query(ge=1)] = 1,
+    period_align: PeriodAlign = PeriodAlign.newest,
+    start_year: Annotated[int | None, Query(ge=0)] = None,
+    end_year: Annotated[int | None, Query(ge=0)] = None,
+    overall: bool = True,
+    max_scope: MaxScope = MaxScope.per_period,
+    measures: MeasuresParam = tuple(Measures),
+    abort_signal: utils.AbortDep = None,
+) -> AsyncIterator[dict]:
+    """Calculate word picture data.
+
+    Yields:
+        Word picture relation data.
+    """
+    async for item in _relations_impl(
+        ctx=ctx,
+        corpora=corpus,
+        word=word,
+        relation_type=relation_type,
+        min_freq=min_freq,
+        sort_field=sort,
+        max_results=max_results,
+        include_split=split,
+        period_size=period_size,
+        period_align=period_align,
+        start_year=start_year,
+        end_year=end_year,
+        include_overall=overall,
+        max_scope=max_scope,
+        measures=measures,
+        abort_signal=abort_signal,
+    ):
+        yield item
+
+
+@router.get("/relations_time", response_model=None)
+@router.post("/relations_time", response_model=None, include_in_schema=False)
+@utils.api_handler
+async def relations_time(
+    ctx: utils.CtxDep,
+    corpus: params.CorpusParam,
+    word: str,
+    relation_type: Annotated[RelationType, Query(alias="type")] = RelationType.word,
+    min_freq: Annotated[int | None, Query(alias="min", ge=0)] = None,
+    max_results: Annotated[int, Query(alias="max", ge=0)] = 15,
+    sort: RelationsSort = RelationsSort.mi,
+    period_size: Annotated[int, Query(ge=1)] = 1,
+    period_align: PeriodAlign = PeriodAlign.newest,
+    start_year: Annotated[int | None, Query(ge=0)] = None,
+    end_year: Annotated[int | None, Query(ge=0)] = None,
+    overall: bool = False,
+    max_scope: MaxScope = MaxScope.per_period,
+    measures: MeasuresParam = tuple(Measures),
+    abort_signal: utils.AbortDep = None,
+) -> AsyncIterator[dict]:
     """Calculate word picture data with time splits.
 
-    Args:
-        args: Dictionary of request arguments.
-
     Yields:
-        Dictionary containing the results.
+        Word picture relation data with time splits.
     """
-    # Reuse the relations function with specific parameters
-    args["overall"] = args.get("overall", "false")
-    args["split"] = "true"
-    yield from relations(args)
+    async for item in _relations_impl(
+        ctx=ctx,
+        corpora=corpus,
+        word=word,
+        relation_type=relation_type,
+        min_freq=min_freq,
+        sort_field=sort,
+        max_results=max_results,
+        include_split=True,
+        period_size=period_size,
+        period_align=period_align,
+        start_year=start_year,
+        end_year=end_year,
+        include_overall=overall,
+        max_scope=max_scope,
+        measures=measures,
+        abort_signal=abort_signal,
+    ):
+        yield item
 
 
-@bp.route("/relations_sentences", methods=["GET", "POST"])
-@utils.main_handler
-@utils.prevent_timeout
-def relations_sentences(args: dict[str, Any]) -> Iterator[dict]:
-    """Execute a CQP query to find sentences with a given relation from a word picture.
+def _parse_source(source: list[str]) -> dict[str, set[int]]:
+    parsed: dict[str, set[int]] = defaultdict(set)
+    for item in source:
+        try:
+            corpus, relation_id = item.split(":", 1)
+            parsed[corpus.upper()].add(int(relation_id))
+        except ValueError as exc:
+            raise ValueError("Malformed value for key 'source'. Expected 'CORPUS:ID'.") from exc
+    return parsed
 
-    Args:
-        args: Dictionary of request arguments.
 
-    Yields:
-        Dictionary containing the results.
-    """
-    utils.assert_key("source", args, "", True)
-    utils.assert_key("start", args, utils.IS_NUMBER, False)
-    utils.assert_key("end", args, utils.IS_NUMBER, False)
-    utils.assert_key("split", args, r"(true|false)", False)
+async def _relations_sentences_impl(
+    ctx: utils.CtxDep,
+    source: list[str],
+    start: int,
+    end: int,
+    show: str,
+    show_struct: str,
+    default_context: str,
+    yearly: bool,
+    abort_signal: utils.AbortSignal | None = None,
+) -> dict[str, Any]:
+    source_map = _parse_source(source)
+    utils.check_authorization(source_map.keys(), ctx)
 
-    temp_source = args.get("source", [])
-    if isinstance(temp_source, str):
-        temp_source = temp_source.split(utils.QUERY_DELIM)
-    source = defaultdict(set)
-    for s in temp_source:
-        c, i = s.split(":")
-        source[c].add(i)
-
-    utils.check_authorization(source.keys())
-
-    yearly = utils.parse_bool(args, "split", False)
     table_suffix = f"{SPLIT_SUFFIX}_sentences" if yearly else "_sentences"
-
-    start = int(args.get("start") or 0)
-    end = int(args.get("end") or 9)
-    shown = args.get("show") or "word"
-    shown_structs = args.get("show_struct") or []
-    if isinstance(shown_structs, str):
-        shown_structs = shown_structs.split(utils.QUERY_DELIM)
-    shown_structs = set(shown_structs)
-
-    default_context = args.get("default_context") or "1 sentence"
+    shown = show or "word"
+    shown_structs = set(utils.split_csv(show_struct))
 
     querystarttime = time.time()
-
-    cursor = mysql.connection.cursor()
-    cursor.execute("SET @@session.long_query_time = 1000;")
-    selects = []
-    counts = []
-
-    # Get available tables
-    cursor.execute(f"SHOW TABLES LIKE '{app.config['DBWPTABLE']}_%{table_suffix}';")
-    tables = {next(iter(r.values())) for r in cursor}
-    # Filter out corpora which don't exist in database
-    source = sorted(
-        [c for c in iter(source.items()) if f"{app.config['DBWPTABLE']}_{c[0].upper()}{table_suffix}" in tables]
-    )
-    if not source:
-        yield {}
-        return
-    corpora = [x[0] for x in source]
-
-    for s in source:
-        corpus, ids = s
-        ids = [int(i) for i in ids]
-        ids_list = "(" + ", ".join(f"{i:d}" for i in ids) + ")"
-
-        corpus_table_sentences = app.config["DBWPTABLE"] + f"_{corpus.upper()}{table_suffix}"
-
-        selects.append(
-            f"""(
-                SELECT
-                    S.sentence,
-                    S.start,
-                    S.end,
-                    '{utils.sql_escape(corpus.upper())}' AS corpus
-                FROM
-                    `{corpus_table_sentences}` as S
-                WHERE
-                    S.id IN {ids_list}
-            )"""
+    async with ctx.db.async_connection() as conn:
+        await conn.execute(text("SET @@session.long_query_time = 1000;"))
+        tables = await _existing_tables(conn, f"{settings.DB_WP_TABLE}_%{table_suffix}")
+        filtered_source = sorted(
+            [
+                (corpus, ids)
+                for corpus, ids in source_map.items()
+                if f"{settings.DB_WP_TABLE}_{corpus.upper()}{table_suffix}" in tables
+            ]
         )
-        counts.append(
-            f"""(
-                SELECT
-                    '{utils.sql_escape(corpus.upper())}' AS corpus,
-                    COUNT(*) AS freq
-            FROM
-                `{corpus_table_sentences}` as S
-            WHERE
-                S.id IN {ids_list}
-            )"""
-        )
+        if not filtered_source:
+            return {}
+        corpora = [corpus for corpus, _ in filtered_source]
 
-    sql_count = " UNION ALL ".join(counts)
-    cursor.execute(sql_count)
+        selects: list[str] = []
+        counts: list[str] = []
+        for corpus, ids in filtered_source:
+            ids_list = "(" + ", ".join(f"{i:d}" for i in sorted(ids)) + ")"
+            corpus_table_sentences = f"{settings.DB_WP_TABLE}_{corpus.upper()}{table_suffix}"
+            selects.append(
+                f"""(
+                    SELECT
+                        S.sentence,
+                        S.start,
+                        S.end,
+                        '{utils.sql_escape(corpus.upper())}' AS corpus
+                    FROM
+                        `{corpus_table_sentences}` as S
+                    WHERE
+                        S.id IN {ids_list}
+                )"""
+            )
+            counts.append(
+                f"""(
+                    SELECT
+                        '{utils.sql_escape(corpus.upper())}' AS corpus,
+                        COUNT(*) AS freq
+                    FROM
+                        `{corpus_table_sentences}` as S
+                    WHERE
+                        S.id IN {ids_list}
+                )"""
+            )
 
-    corpus_hits = {}
-    for row in cursor:
-        corpus_hits[row["corpus"]] = int(row["freq"])
+        count_rows = await _fetch_mappings(conn, " UNION ALL ".join(counts))
+        corpus_hits = {row["corpus"]: int(row["freq"]) for row in count_rows}
+        sentence_rows = await _fetch_mappings(conn, " UNION ALL ".join(selects) + f" LIMIT {start}, {end - start + 1}")
+        querytime = time.time() - querystarttime
 
-    sql = " UNION ALL ".join(selects) + (f" LIMIT {start}, {end - start + 1}")
-    cursor.execute(sql)
-
-    querytime = time.time() - querystarttime
-    corpora_dict = {}
-    for row in cursor:
+    corpora_dict: dict[str, dict[str, list[tuple[int, int]]]] = {}
+    for row in sentence_rows:
         corpora_dict.setdefault(row["corpus"], {}).setdefault(row["sentence"], []).append((row["start"], row["end"]))
 
-    cursor.close()
-
     total_hits = sum(corpus_hits.values())
-
     if not corpora_dict:
-        yield {"hits": 0}
-        return
+        return {"hits": 0}
 
     cqpstarttime = time.time()
-    result = {}
-
-    for corp, sids in sorted(corpora_dict.items(), key=operator.itemgetter(0)):
+    result: dict[str, Any] = {}
+    for corpus, sids in sorted(corpora_dict.items(), key=operator.itemgetter(0)):
+        if abort_signal and abort_signal.is_set():
+            return result
         cqp = '<sentence_id="{}"> []* </sentence_id> within sentence'.format("|".join(set(sids.keys())))
-        q = {
-            "cqp": cqp,
-            "corpus": corp,
-            "start": "0",
-            "end": str(end - start),
-            "show_struct": ["sentence_id", *shown_structs],
-            "default_context": default_context,
-        }
-        if shown:
-            q["show"] = shown
-        result_temp = utils.generator_to_dict(query.query(q))
+        query_params = query.parse_parameters(
+            ctx=ctx,
+            corpus=[corpus],
+            cqp=[cqp],
+            start=0,
+            end=end - start,
+            show=utils.split_csv(shown),
+            show_struct=["sentence_id", *shown_structs],
+            default_context=default_context,
+        )
+        result_temp = await utils.async_generator_to_dict(
+            query.perform_query(query_params, ctx, abort_signal=abort_signal)
+        )
 
         # Loop backwards since we might be adding new items
         for i in range(len(result_temp["kwic"]) - 1, -1, -1):
-            s = result_temp["kwic"][i]
-            sid = s["structs"]["sentence_id"]
-            r = sids[sid][0]
-            sentence_start = s["match"]["start"]
-            s["match"]["start"] = sentence_start + min(map(int, r)) - 1
-            s["match"]["end"] = sentence_start + max(map(int, r))
+            sentence = result_temp["kwic"][i]
+            sid = sentence["structs"]["sentence_id"]
+            relation_positions = sids[sid][0]
+            sentence_start = sentence["match"]["start"]
+            sentence["match"]["start"] = sentence_start + min(map(int, relation_positions)) - 1
+            sentence["match"]["end"] = sentence_start + max(map(int, relation_positions))
 
             # If the same relation appears more than once in the same sentence,
             # append copies of the sentence as separate results
-            for r in sids[sid][1:]:
-                s2 = deepcopy(s)
-                s2["match"]["start"] = sentence_start + min(map(int, r)) - 1
-                s2["match"]["end"] = sentence_start + max(map(int, r))
-                result_temp["kwic"].insert(i + 1, s2)
+            for relation_positions in sids[sid][1:]:
+                copy_sentence = deepcopy(sentence)
+                copy_sentence["match"]["start"] = sentence_start + min(map(int, relation_positions)) - 1
+                copy_sentence["match"]["end"] = sentence_start + max(map(int, relation_positions))
+                result_temp["kwic"].insert(i + 1, copy_sentence)
 
         result.setdefault("kwic", []).extend(result_temp["kwic"])
 
@@ -1732,22 +1863,88 @@ def relations_sentences(args: dict[str, Any]) -> Iterator[dict]:
     result["corpus_order"] = corpora
     result["querytime"] = querytime
     result["cqptime"] = time.time() - cqpstarttime
+    return result
 
-    yield result
 
-
-@bp.route("/relations_time_sentences", methods=["GET", "POST"])
-@utils.main_handler
-@utils.prevent_timeout
-def relations_time_sentences(args: dict[str, Any]) -> Iterator[dict]:
-    """Execute a CQP query to find sentences with a given relation from a word picture.
+@router.get("/relations_sentences", response_model=None)
+@router.post("/relations_sentences", response_model=None, include_in_schema=False)
+@utils.api_handler
+async def relations_sentences(
+    ctx: utils.CtxDep,
+    source: SourceParam,
+    start: int = 0,
+    end: int = 9,
+    show: str = "word",
+    show_struct: str = "",
+    default_context: str = "1 sentence",
+    split: bool = False,
+    abort_signal: utils.AbortDep = None,
+) -> AsyncIterator[dict]:
+    """Find sentences containing relations from word picture source IDs.
 
     Args:
-        args: Dictionary of request arguments.
+        ctx: Common dependencies.
+        source: List of source IDs in the format `CORPUS:ID`.
+        start: Starting index for pagination (0-based).
+        end: Ending index for pagination (inclusive).
+        show: Comma-separated list of token fields to include in results.
+        show_struct: Comma-separated list of structural attributes to include.
+        default_context: Default context size for query results (e.g., "1 sentence").
+        split: Whether the sentences are from time-split tables.
+        abort_signal: Optional signal for aborting long-running operations.
 
     Yields:
-        Dictionary containing the results.
+        A dictionary containing the sentences and related metadata.
     """
-    # Reuse the relations_sentences function with specific parameters
-    args["split"] = "true"
-    yield from relations_sentences(args)
+    yield await _relations_sentences_impl(
+        ctx=ctx,
+        source=source,
+        start=start,
+        end=end,
+        show=show,
+        show_struct=show_struct,
+        default_context=default_context,
+        yearly=split,
+        abort_signal=abort_signal,
+    )
+
+
+@router.get("/relations_time_sentences", response_model=None)
+@router.post("/relations_time_sentences", response_model=None, include_in_schema=False)
+@utils.api_handler
+async def relations_time_sentences(
+    ctx: utils.CtxDep,
+    source: SourceParam,
+    start: int = 0,
+    end: int = 9,
+    show: str = "word",
+    show_struct: str = "",
+    default_context: str = "1 sentence",
+    abort_signal: utils.AbortDep = None,
+) -> AsyncIterator[dict]:
+    """Find time-split sentences containing relations from word picture source IDs.
+
+    Args:
+        ctx: Common dependencies.
+        source: List of source IDs in the format `CORPUS:ID`.
+        start: Starting index for pagination (0-based).
+        end: Ending index for pagination (inclusive).
+        show: Comma-separated list of token fields to include in results.
+        show_struct: Comma-separated list of structural attributes to include.
+        default_context: Default context size for query results (e.g., "1 sentence").
+        abort_signal: Optional signal for aborting long-running operations.
+
+    Yields:
+        A dictionary containing the sentences and related metadata.
+    """
+    yield await _relations_sentences_impl(
+        ctx=ctx,
+        source=source,
+        start=start,
+        end=end,
+        show=show,
+        show_struct=show_struct,
+        default_context=default_context,
+        yearly=True,
+        abort_signal=abort_signal,
+    )

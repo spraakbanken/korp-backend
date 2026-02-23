@@ -5,7 +5,7 @@ This is the backend for [Korp](https://spraakbanken.gu.se/korp), a corpus search
 
 The code is distributed under the [MIT license](https://opensource.org/licenses/MIT).
 
-The Korp backend is a Python 3 WSGI application, acting as a wrapper for Corpus Workbench.
+The Korp backend is a Python 3 ASGI application built with FastAPI, acting as a wrapper for Corpus Workbench.
 
 To see what has changed in recent versions, see the [CHANGELOG](CHANGELOG.md).
 
@@ -13,16 +13,16 @@ To see what has changed in recent versions, see the [CHANGELOG](CHANGELOG.md).
 
 To use the basic features of the Korp backend you need the following:
 
-* [Python 3.10+](https://python.org/)
-* [Corpus Workbench](https://cwb.sourceforge.io/) (CWB) 3.4.12 or newer
+- [Python 3.11+](https://python.org/)
+- [Corpus Workbench](https://cwb.sourceforge.io/) (CWB) 3.4.12 or newer
 
 To use the additional features such as the Word Picture you also need:
 
-* [MariaDB](https://mariadb.org/) or [MySQL](https://www.mysql.com/)
+- [MariaDB](https://mariadb.org/) or [MySQL](https://www.mysql.com/)
 
 For optional (but strongly recommended) caching you need:
 
-* [Memcached](https://memcached.org/)
+- [Memcached](https://memcached.org/)
 
 ## Installing the required software
 
@@ -34,78 +34,94 @@ Download the current stable version of [Corpus Workbench](https://cwb.sourceforg
 [*Installing the CWB Core*](https://cwb.sourceforge.io/install.php) instructions, either by using the provided
 packages or building from source. Refer to the included `INSTALL` text file for further instructions.
 
-Once CWB is installed, by default you will find it under `/usr/local/cwb-X.X.X/bin` (where `X.X.X` is the version
-number). Confirm that the installation was successful by running:
-
-    /usr/local/cwb-X.X.X/bin/cqp -v
-
 CWB needs two directories for storing the corpora. One for the data, and one for the corpus registry.
-You may create these directories wherever you want, but from here on we will assume that you have created the
-following two:
+You may create these directories wherever you want, but from here on we will assume that you have created the following
+directories:
 
-    /corpora/data
-    /corpora/registry
+- `/corpora/data`
+- `/corpora/registry`
 
+## Installing the Korp backend
 
-## Setting up the Python environment and requirements
+Begin by cloning the Korp backend repository:
 
-Optionally you may set up a virtual Python environment:
+```sh
+git clone https://github.com/spraakbanken/korp-backend.git
+cd korp-backend
+```
 
-    $ python3 -m venv venv
-    $ source venv/bin/activate
+For setting up a virtual Python environment and installing the required Python modules, we recommend using
+[uv](https://docs.astral.sh/uv/). uv can also be used to install a compatible version of Python if you don't have Python 3.11 or newer already.
 
-Install the required Python modules using `pip` with the included `requirements.txt`.
+1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you don't have it already.
+2. While in the Korp backend directory, run:
 
-    $ pip3 install -r requirements.txt
+   ```sh
+   uv sync
+   ```
 
-If you wish to be able to run tests (useful mainly for Korp developers), install from `requirements-dev.txt` instead of `requirements.txt`.
+   This will create a virtual environment in the `.venv` directory and install the dependencies listed in
+   `pyproject.toml`, including the development dependencies.
 
+An alternative to using `uv` is to set up a virtual environment manually using Python's built-in `venv` module and
+install the dependencies using `pip`:
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+pip install . --group dev  # Only if you want the development dependencies
+```
 
 ## Configuring Korp
 
-The supplied `config.py` contains the default configuration. To override the default configuration, make a copy
-of `config.py` and place it in a directory named `instance` in the repo root directory, and edit that copy.
+Configuration of the Korp backend is done either by setting environment variables or by creating a `.env` file in the root of the project. Begin by copying the provided `.env.template` file.
 
 The following variables need to be set for Korp to work:
 
-* `CQP_EXECUTABLE`  
-The absolute path to the CQP binary. By default `/usr/local/cwb-X.X.X/bin/cqp`
+- `CQP_EXECUTABLE`
+- `CWB_SCAN_EXECUTABLE`
+- `CWB_REGISTRY`
+  
+If you are planning on using the Word Picture, Trend Diagram or other features that require database access, you also need to set the following variables:
 
-* `CWB_SCAN_EXECUTABLE`  
-The absolute path to the cwb-scan-corpus binary. By default `/usr/local/cwb-X.X.X/cwb-scan-corpus`
+- `DB_NAME`
+- `DB_USER & DB_PASSWORD`
 
-* `CWB_REGISTRY`  
-The absolute path to the CWB registry files. This is the `/corpora/registry` folder you created before.
+For caching to work you need to specify both a cache directory and a Memcached server address or socket:
 
-If you are planning on using functionality dependent on a database, you also need to set the following variables:
+- `CACHE_DIR`
+- `MEMCACHED_SERVER`
 
-* `DBNAME`  
-The name of the MySQL database where the corpus data will be stored.
+Plugin-specific settings can be stored in a YAML file referenced by `PLUGINS_CONFIG_FILE`:
 
-* `DBUSER & DBPASSWORD`  
-Username and password for accessing the database.
+```dotenv
+PLUGINS_CONFIG_FILE = "plugins.yaml"
+```
 
-For caching to work you need to specify both a cache directory (`CACHE_DIR`) and a Memcached server address or socket
-(`MEMCACHED_SERVER`).
+Example `plugins.yaml`:
 
+```yaml
+plugins.example:
+  greeting: "Hello!"
+```
+
+If `PLUGINS_CONFIG` is also set in `.env`, its values override matching keys from the YAML file.
 
 ## Running the backend
 
-To run the backend, simply run `run.py`:
+For deployment, use an ASGI server. We recommend [Uvicorn](https://www.uvicorn.org/) (included with the development dependencies):
 
-    python3 run.py
+```sh
+uvicorn korp.main:app --host 0.0.0.0 --port 8000
+```
 
-The backend should then be reachable in your web browser on the port you configured in `config.py`, for
-example `http://localhost:1234`.
+During development, you can use FastAPI's built-in development server, which will automatically reload the server when
+you make changes to the code:
 
-During development or while testing your configuration, use the flag `dev` for automatic reloading.
-
-    python3 run.py dev
-
-For deployment, [Gunicorn](http://gunicorn.org/) works well.
-
-    gunicorn --worker-class gevent --bind 0.0.0.0:1234 --workers 4 --max-requests 250 --limit-request-line 0 'run:create_app()'
-
+```sh
+fastapi dev korp/main.py
+```
 
 ## Cache management
 
@@ -113,14 +129,12 @@ Most caching is done using Memcached, except for CWB query results which are tem
 pagination.
 While Memcached handles removing old cache by itself, you will still have to tell it to invalidate parts of the cache
 when one or more corpora are updated or added. This, and cleaning up the disk cache, is easily done by accessing the
-`/cache` endpoint. It might be a good idea to set up a cronjob or similar to regularly do this, making the cache
+`/cache` endpoint. We recommend setting up a cronjob or similar to regularly do this, making the cache
 maintenance fully automatic.
-
 
 ## API documentation
 
-The API documentation is available as an OpenAPI specification in [docs/api.yaml](docs/api.yaml), or online at [https://ws.spraakbanken.gu.se/docs/korp](https://ws.spraakbanken.gu.se/docs/korp).
-
+The API documentation is available at the `/docs` endpoint when the server is running. It is also available as an OpenAPI JSON file at the `/openapi.json` endpoint.
 
 ## Adding corpora
 
@@ -133,13 +147,14 @@ Once CWB is aware of your corpora they will be accessible through the Korp API.
 For Korp to show the number of sentences and the date when a corpus was last updated, you have to manually add this information.
 Create a file called ".info" in the directory of the CWB data files for the corpus, and add to it the following lines (editing the values to match your material). Be sure to end the file with a blank line:
 
-    Sentences: 12345
-    Updated: 2019-11-30
-    FirstDate: 2001-01-16 00:00:00
-    LastDate: 2001-01-30 23:59:59
+```text
+Sentences: 12345
+Updated: 2019-11-30
+FirstDate: 2001-01-16 00:00:00
+LastDate: 2001-01-30 23:59:59
+```
 
 Once this file is in place, Korp will be able to access this information.
-
 
 ### Corpus structure requirements
 
@@ -148,113 +163,112 @@ regarding the markup of your corpora.
 
 To use the **Word Picture** functionality your corpus must adhere to the following format:
 
-* The structural annotation marking sentences must be named `sentence`.
-* Every sentence annotation must have an attribute named `id` with a value that is unique within the corpus.
+- The structural annotation marking sentences must be named `sentence`.
+- Every sentence annotation must have an attribute named `id` with a value that is unique within the corpus.
 
 To use the **Trend Diagram** functionality, your corpus needs to be annotated with date information using
 the following four structural attributes: `text_datefrom`, `text_timefrom`, `text_dateto`, `text_timeto`.
 The date format should be *YYYYMMDD*, and the time format *hhmmss*.
 A corpus dated 2006 would have the following values:
 
-* `text_datefrom:  20060101`
-* `text_timefrom:  000000`
-* `text_dateto:    20061231`
-* `text_timeto:    235959`
-
+- `text_datefrom:  20060101`
+- `text_timefrom:  000000`
+- `text_dateto:    20061231`
+- `text_timeto:    235959`
 
 ## Database tables
 
 This section describes the database tables needed to use the Word Picture, Lemgram index and Trend Diagram features.
 If you don't need any of these features, you can skip this section.
 
-
 ### Relations for the Word Picture
 
 The Word Picture data consists of head-relation-dependent triplets and frequencies.
 For every corpus, you need five database tables. The table structures are as follows:
 
-    Table name: relations_CORPUSNAME  
-    Charset:    UTF-8  
+```text
+Table name: relations_CORPUSNAME  
+Charset:    UTF-8  
 
-    Columns:  
-        id             int                  A unique ID (within this table)  
-        head           int                  Reference to an ID in the strings table (below). The head word in the relation  
-        rel            enum(...)            The syntactic relation  
-        dep            int                  Reference to an ID in the strings table (below). The dependent in the relation  
-        freq           int                  Frequency of the triplet (head, rel, dep)  
-        bfhead         bool                 True if head is a base form (or lemgram)  
-        bfdep          bool                 True if dep  is a base form (or lemgram)  
-        wfhead         bool                 True if head is a word form  
-        wfdep          bool                 True if dep is a word form  
+Columns:  
+    id             int                  A unique ID (within this table)  
+    head           int                  Reference to an ID in the strings table (below). The head word in the relation  
+    rel            enum(...)            The syntactic relation  
+    dep            int                  Reference to an ID in the strings table (below). The dependent in the relation  
+    freq           int                  Frequency of the triplet (head, rel, dep)  
+    bfhead         bool                 True if head is a base form (or lemgram)  
+    bfdep          bool                 True if dep  is a base form (or lemgram)  
+    wfhead         bool                 True if head is a word form  
+    wfdep          bool                 True if dep is a word form  
 
-    Indexes:  
-        (head, wfhead, dep, rel, freq, id)  
-        (dep, wfdep, head, rel, freq, id)  
-        (head, dep, bfhead, bfdep, rel, freq, id)  
-        (dep, head, bfhead, bfdep, rel, freq, id)
-
-
-    Table name: relations_CORPUSNAME_strings  
-    Charset:    UTF-8  
-
-    Columns:  
-        id             int                  A unique ID (within this table)  
-        string         varchar(100)         The head or dependent string  
-        stringextra    varchar(32)          Optional preposition for the dependent  
-        pos            varchar(5)           Part-of-speech for the head or dependent  
-
-    Indexes:  
-        (string, id, pos, stringextra)  
-        (id, string, pos, stringextra)
+Indexes:  
+    (head, wfhead, dep, rel, freq, id)  
+    (dep, wfdep, head, rel, freq, id)  
+    (head, dep, bfhead, bfdep, rel, freq, id)  
+    (dep, head, bfhead, bfdep, rel, freq, id)
 
 
-    Table name: relations_CORPUSNAME_rel  
-    Charset:    UTF-8  
+Table name: relations_CORPUSNAME_strings  
+Charset:    UTF-8  
 
-    Columns:  
-        rel            enum(...)            The syntactic relation  
-        freq           int                  Frequency of the relation  
+Columns:  
+    id             int                  A unique ID (within this table)  
+    string         varchar(100)         The head or dependent string  
+    stringextra    varchar(32)          Optional preposition for the dependent  
+    pos            varchar(5)           Part-of-speech for the head or dependent  
 
-    Indexes:  
-        (rel, freq)  
-
-
-    Table name: relations_CORPUSNAME_head_rel  
-    Charset:    UTF-8  
-
-    Columns:  
-        head           int                  Reference to an ID in the strings table. The head word in the relation  
-        rel            enum(...)            The syntactic relation  
-        freq           int                  Frequency of the pair (head, rel)  
-
-    Indexes:  
-        (head, rel, freq)
+Indexes:  
+    (string, id, pos, stringextra)  
+    (id, string, pos, stringextra)
 
 
-    Table name: relations_CORPUSNAME_dep_rel  
-    Charset:    UTF-8  
+Table name: relations_CORPUSNAME_rel  
+Charset:    UTF-8  
 
-    Columns:  
-        dep            int                  Reference to an ID in the strings table. The dependent in the relation  
-        rel            enum(...)            The syntactic relation  
-        freq           int                  Frequency of the pair (rel, dep)  
+Columns:  
+    rel            enum(...)            The syntactic relation  
+    freq           int                  Frequency of the relation  
 
-    Indexes:  
-        (dep, rel, freq)
+Indexes:  
+    (rel, freq)  
 
 
-    Table name: relations_CORPUSNAME_sentences  
-    Charset:    UTF-8  
+Table name: relations_CORPUSNAME_head_rel  
+Charset:    UTF-8  
 
-    Columns:  
-        id             int                  An ID from relations_CORPUSNAME
-        sentence       varchar(64)          A sentence ID (see the section about corpus structure above)  
-        start          int                  The position of the first word of the relation in the sentence  
-        end            int                  The position of the last word of the relation in the sentence  
+Columns:  
+    head           int                  Reference to an ID in the strings table. The head word in the relation  
+    rel            enum(...)            The syntactic relation  
+    freq           int                  Frequency of the pair (head, rel)  
 
-    Indexes:  
-        id
+Indexes:  
+    (head, rel, freq)
 
+
+Table name: relations_CORPUSNAME_dep_rel  
+Charset:    UTF-8  
+
+Columns:  
+    dep            int                  Reference to an ID in the strings table. The dependent in the relation  
+    rel            enum(...)            The syntactic relation  
+    freq           int                  Frequency of the pair (rel, dep)  
+
+Indexes:  
+    (dep, rel, freq)
+
+
+Table name: relations_CORPUSNAME_sentences  
+Charset:    UTF-8  
+
+Columns:  
+    id             int                  An ID from relations_CORPUSNAME
+    sentence       varchar(64)          A sentence ID (see the section about corpus structure above)  
+    start          int                  The position of the first word of the relation in the sentence  
+    end            int                  The position of the last word of the relation in the sentence  
+
+Indexes:  
+    id
+```
 
 In the main `relations_CORPUSNAME` table, each relation should be represented three times. Once with both dependent
 and head as base forms, once with dependent as base form and head as word form, and once with dependent as
@@ -274,20 +288,18 @@ number of occurrences. This is used by the frontend to grey out auto-completion
 suggestions which would not give any results in the selected corpora. The lemgram
 index consists of a single MySQL table, with the following layout:
 
+```text
+Table name: lemgram_index  
+Charset:    UTF-8  
 
-    Table name: lemgram_index  
-    Charset:    UTF-8  
+Columns:  
+    lemgram      varchar(64)         The lemgram  
+    freq         int                 Number of occurrences  
+    corpus       varchar(64)         The corpus name  
 
-    Columns:  
-        lemgram      varchar(64)         The lemgram  
-        freq         int                 Number of occurrences  
-        freq_prefix  int                 Number of occurrences as a prefix  
-        freq_suffix  int                 Number of occurrences as a suffix  
-        corpus       varchar(64)         The corpus name  
-
-    Indexes:  
-        (lemgram, corpus, freq, freq_prefix, freq_suffix)
-
+Indexes:  
+    (lemgram, corpus, freq)
+```
 
 ### Time data
 
@@ -295,39 +307,39 @@ For the Trend Diagram, you need to add token-per-time-span data to your database
 date or time info, use the date 0000-00-00 00:00:00.
 Use the following table layout:
 
+```text
+Table name: timedata  
+Charset:    UTF-8  
 
-    Table name: timedata  
-    Charset:    UTF-8  
+Columns:  
+    corpus    varchar(64)        The corpus name
+    datefrom  datetime           Full from-date and time
+    dateto    datetime           Full to-date and time
+    tokens    int                Number of tokens between from-date and (including) to-date
 
-    Columns:  
-        corpus    varchar(64)        The corpus name
-        datefrom  datetime           Full from-date and time
-        dateto    datetime           Full to-date and time
-        tokens    int                Number of tokens between from-date and (including) to-date
-
-    Indexes:  
-        (corpus, datefrom, dateto)
+Indexes:  
+    (corpus, datefrom, dateto)
 
 
-    Table name: timedata_date  
-    Charset:    UTF-8  
+Table name: timedata_date  
+Charset:    UTF-8  
 
-    Columns:  
-        corpus    varchar(64)        The corpus name
-        datefrom  date               From-date (only date part)
-        dateto    date               To-date (only date part)
-        tokens    int                Number of tokens between from-date and (including) to-date
+Columns:  
+    corpus    varchar(64)        The corpus name
+    datefrom  date               From-date (only date part)
+    dateto    date               To-date (only date part)
+    tokens    int                Number of tokens between from-date and (including) to-date
 
-    Indexes:  
-        (corpus, datefrom, dateto)
-
+Indexes:  
+    (corpus, datefrom, dateto)
+```
 
 ## Corpus Configuration for the Korp Frontend
 
 The corpus configuration used by the Korp frontend is served by the backend. In `config.py`, the variable
 `CORPUS_CONFIG_DIR` should point to a directory having the following structure:
 
-```
+```text
 .
 ├── attributes
 │   ├── positional
@@ -357,20 +369,24 @@ The corpus configuration used by the Korp frontend is served by the backend. In 
 - The **attributes** directory contains two subdirectories: **positional** and **structural**, containing optional
   attribute presets referred to by the corpus configurations.
 
-For some inspiration, [here](https://github.com/spraakbanken/korp-config) are the config files used by the Korp instance
-at Språkbanken Text.
+For some inspiration, you can look at the  [config files](https://github.com/spraakbanken/korp-config) used by the Korp
+instance at Språkbanken Text.
 
 **Note:**  
 Most settings in these files referring to labels or descriptions can optionally be localized using ISO 639-3 language
 codes. For example, a label can look both like this:
 
-    label: author
+```yaml
+label: author
+```
 
 ... and like this:
 
-    label:
-      eng: author
-      swe: författare
+```yaml
+label:
+  eng: author
+  swe: författare
+```
 
 ### Mode Configuration
 
@@ -388,7 +404,8 @@ when no mode is explicitly requested.
 - **folders**: A folder structure for the corpus selector. These folders can then be referenced by individual corpora.
   The folder structure can be of any depth, and folders can have any number of sub-folders (using the key `subfolders`).
   You may use HTML in the descriptions. Example:
-  ```
+
+  ```yaml
   folders:
     novels:
       title:
@@ -405,13 +422,16 @@ when no mode is explicitly requested.
         scifi:
           title: Science-Fiction
   ```
+
 - **preselected_corpora**: A list of corpus IDs which will be pre-selected when the user enters the mode. You may also
   refer to folders by using the prefix `__`, and dot-notation for refering to subfolders. Example:
-  ```
+
+  ```yaml
   preselected_corpora:
     - my-corpus
     - __novels.scifi
   ```
+
 - Other than the above, you can also override almost all the global settings set in the frontend's `config.yaml`. See
   [the documentation for the
   frontend](https://github.com/spraakbanken/korp-frontend/blob/master/doc/frontend_devel.md#settings-in-configyml) for a
@@ -428,7 +448,8 @@ correspond to a corpus ID in lowercase, followed by `.yaml`, e.g. `mycorpus.yaml
 - **title**: Title of the corpus.
 - **description**: Description of the corpus. HTML can be used.
 - **modes**: A list of the modes in which the corpus will be included, optionally specifying a folder. Example:
-  ```
+
+  ```yaml
   mode:
     - name: default
       folder: novels.classics
@@ -438,7 +459,8 @@ correspond to a corpus ID in lowercase, followed by `.yaml`, e.g. `mycorpus.yaml
 
 - **within**: Use this to override **default_within** (set in the global or mode config). **within** is a list of
  structural elements to use as boundaries when searching, ordered from smaller to bigger. Example:
-  ```
+
+  ```yaml
   within:
     - label:
         eng: sentence
@@ -449,10 +471,12 @@ correspond to a corpus ID in lowercase, followed by `.yaml`, e.g. `mycorpus.yaml
         swe: stycke
       value: paragraph
   ```
+
 - **context**: Use this to override **default_context** (set in the global or mode config). **context** is a list of
   structural elements that can be used as context in the displaying of the search results, ordered from smaller to
   bigger. Example:
-  ```
+
+  ```yaml
   context:
     - label:
         eng: 1 sentence
@@ -463,6 +487,7 @@ correspond to a corpus ID in lowercase, followed by `.yaml`, e.g. `mycorpus.yaml
         swe: 1 stycke
       value: 1 paragraph
   ```
+
 - **attribute_filters**: A list of structural attributes on which the user will be able to filter the search results,
   using menus in both simple and extended search.
 - **pos_attributes** and **struct_attributes**: Lists of positional and structural attributes. Every item in each list
@@ -475,7 +500,8 @@ correspond to a corpus ID in lowercase, followed by `.yaml`, e.g. `mycorpus.yaml
   For more information about what options are available for attribute definitions, see the [Korp frontend
   documentation](https://github.com/spraakbanken/korp-frontend/blob/master/doc/frontend_devel.md#attribute-settings).
   Example:
-  ```
+
+  ```yaml
   struct_attributes:
     - text_title: title
     - text_type:
@@ -488,6 +514,7 @@ correspond to a corpus ID in lowercase, followed by `.yaml`, e.g. `mycorpus.yaml
           eng: source
           swe: källa
   ```
+
 - **custom_attributes**: See [Custom
   attributes](https://github.com/spraakbanken/korp-frontend/blob/master/doc/frontend_devel.md#custom-attributes).
 - **reading_mode**: See [Reading

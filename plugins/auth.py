@@ -1,43 +1,84 @@
-"""Authentication and authorization using SB-auth."""
+"""Authentication and authorization using SB-auth.
+
+This plugin implements a simple authentication mechanism using an external authentication server. It checks the user's
+credentials against the authentication server and retrieves the list of corpora the user has access to.
+"""
+
+import base64
 import hashlib
 import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import List, Tuple, Optional
 
-from flask import request
+from fastapi import Path
 
 from korp import utils
 
-bp = utils.Plugin("authenticate", __name__)
+router = utils.Plugin("authenticate", __name__)
 
 
-@bp.route("/authenticate", methods=["GET", "POST"])
-@utils.main_handler(cache=False)
-def authenticate(_=None):
-    """Authenticate a user against an authentication server."""
+@router.route("/authenticate", methods=["GET", "POST"])
+@utils.api_handler(cache_headers=False)
+def authenticate(ctx: utils.CtxDep) -> dict:
+    """Authenticate a user against an authentication server.
 
-    auth_data = request.authorization
+    Args:
+        ctx: Request context.
+
+    Returns:
+        A dictionary containing the list of corpora the user has access to, or an empty dictionary if authentication
+            fails.
+    """
+    auth_header = ctx.request.headers.get("Authorization")
+    return _authenticate_from_auth_header(auth_header)
+
+
+def _authenticate_from_auth_header(auth_header: str | None) -> dict:
+    """Authenticate from an Authorization header value.
+
+    Args:
+        auth_header: The value of the Authorization header.
+
+    Returns:
+        A dictionary containing the list of corpora the user has access to, or an empty dictionary if authentication
+            fails.
+
+    Raises:
+        KorpAuthorizationError: If there is an error during authentication (e.g., contacting the authentication server).
+    """
+    auth_data = None
+    if auth_header and auth_header.lower().startswith("basic "):
+        try:
+            encoded = auth_header.split(" ", 1)[1]
+            decoded = base64.b64decode(encoded).decode("utf-8")
+            username, password = decoded.split(":", 1)
+            auth_data = {"username": username, "password": password}
+        except Exception:
+            auth_data = None
 
     if auth_data:
         postdata = {
             "username": auth_data["username"],
             "password": auth_data["password"],
-            "checksum": hashlib.md5(bytes(auth_data["username"] + auth_data["password"] +
-                                          bp.config("AUTH_SECRET"), "utf-8")).hexdigest()
+            "checksum": hashlib.md5(
+                bytes(auth_data["username"] + auth_data["password"] + router.config("AUTH_SECRET"), "utf-8")
+            ).hexdigest(),
         }
 
         try:
-            contents = urllib.request.urlopen(bp.config("AUTH_SERVER"),
-                                              urllib.parse.urlencode(postdata).encode("utf-8")).read().decode("utf-8")
+            contents = (
+                urllib.request.urlopen(router.config("AUTH_SERVER"), urllib.parse.urlencode(postdata).encode("utf-8"))
+                .read()
+                .decode("utf-8")
+            )
             auth_response = json.loads(contents)
         except urllib.error.HTTPError:
-            raise utils.KorpAuthorizationError("Could not contact authentication server.")
+            raise utils.KorpAuthorizationError("Could not contact authentication server.") from None
         except ValueError:
-            raise utils.KorpAuthorizationError("Invalid response from authentication server.")
-        except:
-            raise utils.KorpAuthorizationError("Unexpected error during authentication.")
+            raise utils.KorpAuthorizationError("Invalid response from authentication server.") from None
+        except Exception:
+            raise utils.KorpAuthorizationError("Unexpected error during authentication.") from None
 
         if auth_response["authenticated"]:
             permitted_resources = auth_response["permitted_resources"]
@@ -46,34 +87,65 @@ def authenticate(_=None):
                 for c in permitted_resources["corpora"]:
                     if permitted_resources["corpora"][c]["read"]:
                         result["corpora"].append(c.upper())
-            yield result
-            return
+            return result
 
-    yield {}
+    return {}
 
 
 class Auth(utils.Authorizer):
+    """Authorizer class that checks if the user has access to protected corpora based on the authentication response."""
 
-    def __init__(self):
-        self._protected = []
+    def get_protected_corpora(self, auth_ctx: utils.AuthContext) -> list[str]:
+        """Get list of protected corpora.
 
-    def get_protected_corpora(self, use_cache: bool = True):
-        """Get list of protected corpora."""
-        if bp.config("PROTECTED_FILE"):
-            with open(bp.config("PROTECTED_FILE")) as infile:
-                return [x.strip() for x in infile.readlines()]
+        Args:
+            auth_ctx: The authentication context.
+
+        Returns:
+            A list of protected corpora.
+        """
+        if auth_ctx.cache_enabled:
+            with self.cache.get_client() as mc:
+                key = f"protected:{utils.cache_prefix_sync(mc)}"
+                result = mc.get(key)
+            if result is not None:
+                return result
+
+        if router.config("PROTECTED_FILE"):
+            with Path(router.config("PROTECTED_FILE")).open(encoding="utf-8") as infile:
+                protected_corpora = [x.strip().upper() for x in infile if x.strip()]
         else:
-            return []
+            protected_corpora = []
 
-    def check_authorization(self, corpora: List[str]) -> Tuple[bool, List[str], Optional[str]]:
-        """Take a list of corpora, and check if the user has access to them."""
+        if auth_ctx.cache_enabled:
+            with self.cache.get_client() as mc:
+                mc.add(key, protected_corpora)
+        return protected_corpora
 
-        if bp.config("PROTECTED_FILE"):
-            protected = self.get_protected_corpora()
+    def check_authorization(
+        self, corpora: list[str], auth_ctx: utils.AuthContext
+    ) -> tuple[bool, list[str], str | None]:
+        """Take a list of corpora, and check if the user has access to them.
+
+        Args:
+            corpora: A list of corpora to check access for.
+            auth_ctx: The authentication context.
+
+        Returns:
+            A tuple containing:
+                - A boolean indicating if access is granted.
+                - A list of unauthorized corpora (if access is denied).
+                - An optional message (not used in this implementation).
+        """
+        if router.config("PROTECTED_FILE"):
+            protected = self.get_protected_corpora(auth_ctx)
             c = [c for c in corpora if c.upper() in protected]
             if c:
-                auth = utils.generator_to_dict(authenticate({}))
+                auth = _authenticate_from_auth_header(auth_ctx.request.headers.get("Authorization"))
                 unauthorized = [x for x in c if x.upper() not in auth.get("corpora", [])]
                 if not auth or unauthorized:
                     return False, unauthorized, None
         return True, [], None
+
+
+AUTHORIZER_CLASS = Auth

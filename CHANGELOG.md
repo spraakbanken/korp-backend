@@ -1,16 +1,23 @@
 # Changelog
 
-## [8.3.0] - 2026-02-04
+## [Unreleased]
+
+This release includes a major refactor of the codebase, switching to the FastAPI framework and improving type hinting
+and documentation.
 
 ### Added
 
+- Migrated the codebase from Flask to FastAPI.
+- Migrated database access to async SQLAlchemy.
+- Migrated caching to use `aiomcache` for async Memcached access.
+- Improved type hinting and documentation throughout the codebase.
 - Added support for client-side caching via HTTP Cache-Control headers.
 - Added tests (thanks to @janiemi for the contribution!).
+- Added a new `/relations_time` endpoint for retrieving Word Picture data over time.
 
 ### Changed
 
-- Dropped support for Python versions older than 3.10.
-- Updated dependencies for compatibility with newer Python versions.
+- Dropped support for Python versions older than 3.11.
 - Better error message when structural attributes contain tabs.
 
 ### Fixed

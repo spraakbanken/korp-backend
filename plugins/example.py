@@ -4,21 +4,21 @@ Enable and configure by updating the Korp configuration as follows:
 
 PLUGINS = ["plugins.example"]
 
-PLUGINS_CONFIG = {
-    "plugins.example": {
-        "greeting": "Hello!"
-    }
-}
+Add the following to the plugin configuration file specified by PLUGINS_CONFIG_FILE (default: plugins.yaml):
+
+plugins.example:
+    greeting: "Hello!"
 """
 
-from korp.utils import main_handler, Plugin
+from korp import utils
 
-bp = Plugin("example", __name__)
+router = utils.Plugin("example", __name__)
 
 
-@bp.route("/hello")
-@main_handler
-def hello(_args):
-    yield {
-        "message": bp.config("greeting", "Greeting not set")
+@router.get("/hello")
+@utils.api_handler
+def hello(_ctx: utils.CtxDep) -> dict:
+    """Return a greeting message from the plugin configuration."""
+    return {
+        "message": router.config("greeting", "Greeting not set")
     }

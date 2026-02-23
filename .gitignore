@@ -7,14 +7,12 @@ __pycache__/
 *.py[cod]
 
 # Environments
+.env
 .env/
 .venv/
 env/
 venv/
 .python-version
-
-# Instance dir
-instance/
 
 # Coverage.py
 .coverage
