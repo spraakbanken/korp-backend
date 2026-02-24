@@ -1,6 +1,5 @@
 """Pytest fixtures for testing the Korp backend as a FastAPI app."""
 
-
 import warnings
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -14,6 +13,7 @@ from fastapi.testclient import TestClient
 from korp.app import create_app
 from tests.corpusutils import CWBEncoder
 from tests.dbutils import KorpDatabase
+from tests.testutils import get_response_json
 
 # Functions in tests.utils are called by tests and contain assertions
 # that should be rewritten
@@ -87,7 +87,7 @@ def database(_database: KorpDatabase) -> KorpDatabase:
             msg = "Unable to create Korp database: Error " + error["message"]
             if error["sql"] is not None:
                 msg += " when executing SQL statement: " + error["sql"]
-            warnings.warn(f"Skipping tests using Korp database: {msg}")
+            warnings.warn(f"Skipping tests using Korp database: {msg}", stacklevel=1)
         pytest.skip(msg)
     return _database
 
@@ -157,9 +157,7 @@ def client_factory(app_factory: Callable[..., FastAPI]) -> Callable[..., Abstrac
 def get_json(client_factory: Callable[..., AbstractContextManager[TestClient]]) -> Callable[..., dict]:
     """Return helper for GET requests returning validated JSON."""
 
-    def _get_json(path: str, *, params: dict | None = None, config: dict | None = None):
-        from tests.testutils import get_response_json
-
+    def _get_json(path: str, *, params: dict | None = None, config: dict | None = None) -> dict:
         with client_factory(config or {}) as test_client:
             return get_response_json(test_client, path, params=params)
 
@@ -167,15 +165,19 @@ def get_json(client_factory: Callable[..., AbstractContextManager[TestClient]]) 
 
 
 @pytest.fixture(scope="session")
-def corpora(corpus_data_root):
-    """Encode corpora in data/corpora/src and return their corpus ids."""
+def corpora(corpus_data_root: Path) -> list[str]:
+    """Encode corpora in `data/corpora/src` and return their corpus ids.
+
+    Returns:
+        A list of corpus ids corresponding to the corpora in `data/corpora/src`.
+    """
     corpus_source_dir = _datadir / "corpora" / "src"
-    cwb_encoder = CWBEncoder(str(corpus_data_root))
-    return cwb_encoder.encode_corpora(str(corpus_source_dir))
+    cwb_encoder = CWBEncoder(corpus_data_root)
+    return cwb_encoder.encode_corpora(corpus_source_dir)
 
 
 @pytest.fixture
-def corpus_configs(corpus_config_dir):
+def corpus_configs(corpus_config_dir: Path) -> None:
     """Copy corpus configs from data/corpora/config to corpus_config_dir."""
     config_src_dir = _datadir / "corpora" / "config"
     copytree(str(config_src_dir), str(corpus_config_dir), dirs_exist_ok=True)

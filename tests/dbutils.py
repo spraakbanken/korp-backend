@@ -1,13 +1,11 @@
 """Utilities used in pytest tests to create and populate a Korp MySQL test database.
 
-The test database should typically be different from the production
-database, so this module contains facilities for creating a database
-from scratch.
+The test database should typically be different from the production database, so this module contains facilities for
+creating a database from scratch.
 
-Individual database tables are created based on SQL or TSV files in
-the specified test data directory. TSV file names are mapped to tables
-and their definitions in YAML files in the subdirectory "tableinfo".
-For more information, please see the documentation in tests/README.md.
+Individual database tables are created based on SQL or TSV files in the specified test data directory. TSV file names
+are mapped to tables and their definitions in YAML files in the subdirectory "tableinfo". For more information, please
+see the documentation in tests/README.md.
 """
 
 from __future__ import annotations
@@ -32,36 +30,32 @@ from tests.configutils import get_korp_config
 class KorpDatabase:
     """Class providing access to a Korp MySQL database for testing.
 
-    A KorpDatabase object represents the configuration for a Korp
-    MySQL database. An actual database is created with create() and
-    dropped with drop().
+    A `KorpDatabase` object represents the configuration for a Korp MySQL database. An actual database is created with
+    `create()` and dropped with `drop()`.
 
-    A KorpDatabase object should be created only after calling
-    KorpDatabase.pytest_config_db_options(config) from
-    pytest_configure(config) in conftest.py.
+    A `KorpDatabase` object should be created only after calling `KorpDatabase.pytest_config_db_options(config)` from
+    `pytest_configure(config)` in `conftest.py`.
     """
 
-    # Custom pytest command-line options (without the prefix "--db-")
-    # affecting the Korp MySQL test database and their help strings
-    # (or dicts of keyword arguments to argparse.addoption()), where
-    # {} is replaced with the metavar
+    # Custom pytest command-line options (without the prefix "--db-") affecting the Korp MySQL test database and their
+    # help strings (or dicts of keyword arguments to argparse.addoption()), where {} is replaced with the metavar
     _pytest_db_option_help: ClassVar[dict] = {
         "host": "Use host {} for the Korp MySQL test database",
         "port": {
             "type": int,
-            "help": "Use port {} for the Korp MySQL test database"
+            "help": "Use port {} for the Korp MySQL test database",
         },
         "name": "Use database name {} for the Korp MySQL test database",
         "user": "Use user {} to access the Korp MySQL test database",
         "password": "Use password {} to access the Korp MySQL test database",
         "create-user": "Use user {} to create the Korp MySQL test database",
-        "create-password": (
-            "Use password {} to create the Korp MySQL test database"),
+        "create-password": "Use password {} to create the Korp MySQL test database",
         "collate": (
             "Use {} as the Korp MySQL test database collation."
             " If not specified, use the collation of the Korp MySQL database,"
             " or if that cannot be accessed, the default collation for the"
-            " Korp MySQL database character set."),
+            " Korp MySQL database character set."
+        ),
     }
     # The custom pytest command-line options
     _pytest_db_options: ClassVar[dict] = {}
@@ -74,16 +68,13 @@ class KorpDatabase:
         """
         # Database name; None if no database active
         self.dbname = None
-        # Possible error that occurred when trying to create database:
-        # a dict with keys "exception" (Exception object),
-        # "message" (stringified error object) and "sql" (SQL
-        # statement or None)
+        # Possible error that occurred when trying to create database: a dict with keys "exception" (Exception object),
+        # "message" (stringified error object) and "sql" (SQL statement or None)
         self.create_error = None
         # Database data directory
         self._datadir = datadir
-        # Database options: pytest command-line options combined with
-        # options from the Korp configuration; keys are lowercase
-        # without a "db" prefix
+        # Database options: pytest command-line options combined with options from the Korp configuration; keys are
+        # lowercase without a "db" prefix
         self._db_options = {}
         # MySQL database connection parameters
         self._conn_params = {}
@@ -95,8 +86,7 @@ class KorpDatabase:
         self._table_type_info = defaultdict(list)
         # Initialize self._table_info, self._table_type_patts
         self._read_table_info()
-        # If True, use an existing table in the database, so do not
-        # drop it afterwards
+        # If True, use an existing table in the database, so do not drop it afterwards
         self._use_existing_table = False
         self._make_db_options(self._pytest_db_options)
 
@@ -108,7 +98,7 @@ class KorpDatabase:
         """
         for opt, args in cls._pytest_db_option_help.items():
             if isinstance(args, str):
-                args = {"help": args}
+                args = {"help": args}  # noqa: PLW2901
             args["metavar"] = opt.replace("create-", "").upper()
             args["help"] = args["help"].replace("{}", "%(metavar)s")
             parser.addoption(f"--db-{opt}", **args)
@@ -119,10 +109,7 @@ class KorpDatabase:
 
         To be called from pytest_configure in conftest.py.
         """
-        cls._pytest_db_options = {
-            opt: config.getoption(f"--db-{opt}")
-            for opt in cls._pytest_db_option_help
-        }
+        cls._pytest_db_options = {opt: config.getoption(f"--db-{opt}") for opt in cls._pytest_db_option_help}
 
     @staticmethod
     def _split_sql_statements(sql: str) -> list[str]:
@@ -232,19 +219,16 @@ class KorpDatabase:
     def _make_db_options(self, pytest_db_opts: dict[str, Any]) -> None:
         """Set database options based on `pytest_db_opts` and Korp config.
 
-        Set database options (self._db_options) and connection
-        parameters (self._conn_params) for creating a database.
+        Set database options (`self._db_options`) and connection parameters (`self._conn_params`) for creating a
+        database.
 
-        Take Korp configuration option values (`DB_*`) as the basis and
-        override them with possible values specified as custom pytest
-        command-line options (in `pytest_db_opts`) `--db-*`. If
-        `--db-create-user` or `--db-create-password` have not been specified,
-        use the values of `--db-user` (`DB_USER`) and `--db-password`
+        Take Korp configuration option values (`DB_*`) as the basis and override them with possible values specified as
+        custom pytest command-line options (in `pytest_db_opts`) `--db-*`. If `--db-create-user` or
+        `--db-create-password` have not been specified, use the values of `--db-user` (`DB_USER`) and `--db-password`
         (`DB_PASSWORD`), respectively.
 
-        For connection options, user and password primarily those in
-        create-user and create-password, and charset is taken from
-        `DB_CHARSET` in Korp configuration.
+        For connection options, user and password primarily those in create-user and create-password, and charset is
+        taken from `DB_CHARSET` in Korp configuration.
         """
         db_opts = pytest_db_opts.copy()
         korp_conf = get_korp_config()
@@ -255,8 +239,7 @@ class KorpDatabase:
                 elif key != "name":
                     db_opts[key] = korp_conf.get(f"DB_{key.upper()}", "")
         self._conn_params = {
-            key.rsplit("-")[-1]: db_opts[key]
-            for key in ["host", "port", "create-user", "create-password"]
+            key.rsplit("-")[-1]: db_opts[key] for key in ["host", "port", "create-user", "create-password"]
         }
         self._conn_params["charset"] = korp_conf["DB_CHARSET"]
         self._db_options = db_opts
@@ -264,7 +247,7 @@ class KorpDatabase:
     def get_config(self) -> dict[str, str]:
         """Return database configuration dict compatible with Korp config.
 
-        The keys in the returned dict use Settings names (DB_*). Keys with value `None` are not included.
+        The keys in the returned dict use Settings names (`DB_*`). Keys with value `None` are not included.
         """
         key_map = {
             "host": "DB_HOST",
@@ -273,11 +256,7 @@ class KorpDatabase:
             "user": "DB_USER",
             "password": "DB_PASSWORD",
         }
-        return {
-            key_map[name]: val
-            for name, val in self._db_options.items()
-            if val is not None and name in key_map
-        }
+        return {key_map[name]: val for name, val in self._db_options.items() if val is not None and name in key_map}
 
     def execute(self, sql: str | Iterable[str], conn: Connection | None = None, commit: bool = True) -> int:
         """Execute SQL statements `sql` on `conn` and commit if `commit == True`.
@@ -307,7 +286,7 @@ class KorpDatabase:
         with self._connection(include_database=True) as connection:
             return run(connection)
 
-    def execute_file(self, sqlfile:Path, conn: Connection | None = None, commit: bool = True) -> int:
+    def execute_file(self, sqlfile: Path, conn: Connection | None = None, commit: bool = True) -> int:
         """Execute SQL statements in `sqlfile` on `conn` and commit if `commit`.
 
         Args:
@@ -330,11 +309,9 @@ class KorpDatabase:
     def _make_db_name(self, conn: Connection) -> str:
         """Return a name for the Korp test database.
 
-        If database options contains non-None value for "name", use it
-        and set _use_existing_table to True. Otherwise, use the
-        configured DB_NAME with suffix "_pytest_N" where N is the
-        smallest non-negative integer for which such a database does
-        not yet exist.
+        If database options contains non-None value for "name", use it and set `_use_existing_table` to `True`.
+        Otherwise, use the configured `DB_NAME` with suffix "_pytest_N" where N is the smallest non-negative integer for
+        which such a database does not yet exist.
         """
         if self._db_options["name"] is not None:
             self._use_existing_table = True
@@ -390,11 +367,9 @@ class KorpDatabase:
     def create(self) -> None:
         """Create a Korp MySQL database and grant privileges.
 
-        Create a Korp MySQL database using the pre-defined connection
-        parameters, unless one has already been created (and not
-        dropped) for self. Database name is generated in
-        _make_db_name, user is taken from _db_options and host from
-        _conn_params.
+        Create a Korp MySQL database using the pre-defined connection parameters, unless one has already been created
+        (and not dropped) for self. Database name is generated in `_make_db_name`, user is taken from _db_options and
+        host from `_conn_params`.
         """
         if self.dbname is not None:
             # If a database has already been created, do not create
@@ -446,21 +421,20 @@ class KorpDatabase:
 
         The table information YAML files are in the "tableinfo" subdirectory of the data directory.
         """
+
         def compile_filenames(filenames: list[str]) -> list[re.Pattern]:
             """Return a list of compiled regexps for the list filenames.
 
-            If a filename does not end in ".tsv", add the suffix. If a
-            filename does not begin with ".*/", add the prefix.
-            Replace corpus name placeholder "{corpus}" with
-            "(?P<corpus>[a-zA-Z0-9_-]+?)".
+            If a filename does not end in ".tsv", add the suffix. If a filename does not begin with ".*/", add the
+            prefix. Replace corpus name placeholder "{corpus}" with "(?P<corpus>[a-zA-Z0-9_-]+?)".
             """
             filenames_re = []
             for regex in filenames:
                 if not regex.endswith(r"\.tsv"):
-                    regex += r"\.tsv"
+                    regex += r"\.tsv"  # noqa: PLW2901
                 if not regex.startswith(r".*/"):
-                    regex = r".*/" + regex
-                regex = regex.replace("{corpus}", "(?P<corpus>[a-zA-Z0-9_-]+?)")
+                    regex = r".*/" + regex  # noqa: PLW2901
+                regex = regex.replace("{corpus}", "(?P<corpus>[a-zA-Z0-9_-]+?)")  # noqa: PLW2901
                 filenames_re.append(re.compile(regex))
             return filenames_re
 
@@ -485,17 +459,13 @@ class KorpDatabase:
         def expand_vars(table_info_items: list[dict]) -> list[dict]:
             """Return a copy of `table_info_items` with variable references in "definition" expanded.
 
-            Replace variable references "{var}" in the value of
-            "definition" of table_info_items.
+            Replace variable references "{var}" in the value of "definition" of table_info_items.
 
-            Variable values are defined in separate sequence items
-            that are mappings containing key "definition_vars", whose
-            value is a mapping whose keys are variable names and
-            values the replacement values.
+            Variable values are defined in separate sequence items that are mappings containing key "definition_vars",
+            whose value is a mapping whose keys are variable names and values the replacement values.
 
-            The returned result contains table_info_items with mappings
-            containing key "definition_vars" removed and values for
-            "definition" expanded in other mappings.
+            The returned result contains table_info_items with mappings containing key "definition_vars" removed and
+            values for "definition" expanded in other mappings.
             """
             result = []
             vardefs = {}
@@ -515,14 +485,13 @@ class KorpDatabase:
                 table_info_new = add_table_type(table_info_new, filepath.stem)
                 table_info.extend(expand_vars(table_info_new))
         for info in table_info:
-            # For filenames and exclude_filenames, add corresponding
-            # *_re keys with compiled regular expressions
+            # For filenames and exclude_filenames, add corresponding *_re keys with compiled regular expressions
             for propname in ["filenames", "exclude_filenames"]:
                 info[f"{propname}_re"] = compile_filenames(info.get(propname, []))
             # Add filename patterns for the table type
             for filename in info["filenames"]:
                 if not filename.startswith(".*/"):
-                    filename = ".*/" + filename
+                    filename = ".*/" + filename  # noqa: PLW2901
                 self._table_type_patts[info["table_type"]].append(filename)
             self._table_type_info[info["table_type"]].append(info)
         self._table_info = table_info
@@ -544,9 +513,8 @@ class KorpDatabase:
         if isinstance(corpora, str):
             corpora = [corpora]
         files = self._find_table_files(corpora, table_types)
-        # It would probably be more efficient to delete existing data
-        # than to drop and re-create tables, but the latter is simpler
-        # to implement
+        # It would probably be more efficient to delete existing data than to drop and re-create tables, but the latter
+        # is simpler to implement
         self.drop_tables(corpora, table_types)
         self.import_table_files(files)
 
@@ -559,7 +527,7 @@ class KorpDatabase:
                 for table_type in table_types:
                     for corpus in corpora:
                         for patt in self._table_type_patts[table_type]:
-                            patt = patt.replace("{corpus}", corpus) + f".{ext}"
+                            patt = patt.replace("{corpus}", corpus) + f".{ext}"  # noqa: PLW2901
                             if re.fullmatch(patt, filename_str):
                                 files.append(filename_str)
         return files
@@ -639,10 +607,9 @@ class KorpDatabase:
     def _find_table_info(self, table_file: Path) -> tuple[dict | None, str | None]:
         """Find and return table information for file `table_file`.
 
-        Find and return the first table information item in
-        `self._table_info` for `table_file` in which one of the file name
-        regexps (filenames_re) match `table_file` and none of excluded
-        file name regexps (exclude_filename_re) match.
+        Find and return the first table information item in `self._table_info` for `table_file` in which one of the file
+        name regexps (filenames_re) match `table_file` and none of excluded file name regexps (exclude_filename_re)
+        match.
 
         Args:
             table_file: The file name to find the table information for.
@@ -683,9 +650,8 @@ class KorpDatabase:
     def _make_table_name(table_info: dict, corpus: str) -> str:
         """Return table name based on `table_info` and `corpus` id.
 
-        Take the table name from `table_info["tablename"]` and replace
-        the possible format placeholders {corpus} and {CORPUS} in it
-        with the corpus id in lower or upper case, respectively.
+        Take the table name from `table_info["tablename"]` and replace the possible format placeholders {corpus} and
+        {CORPUS} in it with the corpus id in lower or upper case, respectively.
         """
         table_name = table_info["tablename"]
         return table_name.format(corpus=corpus.lower(), CORPUS=corpus.upper())
@@ -693,6 +659,4 @@ class KorpDatabase:
     def _load_file(self, conn: Connection, table_name: str, table_file: Path) -> None:
         """Load data from `table_file` to table `table_name` using `conn`."""
         escaped_file = self._escape_sql_string(str(table_file))
-        conn.exec_driver_sql(
-            f"LOAD DATA LOCAL INFILE '{escaped_file}' INTO TABLE `{table_name}` FIELDS ESCAPED BY '';"
-        )
+        conn.exec_driver_sql(f"LOAD DATA LOCAL INFILE '{escaped_file}' INTO TABLE `{table_name}` FIELDS ESCAPED BY '';")

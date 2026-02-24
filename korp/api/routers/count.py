@@ -701,7 +701,7 @@ async def count_all(
     expand_prequeries: params.ExpandPrequeriesParam = True,
     abort_signal: utils.AbortDep = None,
 ) -> AsyncIterator[dict]:
-    """Like /count but for every single value of the given attributes.
+    """Like `/count` but for every single value of the given attributes.
 
     Yields:
         Count results as dictionaries.

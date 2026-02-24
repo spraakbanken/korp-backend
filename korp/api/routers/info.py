@@ -15,7 +15,7 @@ router = APIRouter(tags=["Information"])
 
 
 class InfoResponse(schemas.CommonResponse):
-    """Response model for /info route."""
+    """Response model for `/info` route."""
 
     version: str = Field(
         ..., description="Version of the Korp backend.", examples=[importlib.metadata.version("korp-backend")]

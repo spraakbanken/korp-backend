@@ -1,4 +1,3 @@
-
 """Utility functions used in tests for Korp configuration."""
 
 from typing import Any

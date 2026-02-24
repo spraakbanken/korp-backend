@@ -1,6 +1,6 @@
+"""Pytest tests for the Korp `/lemgram_count` endpoint."""
 
-"""Pytest tests for the Korp /lemgram_count endpoint."""
-
+from collections.abc import Callable
 
 import pytest
 
@@ -8,18 +8,18 @@ from tests.testutils import make_liststr
 
 
 @pytest.fixture
-def lemgram_count(get_json, database_tables):
-    """Return function returning JSON response for /lemgram_count to corpora.
+def lemgram_count(get_json: Callable, database_tables: Callable) -> Callable:
+    """Return function returning JSON response for `/lemgram_count` to corpora.
 
-    The returned function takes as its parameters a lemgram, a corpus
-    or a list of corpora, possible additional request parameters and
-    Korp configuration parameters.
-    It returns the JSON response for /lemgram_count to the specified
-    corpora with the given parameters (and cache=false). It imports
-    the lemgram_index database data for the given corpora.
+    The returned function takes as its parameters a lemgram, a corpus or a list of corpora, possible additional request
+    parameters and Korp configuration parameters. It returns the JSON response for `/lemgram_count` to the specified
+    corpora with the given parameters (and cache=false). It imports the lemgram_index database data for the given
+    corpora.
     """
 
-    def _lemgram_count(lemgram, corpora, params=None, config=None):
+    def _lemgram_count(
+        lemgram: str, corpora: list[str], params: dict | None = None, config: dict | None = None
+    ) -> dict:
         query_params = {
             "corpus": make_liststr(corpora),
             "lemgram": lemgram,
@@ -33,11 +33,11 @@ def lemgram_count(get_json, database_tables):
 
 
 class TestLemgramCount:
+    """Tests for `/lemgram_count`."""
 
-    """Tests for /lemgram_count"""
-
-    def test_lemgram_count_single_corpus(self, lemgram_count):
-        """Test /lemgram_count on a single corpus and single lemgram."""
+    @staticmethod
+    def test_lemgram_count_single_corpus(lemgram_count: Callable) -> None:
+        """Test `/lemgram_count` on a single corpus and single lemgram."""
         lemgram = "test..nn.1"
         corpus = "testcorpus1"
         data = lemgram_count(lemgram, corpus)

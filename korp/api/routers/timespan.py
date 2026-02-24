@@ -215,6 +215,7 @@ async def get_timespan(
         rows = []
 
     if ctx.common.cache:
+
         async def save_cache(corpus: str, data: list[Mapping[str, Any]]) -> None:
             corpus_checksum = utils.get_hash((date_from, date_to, granularity, strategy))
             cache_key = f"{cache_prefixes[corpus]}:timespan_{corpus_checksum}"

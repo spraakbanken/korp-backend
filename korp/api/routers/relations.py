@@ -1356,7 +1356,7 @@ async def _relations_impl(
     measures: Container[Measures],
     abort_signal: utils.AbortSignal | None = None,
 ) -> AsyncIterator[dict]:
-    """Shared implementation for /relations and /relations_time.
+    """Shared implementation for `/relations` and `/relations_time`.
 
     Args:
         ctx: Common dependencies.

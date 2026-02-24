@@ -19,6 +19,4 @@ router = utils.Plugin("example", __name__)
 @utils.api_handler
 def hello(_ctx: utils.CtxDep) -> dict:
     """Return a greeting message from the plugin configuration."""
-    return {
-        "message": router.config("greeting", "Greeting not set")
-    }
+    return {"message": router.config("greeting", "Greeting not set")}

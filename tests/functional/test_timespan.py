@@ -1,5 +1,6 @@
+"""Pytest tests for the Korp `/timespan` endpoint."""
 
-"""Pytest tests for the Korp /timespan endpoint."""
+from collections.abc import Callable
 
 import pytest
 
@@ -7,17 +8,15 @@ from tests.testutils import make_liststr
 
 
 @pytest.fixture
-def timespan(get_json, database_tables):
-    """Return function returning JSON response for /timespan to given corpora.
+def timespan(get_json: Callable, database_tables: Callable) -> Callable:
+    """Return function returning JSON response for `/timespan` to given corpora.
 
-    The returned function takes as its parameters a corpus (or
-    corpora), possible additional query parameters and Korp
-    configuration parameters. It returns the JSON response for
-    /timespan to the corpora with the given parameters (and
+    The returned function takes as its parameters a corpus (or corpora), possible additional query parameters and Korp
+    configuration parameters. It returns the JSON response for `/timespan` to the corpora with the given parameters (and
     cache=false).
     """
 
-    def _timespan(corpora, params=None, config=None):
+    def _timespan(corpora: list[str] | str, params: dict | None = None, config: dict | None = None) -> dict:
         query_params = {
             "corpus": make_liststr(corpora),
             "cache": "false",
@@ -30,12 +29,12 @@ def timespan(get_json, database_tables):
 
 
 class TestTimespan:
-
-    """Tests for /timespan"""
+    """Tests for `/timespan`."""
 
     @pytest.mark.parametrize("granularity", ["y", "m", "d", "h", "n", "s"])
-    def test_timespan_granularity(self, granularity, timespan):
-        """Test /timespan with granularity on testcorpus3 and testcorpus4."""
+    @staticmethod
+    def test_timespan_granularity(granularity: str, timespan: Callable[..., dict]) -> None:
+        """Test `/timespan` with granularity on testcorpus3 and testcorpus4."""
         corpora = ["testcorpus3", "testcorpus4"]
         data = timespan(corpora, {"granularity": granularity})
         assert "combined" in data
