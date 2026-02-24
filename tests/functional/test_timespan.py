@@ -1,19 +1,14 @@
 
-"""
-test_timespan.py
-
-Pytest tests for the Korp /timespan endpoint
-"""
-
+"""Pytest tests for the Korp /timespan endpoint."""
 
 import pytest
 
-from tests.testutils import get_response_json, make_liststr
+from tests.testutils import make_liststr
 
 
 @pytest.fixture
-def timespan(client, database_tables):
-    """Yield function returning JSON response for /timespan to given corpora.
+def timespan(get_json, database_tables):
+    """Return function returning JSON response for /timespan to given corpora.
 
     The returned function takes as its parameters a corpus (or
     corpora), possible additional query parameters and Korp
@@ -29,10 +24,9 @@ def timespan(client, database_tables):
         }
         database_tables(corpora, "timedata")
         query_params.update(params or {})
-        return get_response_json(
-            client(config or {}), "/timespan", query_string=query_params)
+        return get_json("/timespan", params=query_params, config=config)
 
-    yield _timespan
+    return _timespan
 
 
 class TestTimespan:

@@ -1,37 +1,34 @@
-
 # Tests for the Korp backend
 
 This directory `tests` contains [Pytest](https://pytest.org) tests for
 the Korp backend.
 
-
 ## Prerequisites
 
-To be able to run tests, you need to install the development
-requirements by running
-```
-$ pip3 install -r requirements-dev.txt
+To be able to run tests, you need the development dependencies installed. If you have installed the Korp backend with
+`uv`, the development dependencies are installed by default. If installed with `pip`, you can install the development
+dependencies by running
+
+```sh
+python3 -m pip install -e ".[dev]"
 ```
 
 In addition, you need to have the Corpus Workbench (CWB), in
 particular `cwb-encode` and `cwb-makeall`,
 installed and on `PATH` (see the [main README
-file](../README.md#corpus-workbench)). The CWB Perl tools can be
-installed from the CWB Subversion repository at
-http://svn.code.sf.net/p/cwb/code/perl/trunk
+file](../README.md#corpus-workbench)).
 
 For database tests, you also need to have a MySQL/MariaDB server with
 a user with the privileges to create a database and grant access to
 it.
 
-
 ## Running tests
 
 To run tests, run
-```
-$ pytest
-```
 
+```sh
+pytest
+```
 
 ### Database access
 
@@ -52,8 +49,9 @@ may need to specify custom command-line options to `pytest`:
   the Korp MySQL test database
 
 If these are not specified explicitly, tests try to use the values
-specified in the Korp configuration for `DBHOST`, `DBPORT`, `DBUSER`
-and `DBPASSWORD`. That fails unless the user specified there has the
+specified in the Korp configuration for `DB_HOST`, `DB_PORT`,
+`DB_USER` and `DB_PASSWORD`. That fails unless the user specified
+there has the
 privilege to create a database or you specify with `--db-name` the
 name of an existing database in which the user has the table creation
 privilege.
@@ -69,24 +67,25 @@ In addition, you can specify the database collation with a custom
   MySQL database, or if the Korp MySQL database (as specified in the
   Korp configuration) cannot be accessed, the default collation for
   the database character set specified in the Korp configuration
-  variable `DBCHARSET`.
+  variable `DB_CHARSET`.
 
 If the test database cannot be created, a warning is issued and tests
 using the database (fixture `database`) are skipped.
-
 
 ### Test coverage
 
 To find out test coverage using
 [Coverage.py](https://coverage.readthedocs.io/), run
-```
-$ coverage -m pytest
-```
-and then, for example,
-```
-$ coverage report
+
+```sh
+coverage -m pytest
 ```
 
+and then, for example,
+
+```sh
+coverage report
+```
 
 ## Directory Layout
 
@@ -95,7 +94,7 @@ This directory `tests/` contains:
 - [`unit/`](unit): unit tests, typically testing functions in modules
   directly under the `korp` package
 - [`functional/`](functional): functional tests, typically testing the endpoints
-  (`korp.views.*`)
+  (`korp.api.routers.*`)
 - [`testing/`](testing): unit tests for functionality in test utility
   modules (`tests.*utils`)
 - `data/`: test data
@@ -118,14 +117,12 @@ This directory `tests/` contains:
 - [`testutils.py`](testutils.py): utility functions for tests, typically
   functionality that recur in multiple tests but that cannot be made fixtures
 
-
 ## Adding tests
 
 Individual test files and tests should follow Pytest conventions: the
 names of files containing tests should begin with `test_`, as should
 also the names of test functions and methods. Tests can be grouped in
 classes whose names begin with `Test`.
-
 
 ### Fixtures
 
@@ -142,56 +139,51 @@ The following Pytest fixtures have been defined in
 - `database`: Return a `KorpDatabase` object for a session
 - `database_tables`: Import database data for the specified corpora
   and table types
-- `app`: Return a function to create and configure a Korp Flask app
-  instance. The returned function optionally takes as its argument a
-  `dict` for overriding default Korp configuration values.
-- `client`: Return a function to create and return a test client. The
-  returned function optionally takes as its argument a `dict` for
-  overriding default Korp configuration values.
-
+- `app_factory`: Return a function to create and configure a Korp FastAPI
+  app instance. The returned function optionally takes as its argument a
+  `dict` for overriding default Korp configuration values
+- `client`: Return a default `TestClient` created with `with TestClient(app)`
+- `client_factory`: Return a context manager function for creating a
+  `TestClient` with optional config overrides
+- `get_json`: Return a function for sending a request with `client` and getting
+  the response JSON data
 
 ### Functional tests
 
-A typical functional test testing an endpoint uses the `client` and
+A typical functional test testing an endpoint uses the `get_json` and
 `corpora` fixtures. For example:
 
 ```python
-def test_corpus_info_single_corpus(self, client, corpora):
+def test_corpus_info_single_corpus(get_json, corpora):
     corpus = corpora[0].upper()
-    response = client().get(
+    response = get_json(
         "/corpus_info",
-        query_string={
+        params={
             "cache": "false",
             "corpus": corpus,
         })
-    assert response.status_code == 200
-    assert response.is_json == True
-    data = response.get_json()
-    corpus_data = data["corpora"][corpus]
+    corpus_data = response["corpora"][corpus]
     attrs = corpus_data["attrs"]
     assert attrs
 ```
 
 If the endpoint uses the Korp MySQL database, it should also use the
-`database` fixture and load the appropriate database table data with
-`database.import_tables()`. For example:
+`database_tables` fixture and load the appropriate database table data. For example:
 
 ```python
-def test_lemgram_count_single_corpus(self, client, database):
+def test_lemgram_count_single_corpus(get_json, database_tables):
     """Test /lemgram_count on a single corpus."""
-    database.import_tables(["lemgram_index/*.tsv"])
+    database_tables("testcorpus1", "lemgram_index")
     lemgram = "test..nn.1"
-    response = client().get(
-        "/lemgram_index",
-        query_string={
+    response = get_json(
+        "/lemgram_count",
+        params={
             "corpus": "testcorpus1",
             "lemgram": lemgram,
             "cache": "false",
         })
-    data = response.get_json()
-    assert lemgram in data
+    assert lemgram in response
 ```
-
 
 ### Corpus data
 
@@ -260,6 +252,7 @@ are supported:
      </paragraph>
    </text>
    ```
+
    Possible elements above `text` are also included in the data.
 
 For VRT source files, the positional and structural attributes can be
@@ -271,6 +264,7 @@ to override the inferred attributes.
 
 1. In a YAML file _corpus_`.attrs.yaml` with content like the
    following (for the above examples):
+
    ```yaml
    pos_attributes:
    - word
@@ -282,9 +276,11 @@ to override the inferred attributes.
      - id
      - x
    ```
+
    In addition, if a structural attribute can be recursively nested,
    its name should be followed by the recursive nesting depth,
    separated by a space or colon:
+
    ```yaml
    struct_attributes:
    - div 2:
@@ -292,6 +288,7 @@ to override the inferred attributes.
      # …
    - np:3: []
    ```
+
    If a structural attribute has no annotations, the annotations
    should be specified as an empty list.
 
@@ -302,10 +299,12 @@ to override the inferred attributes.
 2. If _corpus_`.attrs.yaml` does not exist, the attributes can be
    specified at the top of the VRT file as XML comments (an extension
    to the VRT format):
+
    ```xml
    <!-- #vrt positional-attributes: attr1 attr2 ... -->
    <!-- #vrt structural-attributes: text:0+a1+a2 sentence:0+a3+a4 ... -->
    ```
+
    Structural attributes are specified in the same way as for the
    `cwb-encode` tool. See the VRT file example above for a concrete
    example.
@@ -333,6 +332,7 @@ inferred similarly from XML data.
 In addition to the VRT file _corpus_`.vrt`, a corpus should have a
 corresponding info file _corpus_`.info` containing at least the number
 of sentences and date of update in the ISO format as follows:
+
 ```
 Sentences: 2
 Updated: 2023-01-20
@@ -344,7 +344,6 @@ isolated from any other CWB corpora in the system. Encoded test corpus
 data is cached under `tests/data/corpora/cwb-cache` between test
 sessions, to avoid re-encoding it in each session.
 
-
 ### Corpus configuration data
 
 Corpus configuration data used in tests for the `/corpus_config`
@@ -352,7 +351,6 @@ endpoint is under `data/corpora/config` in the format expected by
 Korp; please see [the
 documentation](../README.md#corpus-configuration-for-the-korp-frontend)
 for more information.
-
 
 ### Database data
 
@@ -430,9 +428,9 @@ Here:
 - _tabletype_ = high-level table type: one of `lemgram_index` (or
   `lemgrams`), `timedata` and `relations`
 - _tabletype\_detailed_ = more detailed table type (mainly for TSV files):
-   - `lemgram_index`: `lemgram_index` (or `lemgrams`) (the same as the
+  - `lemgram_index`: `lemgram_index` (or `lemgrams`) (the same as the
      high-level type)
-   - `timedata`: `timedata` or `timedata_date`
-   - `relations`: `relations`, `relations_strings`, `relations_rel`,
+  - `timedata`: `timedata` or `timedata_date`
+  - `relations`: `relations`, `relations_strings`, `relations_rel`,
      `relations_head_rel`, `relations_dep_rel` or `relations_sentence`
 - _ext_ = file type extension: `tsv` or `sql`

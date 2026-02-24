@@ -1,52 +1,44 @@
 
-"""
-test_info.py
-
-Pytest tests for the Korp /info and /corpus_info endpoints.
-"""
-
+"""Pytest tests for the Korp /info and /corpus_info endpoints."""
 
 import pytest
 
-from tests.testutils import get_response_json
-
 
 @pytest.fixture
-def corpus_info(client, corpora):
-    """Yield function returning /corpus_info response for list of corpora."""
+def corpus_info(get_json, corpora):
+    """Return function returning /corpus_info response for list of corpora."""
 
     def _corpus_info(corpuslist):
         """Return /corpus_info response for the corpora in corpuslist."""
-        data = get_response_json(
-            client(), "/corpus_info",
-            query_string={
+        return get_json(
+            "/corpus_info",
+            params={
                 "cache": "false",
                 "corpus": ",".join(corpus.upper() for corpus in corpuslist),
-            })
-        # print(data)
-        return data
+            },
+        )
 
-    yield _corpus_info
+    return _corpus_info
 
 
 @pytest.fixture
 def corpus_info_single(corpus_info):
-    """Yield function returning /corpus_info response for a single corpus."""
+    """Return function returning /corpus_info response for a single corpus."""
 
     def _corpus_info_single(corpus):
         """Return /corpus_info response for corpus (corpus-specific part)."""
         return corpus_info([corpus])["corpora"][corpus.upper()]
 
-    yield _corpus_info_single
+    return _corpus_info_single
 
 
 class TestInfo:
 
     """Tests for the /info endpoint"""
 
-    def test_info_contains_version(self, client):
+    def test_info_contains_version(self, get_json):
         """Test that /info response contains version info."""
-        data = get_response_json(client(), "/info")
+        data = get_json("/info")
         assert data["version"] and data["version"] != ""
 
 

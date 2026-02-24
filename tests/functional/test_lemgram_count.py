@@ -1,19 +1,15 @@
 
-"""
-test_lemgram_count.py
-
-Pytest tests for the Korp /lemgram_count endpoint
-"""
+"""Pytest tests for the Korp /lemgram_count endpoint."""
 
 
 import pytest
 
-from tests.testutils import get_response_json, make_liststr
+from tests.testutils import make_liststr
 
 
 @pytest.fixture
-def lemgram_count(client, database_tables):
-    """Yield function returning JSON response for /lemgram_count to corpora.
+def lemgram_count(get_json, database_tables):
+    """Return function returning JSON response for /lemgram_count to corpora.
 
     The returned function takes as its parameters a lemgram, a corpus
     or a list of corpora, possible additional request parameters and
@@ -31,10 +27,9 @@ def lemgram_count(client, database_tables):
         }
         database_tables(corpora, "lemgram_index")
         query_params.update(params or {})
-        return get_response_json(
-            client(config or {}), "/lemgram_count", query_string=query_params)
+        return get_json("/lemgram_count", params=query_params, config=config)
 
-    yield _lemgram_count
+    return _lemgram_count
 
 
 class TestLemgramCount:

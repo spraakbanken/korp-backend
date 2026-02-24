@@ -1,21 +1,14 @@
 
-"""
-test_relations.py
-
-Pytest tests for the Korp /relations endpoint
-"""
-
+"""Pytest tests for the Korp /relations endpoint."""
 
 import pytest
 
-from korp import utils
-
-from tests.testutils import get_response_json, make_liststr
+from tests.testutils import make_liststr
 
 
 @pytest.fixture
-def relations_testcorpus(client, database_tables):
-    """Yield function returning JSON response for /relations to testcorpus.
+def relations_testcorpus(get_json, database_tables):
+    """Return function returning JSON response for /relations to testcorpus.
 
     The returned function takes as its parameters a word, corpus (or
     corpora), possible additional query parameters and Korp
@@ -28,18 +21,17 @@ def relations_testcorpus(client, database_tables):
             "corpus": make_liststr(corpora),
             "word": word,
             "cache": "false",
+            "measures": "freq,mi"
         }
         database_tables(corpora, "relations")
         query_params.update(params or {})
-        return get_response_json(
-            client(config or {}), "/relations", query_string=query_params)
+        return get_json("/relations", params=query_params, config=config)
 
-    yield _relations_testcorpus
+    return _relations_testcorpus
 
 
 class TestRelations:
-
-    """Tests for /relations"""
+    """Tests for /relations."""
 
     @pytest.mark.parametrize("word", ["är"])
     @pytest.mark.parametrize("corpora", ["testcorpus2",

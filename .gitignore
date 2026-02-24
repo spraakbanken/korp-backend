@@ -17,3 +17,6 @@ venv/
 # Coverage.py
 .coverage
 *,cover
+
+# Pytest
+cwb-cache/

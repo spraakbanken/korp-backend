@@ -49,7 +49,7 @@ def corpusfile_name(corpus_test_data_root):
     yield _corpusfile_name
 
 
-@pytest.fixture()
+@pytest.fixture
 def corpusfile(corpusfile_name):
     """Yield a function creating a corpus source file.
 

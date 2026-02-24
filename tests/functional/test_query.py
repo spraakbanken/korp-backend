@@ -1,19 +1,12 @@
 
-"""
-test_query.py
-
-Pytest tests for the Korp /query endpoint
-"""
-
+"""Pytest tests for the Korp /query endpoint."""
 
 import pytest
 
-from tests.testutils import get_response_json
-
 
 @pytest.fixture
-def query_testcorpus(client):
-    """Yield function returning JSON response for /query to testcorpus.
+def query_testcorpus(get_json):
+    """Return function returning JSON response for /query to testcorpus.
 
     The returned function takes as its parameters the CQP query,
     possible additional query parameters and Korp configuration
@@ -28,15 +21,14 @@ def query_testcorpus(client):
             "cache": "false",
         }
         query.update(params or {})
-        return get_response_json(
-            client(config or {}), "/query", query_string=query)
+        return get_json("/query", params=query, config=config)
 
-    yield _query_testcorpus
+    return _query_testcorpus
 
 
 @pytest.fixture
 def query_testcorpus_kwic_rows(query_testcorpus):
-    """Yield a function to test the effect of MAX_KWIC_ROWS.
+    """Return a function to test the effect of MAX_KWIC_ROWS.
 
     The returned function takes as its parameters the value for
     MAX_KWIC_ROWS and the number of rows to request. It returns the
@@ -54,7 +46,7 @@ def query_testcorpus_kwic_rows(query_testcorpus):
             {"MAX_KWIC_ROWS": max_rows}
         )
 
-    yield _query_testcorpus_kwic_rows
+    return _query_testcorpus_kwic_rows
 
 
 class TestQuery:
@@ -66,8 +58,6 @@ class TestQuery:
         data = query_testcorpus("[lemma=\"this\"]")
         kwic = data["kwic"]
         assert len(kwic) == data["hits"]
-        # print(data)
-        # assert 0
 
     def test_query_max_kwic_rows(self, query_testcorpus_kwic_rows):
         """Test a query requesting MAX_KWIC_ROWS results."""

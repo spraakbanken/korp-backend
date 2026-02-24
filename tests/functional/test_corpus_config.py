@@ -1,26 +1,19 @@
 
-"""
-test_corpus_config.py
-
-Pytest tests for the Korp /corpus_config endpoint
-"""
-
-
-from tests.testutils import get_response_json
+"""Pytest tests for the Korp /corpus_config endpoint."""
 
 
 class TestCorpusConfig:
+    """Tests for /corpus_config."""
 
-    """Tests for /corpus_config"""
-
-    def test_corpus_config(self, client, corpus_configs):
+    def test_corpus_config(self, get_json, corpus_configs):
         """Test that a corpus configuration can be retrieved."""
-        data = get_response_json(
-            client(), "/corpus_config",
-            query_string={
+        data = get_json(
+            "/corpus_config",
+            params={
                 "mode": "default",
                 "cache": "false",
-            })
+            },
+        )
         # TODO: Add more assertions
         assert data["label"]
         assert data["corpora"]
@@ -29,5 +22,3 @@ class TestCorpusConfig:
         assert corpus_config
         assert corpus_config["pos_attributes"]
         assert corpus_config["struct_attributes"]
-        # print(data)
-        # assert 0
