@@ -27,6 +27,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "fastapi-cli[standard-no-fastapi-cloud-cli]",
+    "ruff~=0.15.0",
     {include-group = "test"},
     {include-group = "server"},
 ]
