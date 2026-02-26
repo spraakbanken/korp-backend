@@ -182,12 +182,12 @@ async def get_timespan(
             # We need the full dates for this strategy, so no truncating of the results
             # We cast datefrom/dateto to CHAR to avoid issues with year zero
             sql = (
-                "SELECT corpus, CAST(datefrom AS CHAR) AS df, CAST(dateto AS CHAR) AS dt, SUM(tokens) AS sum FROM "
+                "SELECT corpus, CAST(datefrom AS CHAR) AS df, CAST(dateto AS CHAR) AS dt, tokens AS sum FROM "
                 + timedata_corpus
                 + " WHERE corpus IN "
                 + corpora_sql
                 + fromto
-                + " GROUP BY corpus, df, dt ORDER BY NULL;"  # Avoid implicit ordering in older MySQL versions
+                + " ORDER BY NULL;"  # Avoid implicit ordering in older MySQL versions
             )
         else:
             sql = (
