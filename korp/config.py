@@ -55,6 +55,21 @@ class Settings(BaseSettings):
     DB_USER: str = ""
     DB_PASSWORD: str = ""
 
+    # Database connection timeout in seconds
+    DB_CONNECT_TIMEOUT: int = 10
+
+    # Database read timeout in seconds
+    DB_READ_TIMEOUT: int = 60
+
+    # Time to wait for a connection from the database connection pool before raising an error (in seconds)
+    DB_POOL_TIMEOUT: int = 30
+
+    # Log database queries that take longer than this many seconds to execute (0 = disable)
+    DB_SLOW_QUERY_SECONDS: float = 30.0
+
+    # Max length of SQL statements in logs (0 = no limit)
+    DB_LOG_SQL_MAX_LENGTH: int = 300
+
     # HTTP Cache-Control header max-age value (in hours)
     HTTP_CACHE_MAXAGE: int = 1
 
