@@ -25,8 +25,8 @@ from . import query, timespan
 router = APIRouter(tags=["Word Picture"])
 
 
-# (role, head_id, head_pos, rel, dep_id, dep_pos, dep_extra)
-RelationKey = tuple[str, int, str, str, int, str, str]
+# (role, head_string, head_pos, rel, dep_string, dep_pos, dep_extra)
+RelationKey = tuple[str, str, str, str, str, str, str]
 
 
 RMI_MULTIPLIER = 1_000
@@ -622,74 +622,98 @@ def _build_overall_only_relations(
     Returns:
         List of overall relation statistics.
     """
-    triples: list[dict[str, object]] = []
-    head_rel_map: Counter[tuple[int, str, str]] = Counter()
-    dep_rel_map: Counter[tuple[int, str, str, str]] = Counter()
-    rel_map: Counter[str] = Counter()
-    sources: dict[tuple[int, str, str, int, str, str], set[str]] = defaultdict(set)
+    relation_buckets: dict[RelationKey, dict[str, object]] = {}
 
     # Aggregate data across corpora
     for corpus in corpora:
         data = corpus_results.get(corpus)
         if not data:
             continue
-        triples.extend(data.get("triples", []))
-        head_rel_map.update(data.get("head_rel_map", {}))
-        dep_rel_map.update(data.get("dep_rel_map", {}))
-        rel_map.update(data.get("rel_map", {}))
-        for row in data.get("triples", []):
+
+        triples = cast(list[dict[str, object]], data.get("triples", []))
+        head_rel_map = cast(Counter[tuple[int, str, str]], data.get("head_rel_map", Counter()))
+        dep_rel_map = cast(Counter[tuple[int, str, str, str]], data.get("dep_rel_map", Counter()))
+        rel_map = cast(Counter[str], data.get("rel_map", Counter()))
+
+        for row in triples:
+            head_id = cast(int, row["head"])
+            head_pos = cast(str, row["head_pos"])
+            dep_id = cast(int, row["dep"])
+            dep_pos = cast(str, row["dep_pos"])
+            dep_extra = cast(str, row["dep_extra"])
+            rel = cast(str, row["rel"])
+            freq = cast(int, row["freq"])
+            if freq <= 0:
+                continue
+
+            head_rel_freq = cast(int, row.get("head_rel_freq", head_rel_map.get((head_id, head_pos, rel), 0)))
+            dep_rel_freq = cast(
+                int, row.get("dep_rel_freq", dep_rel_map.get((dep_id, dep_pos, dep_extra, rel), 0))
+            )
+            rel_freq = cast(int, row.get("rel_freq", rel_map.get(rel, 0)))
+
+            aggregate_key: RelationKey = (
+                cast(str, row["role"]),
+                cast(str, row["head_string"]),
+                head_pos,
+                rel,
+                cast(str, row["dep_string"]),
+                dep_pos,
+                dep_extra,
+            )
+            bucket = relation_buckets.setdefault(
+                aggregate_key,
+                {
+                    "role": row["role"],
+                    "rel": rel,
+                    "head": row["head_string"],
+                    "headpos": head_pos,
+                    "dep": row["dep_string"],
+                    "deppos": dep_pos,
+                    "depextra": dep_extra,
+                    "freq": 0,
+                    "head_rel_freq": 0,
+                    "dep_rel_freq": 0,
+                    "rel_freq": 0,
+                    "source": set(),
+                },
+            )
+            bucket["freq"] = cast(int, bucket["freq"]) + freq
+            bucket["head_rel_freq"] = cast(int, bucket["head_rel_freq"]) + head_rel_freq
+            bucket["dep_rel_freq"] = cast(int, bucket["dep_rel_freq"]) + dep_rel_freq
+            bucket["rel_freq"] = cast(int, bucket["rel_freq"]) + rel_freq
             rel_id = row.get("relation_id")
             if rel_id is None:
                 continue
-            key = (
-                row["head"],
-                str(row["head_pos"] or ""),
-                row["rel"],
-                row["dep"],
-                str(row["dep_pos"] or ""),
-                str(row["dep_extra"] or ""),
-            )
-            sources[key].add(f"{corpus}:{rel_id}")
+            cast(set[str], bucket["source"]).add(f"{corpus}:{rel_id}")
 
-    if not triples:
+    if not relation_buckets:
         return []
 
     relation_entries = []
 
     # Compute MI and build entries
-    for row in triples:
-        head = cast(int, row["head"])
-        head_pos = cast(str, row["head_pos"])
-        dep = cast(int, row["dep"])
-        dep_pos = cast(str, row["dep_pos"])
-        dep_extra = cast(str, row["dep_extra"])
-        rel = cast(str, row["rel"])
-        freq = cast(int, row["freq"])
-
-        if freq == 0:
-            continue
-
-        head_rel_freq = head_rel_map[head, head_pos, rel]
-        dep_rel_freq = dep_rel_map[dep, dep_pos, dep_extra, rel]
-        rel_freq = rel_map[rel]
+    for key, bucket in relation_buckets.items():
+        freq = cast(int, bucket["freq"])
+        head_rel_freq = cast(int, bucket["head_rel_freq"])
+        dep_rel_freq = cast(int, bucket["dep_rel_freq"])
+        rel_freq = cast(int, bucket["rel_freq"])
         mi_value = _calc_mi(freq, head_rel_freq, dep_rel_freq, rel_freq)
-
-        key = (head, head_pos, rel, dep, dep_pos, dep_extra)
         relation_entries.append(
             {
                 "key": key,
-                "role": row["role"],
-                "rel": rel,
-                "head": row["head_string"],
-                "headpos": row["head_pos"],
-                "dep": row["dep_string"],
-                "deppos": row["dep_pos"],
-                "depextra": row["dep_extra"],
+                "role": bucket["role"],
+                "rel": bucket["rel"],
+                "head": bucket["head"],
+                "headpos": bucket["headpos"],
+                "dep": bucket["dep"],
+                "deppos": bucket["deppos"],
+                "depextra": bucket["depextra"],
                 "freq": freq,
                 "freq_relative": _calc_freq_relative(freq, corpus_size),
                 "mi": mi_value,
                 "rmi": _calc_rmi(mi_value, rel_freq),
-                "source": sorted(sources.get(key, [])),
+                "source": sorted(cast(set[str], bucket["source"])),
             }
         )
 
@@ -720,8 +744,8 @@ class _WordPictureAccumulator:
     def __init__(self) -> None:
         self.triple_strings: dict[RelationKey, dict[str, str]] = {}
         self.triple_freqs: dict[tuple[RelationKey, int | None], int] = defaultdict(int)
-        self.head_rel_map: dict[tuple[int, str, str, int | None], int] = defaultdict(int)
-        self.dep_rel_map: dict[tuple[int, str, str, str, int | None], int] = defaultdict(int)
+        self.head_rel_map: dict[tuple[str, str, str, int | None], int] = defaultdict(int)
+        self.dep_rel_map: dict[tuple[str, str, str, str, int | None], int] = defaultdict(int)
         self.rel_year_map: dict[tuple[str, int | None], int] = defaultdict(int)
         self.years_by_rel: dict[str, set[int | None]] = defaultdict(set)
         self.sources: dict[RelationKey, set[str]] = defaultdict(set)
@@ -733,9 +757,9 @@ class _WordPictureAccumulator:
         for row in triples:
             year = row["yearfrom"]
             role = row["role"]
-            head = row["head"]
+            head = row["head_string"]
             head_pos = row["head_pos"]
-            dep = row["dep"]
+            dep = row["dep_string"]
             dep_pos = row["dep_pos"]
             dep_extra = row["dep_extra"]
             rel = row["rel"]
@@ -743,8 +767,8 @@ class _WordPictureAccumulator:
             key: RelationKey = (role, head, head_pos, rel, dep, dep_pos, dep_extra)
             if key not in self.triple_strings:
                 self.triple_strings[key] = {
-                    "head_string": str(row["head_string"]),
-                    "dep_string": str(row["dep_string"]),
+                    "head_string": head,
+                    "dep_string": dep,
                 }
             self.triple_freqs[key, year] += freq
             self.years_by_rel[rel].add(year)
@@ -756,7 +780,7 @@ class _WordPictureAccumulator:
         heads = data.get("heads", [])
         for row in heads:
             year = row["yearfrom"]
-            head = row["head"]
+            head = row["head_string"]
             head_pos = row["head_pos"]
             rel = row["rel"]
             freq = row["head_rel_freq"]
@@ -765,7 +789,7 @@ class _WordPictureAccumulator:
         deps = data.get("deps", [])
         for row in deps:
             year = row["yearfrom"]
-            dep = row["dep"]
+            dep = row["dep_string"]
             dep_pos = row["dep_pos"]
             dep_extra = row["dep_extra"]
             rel = row["rel"]
@@ -1209,6 +1233,9 @@ async def _fetch_overall_relation_rows(
                 "dep_extra": dep_extra,
                 "dep_pos": dep_pos,
                 "freq": row["freq"],
+                "head_rel_freq": row["head_rel_freq"],
+                "dep_rel_freq": row["dep_rel_freq"],
+                "rel_freq": row["rel_freq"],
                 "corpus": row["corpus"],
             }
         )
