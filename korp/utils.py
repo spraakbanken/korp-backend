@@ -19,6 +19,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, 
 from dataclasses import dataclass
 from enum import Enum
 from functools import wraps
+from logging import getLogger
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Annotated, Any, overload
@@ -37,6 +38,8 @@ if TYPE_CHECKING:
 from korp.db import mysql
 
 from .config import settings
+
+logger = getLogger(__name__)
 
 # Special symbols used when parsing CQP results; should not appear in corpus data
 END_OF_LINE = "-::-EOL-::-"
@@ -436,6 +439,8 @@ def api_handler(
             ctx: Ctx = kwargs.get("ctx") or kwargs["_ctx"]  # Support both "ctx" and "_ctx"
             request = ctx.request
             common = ctx.common
+            route = request.url.path
+            method = request.method
 
             # Check for unexpected query parameters
             forbid_extra_query_params(request)
@@ -447,17 +452,49 @@ def api_handler(
                 kwargs["abort_signal"] = abort
 
             start = time.perf_counter()
+            slow_request_threshold = max(0.0, settings.REQUEST_SLOW_LOG_SECONDS)
+            stuck_log_interval = max(1.0, settings.REQUEST_STUCK_LOG_INTERVAL_SECONDS)
+            watchdog_task: asyncio.Task[None] | None = None
+
+            if slow_request_threshold > 0:
+
+                async def request_watchdog() -> None:
+                    await asyncio.sleep(slow_request_threshold)
+                    while True:
+                        elapsed = time.perf_counter() - start
+                        logger.warning("Request still running %.3fs: %s %s", elapsed, method, route)
+                        await asyncio.sleep(stuck_log_interval)
+
+                watchdog_task = asyncio.create_task(request_watchdog())
+
+            async def stop_watchdog() -> None:
+                if watchdog_task is None:
+                    return
+                watchdog_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watchdog_task
 
             # Call route. Generator routes will return generator objects.
-            if inspect.iscoroutinefunction(fn) or inspect.isasyncgenfunction(fn):
-                result = fn(*args, **kwargs)
-                if inspect.iscoroutine(result):
-                    result = await result
-            else:
-                result = await asyncio.to_thread(fn, *args, **kwargs)
+            try:
+                if inspect.iscoroutinefunction(fn) or inspect.isasyncgenfunction(fn):
+                    result = fn(*args, **kwargs)
+                    if inspect.iscoroutine(result):
+                        result = await result
+                else:
+                    result = await asyncio.to_thread(fn, *args, **kwargs)
+            except BaseException:
+                elapsed = time.perf_counter() - start
+                if slow_request_threshold > 0 and elapsed >= slow_request_threshold:
+                    logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
+                await stop_watchdog()
+                raise
 
             # Pass-through if Response explicitly returned
             if isinstance(result, Response):
+                elapsed = time.perf_counter() - start
+                if slow_request_threshold > 0 and elapsed >= slow_request_threshold:
+                    logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
+                await stop_watchdog()
                 if cache_headers and common.cache and not common.debug:
                     max_age = settings.HTTP_CACHE_MAXAGE * 3600
                     if max_age > 0:
@@ -559,7 +596,11 @@ def api_handler(
                         # If we're exiting for non-cancel reasons, also set abort to stop work
                         abort.set()
                     producer_task.cancel()
-                    with contextlib.suppress(Exception):
+                    elapsed = time.perf_counter() - start
+                    if slow_request_threshold > 0 and elapsed >= slow_request_threshold:
+                        logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
+                    await stop_watchdog()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
                         await producer_task
 
             keepalive = object()
@@ -618,8 +659,13 @@ def api_handler(
                         abort.set()
                     producer_task.cancel()
                     ticker_task.cancel()
-                    with contextlib.suppress(Exception):
+                    elapsed = time.perf_counter() - start
+                    if slow_request_threshold > 0 and elapsed >= slow_request_threshold:
+                        logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
+                    await stop_watchdog()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
                         await producer_task
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
                         await ticker_task
 
             stream = body_iter_incremental() if common.incremental else body_iter_full()

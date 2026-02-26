@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     # HTTP Cache-Control header max-age value (in hours)
     HTTP_CACHE_MAXAGE: int = 1
 
+    # Log requests that take longer than this many seconds to complete (0 = disable)
+    REQUEST_SLOW_LOG_SECONDS: float = 0
+
+    # If REQUEST_SLOW_LOG_SECONDS is enabled, keep logging the request at this interval until it completes
+    REQUEST_STUCK_LOG_INTERVAL_SECONDS: float = 60.0
+
     # Cache path (optional). Script must have read and write access.
     CACHE_DIR: str | Path = ""
 
