@@ -1,8 +1,9 @@
 """Router for corpus configuration."""
 
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from copy import deepcopy
+from functools import partial
 from pathlib import Path
 from typing import Annotated, TypeAlias
 
@@ -120,7 +121,8 @@ def get_modes(current_mode: str | None = None) -> list[dict]:
                 {"mode": mode_file.stem, "label": mode.get("label", mode_file.stem), "order": mode.get("order")}
             )
     return [
-        {k: m[k] for k in m if k not in "order"} for m in sorted(modes, key=lambda x: (x["order"] is None, x["order"]))
+        {k: v for k, v in m.items() if k != "order"}
+        for m in sorted(modes, key=lambda x: (x["order"] is None, x["order"]))
     ]
 
 
@@ -128,7 +130,7 @@ def _get_mode_sync(
     mode: dict,
     mode_name: str,
     corpora: list,
-    corpus_files: Iterator[Path],
+    corpus_files: list[Path],
     cached_corpora: dict[Path, dict] | None = None,
 ) -> dict[str, dict]:
     """Build configuration structure for a given mode (synchronous part).
@@ -149,6 +151,7 @@ def _get_mode_sync(
     mode["attributes"] = {t: {} for t in attr_types.values()}  # Attributes referred to by corpora
     attribute_presets = {t: {} for t in attr_types.values()}  # Attribute presets
     hash_to_attr = {}
+    used_attr_names: set[str] = set()
     warnings = set()
 
     def get_new_attr_name(name: str) -> str:
@@ -160,8 +163,9 @@ def _get_mode_sync(
         Returns:
             Unique name for attribute.
         """
-        while name in hash_to_attr.values():
+        while name in used_attr_names:
             name += "_"
+        used_attr_names.add(name)
         return name
 
     save_to_cache = {}
@@ -183,7 +187,7 @@ def _get_mode_sync(
         corpus_id = corpus_def["id"]
 
         # Skip corpus if it's not included in the selected mode, unless specific corpora are requested
-        if not corpora and mode_name not in [m["name"] for m in corpus_def.get("mode", [])]:
+        if not corpora and not any(m["name"] == mode_name for m in corpus_def.get("mode", [])):
             continue
         for attr_type_name, attr_type in attr_types.items():
             if attr_type in corpus_def:
@@ -247,7 +251,7 @@ def _get_mode_sync(
                                 corpus_def[attr_type][i] = attr_id
                 for i in reversed(to_delete):
                     del corpus_def[attr_type][i]
-        corpus_modes = [mode for mode in corpus_def.get("mode", []) if mode["name"] == mode_name]
+        corpus_modes = [m for m in corpus_def.get("mode", []) if m["name"] == mode_name]
         corpus_mode_settings = corpus_modes.pop() if corpus_modes else {}
 
         # Skip corpus if it should only appear in lab mode, and we're not in lab mode
@@ -316,7 +320,7 @@ async def get_mode(mode_name: str, corpora: list, cache: Memcached | None = None
         }
 
     to_cache = await anyio.to_thread.run_sync(  # type: ignore
-        _get_mode_sync, mode, mode_name, corpora, corpus_files, cached_corpora if cache else None
+        partial(_get_mode_sync, mode, mode_name, corpora, corpus_files, cached_corpora if cache else None)
     )
 
     if cache:
