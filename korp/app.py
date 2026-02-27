@@ -15,6 +15,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from korp import utils
+from korp.api.routers import routers
 from korp.config import Settings, settings
 from korp.cwb import CWB
 from korp.db import mysql
@@ -144,33 +145,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         max_age=settings.HTTP_CACHE_MAXAGE * 3600,
     )
 
-    from .api.routers import (  # noqa: PLC0415
-        attr_values,
-        cache,
-        corpus_config,
-        count,
-        info,
-        lemgram_count,
-        loglike,
-        misc,
-        query,
-        relations,
-        timespan,
-    )
-
-    for router in (
-        cache.router,
-        corpus_config.router,
-        count.router,
-        info.router,
-        lemgram_count.router,
-        loglike.router,
-        misc.router,
-        query.router,
-        relations.router,
-        attr_values.router,
-        timespan.router,
-    ):
+    for router in routers:
         app.include_router(router)
 
     # Load plugins
