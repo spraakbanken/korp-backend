@@ -114,7 +114,7 @@ class CountParameters:
     cut: int | None = None
 
 
-def parse_parameters(
+async def parse_parameters(
     ctx: utils.CtxDep,
     corpus: list[str],
     cqp: list[str] | None,
@@ -142,7 +142,7 @@ def parse_parameters(
     Raises:
         ValueError: If any parameter is invalid.
     """
-    utils.check_authorization(corpus, ctx)
+    await utils.check_authorization(corpus, ctx)
 
     group_by = sorted(set(group_by)) if group_by else []
     group_by_struct = sorted(set(group_by_struct)) if group_by_struct else []
@@ -662,7 +662,7 @@ async def count(
     Yields:
         Count results as dictionaries.
     """
-    count_params = parse_parameters(
+    count_params = await parse_parameters(
         ctx=ctx,
         corpus=corpus,
         cqp=cqp,
@@ -713,7 +713,7 @@ async def count_all(
     Yields:
         Count results as dictionaries.
     """
-    count_params = parse_parameters(
+    count_params = await parse_parameters(
         ctx=ctx,
         corpus=corpus,
         cqp=["[]"],
@@ -783,7 +783,7 @@ async def count_time(
     Raises:
         ValueError: If parameters are invalid or if the date range is too large for the selected granularity.
     """
-    count_params = parse_parameters(
+    count_params = await parse_parameters(
         ctx=ctx,
         corpus=corpus,
         cqp=cqp,

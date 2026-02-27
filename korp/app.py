@@ -163,7 +163,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
             if isinstance(value, APIRouter):
                 app.include_router(value)
 
-        if plugin_authorizer := getattr(module, "AUTHORIZER_CLASS", None) is None:
+        if (plugin_authorizer := getattr(module, "AUTHORIZER_CLASS", None)) is None:
             continue
         if not inspect.isclass(plugin_authorizer) or not issubclass(plugin_authorizer, utils.Authorizer):
             raise TypeError(

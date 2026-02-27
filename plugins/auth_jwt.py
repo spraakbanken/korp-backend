@@ -25,7 +25,7 @@ bp = utils.Plugin("auth_jwt", __name__)
 class AuthJWT(utils.Authorizer):
     """Authorizer plugin using JWT token scopes."""
 
-    def get_protected_corpora(self, auth_ctx: utils.AuthContext) -> list[str]:
+    async def get_protected_corpora(self, auth_ctx: utils.AuthContext) -> list[str]:
         """Get list of corpora with restricted access.
 
         Args:
@@ -36,9 +36,8 @@ class AuthJWT(utils.Authorizer):
         """
         key = None
         if auth_ctx.cache_enabled:
-            with self.cache.get_client() as mc:
-                key = f"protected:{utils.cache_prefix_sync(mc)}"
-                result = mc.get(key)
+            key = f"protected:{await utils.cache_prefix(self.cache)}"
+            result = await self.cache.get(key)
             if result is not None:
                 return result
 
@@ -48,8 +47,7 @@ class AuthJWT(utils.Authorizer):
         protected_corpora = [corpus.upper() for corpus in corpora_lines if self._is_protected(corpus)]
 
         if auth_ctx.cache_enabled and key:
-            with self.cache.get_client() as mc:
-                mc.add(key, protected_corpora)
+            await self.cache.add(key, protected_corpora)
         return protected_corpora
 
     def _is_protected(self, corpus: str) -> bool:
@@ -73,7 +71,7 @@ class AuthJWT(utils.Authorizer):
                     return value.lower() == "true"
         return False
 
-    def check_authorization(
+    async def check_authorization(
         self, corpora: list[str], auth_ctx: utils.AuthContext
     ) -> tuple[bool, list[str], str | None]:
         """Check if the user has access to the specified corpora based on JWT scopes.
@@ -88,7 +86,7 @@ class AuthJWT(utils.Authorizer):
                 - A list of unauthorized corpora (if access is denied).
                 - An optional message (e.g., for errors).
         """
-        protected = self.get_protected_corpora(auth_ctx)
+        protected = await self.get_protected_corpora(auth_ctx)
         if protected:
             user_corpora = []
 

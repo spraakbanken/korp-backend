@@ -1207,15 +1207,15 @@ def _make_auth_context(ctx: Ctx) -> AuthContext:
     return AuthContext(request=ctx.request, cache_enabled=ctx.common.cache)
 
 
-def get_protected_corpora(ctx: Ctx) -> list[str]:
+async def get_protected_corpora(ctx: Ctx) -> list[str]:
     """Return a list of corpora with restricted access."""
     authorizer = ctx.request.app.state.authorizer
     if authorizer:
-        return authorizer.get_protected_corpora(_make_auth_context(ctx))
+        return await authorizer.get_protected_corpora(_make_auth_context(ctx))
     return []
 
 
-def check_authorization(corpora: Iterable[str], ctx: Ctx) -> None:
+async def check_authorization(corpora: Iterable[str], ctx: Ctx) -> None:
     """Take a list of corpora, and if any of them are protected, check authorization.
 
     Args:
@@ -1230,7 +1230,7 @@ def check_authorization(corpora: Iterable[str], ctx: Ctx) -> None:
         # Split parallel corpora
         corpora = [cc for c in corpora for cc in c.split("|")]
 
-        success, unauthorized, message = authorizer.check_authorization(corpora, _make_auth_context(ctx))
+        success, unauthorized, message = await authorizer.check_authorization(corpora, _make_auth_context(ctx))
         if not success:
             if not message:
                 message = "You do not have access to the following corpora: {}".format(", ".join(unauthorized))
@@ -1308,9 +1308,11 @@ class Authorizer(ABC):
         self.cache = cache
 
     @abstractmethod
-    def get_protected_corpora(self, auth_ctx: AuthContext) -> list[str]:
+    async def get_protected_corpora(self, auth_ctx: AuthContext) -> list[str]:
         """Get list of corpora with restricted access, in uppercase."""
 
     @abstractmethod
-    def check_authorization(self, corpora: list[str], auth_ctx: AuthContext) -> tuple[bool, list[str], str | None]:
+    async def check_authorization(
+        self, corpora: list[str], auth_ctx: AuthContext
+    ) -> tuple[bool, list[str], str | None]:
         """Take a list of corpora and check that the user has permission to access them."""

@@ -57,7 +57,7 @@ async def info(
     corpora = ctx.cwb.run_cqp("show corpora;")
     version = next(corpora)
 
-    protected = utils.get_protected_corpora(ctx)
+    protected = await utils.get_protected_corpora(ctx)
 
     result = {
         "version": importlib.metadata.version("korp-backend"),

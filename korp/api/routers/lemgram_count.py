@@ -45,7 +45,7 @@ async def lemgram_count(
         A dictionary with lemgram counts.
     """
     corpora = corpus or []
-    utils.check_authorization(corpora, ctx)
+    await utils.check_authorization(corpora, ctx)
 
     bind_params: dict[str, str] = {}
     lemgram_placeholders = ", ".join(f":lemgram_{i}" for i in range(len(lemgram)))

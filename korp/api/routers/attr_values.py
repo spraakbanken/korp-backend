@@ -57,7 +57,7 @@ async def attr_values(
     incremental = ctx.common.incremental
     include_count = count
 
-    utils.check_authorization(corpus, ctx)
+    await utils.check_authorization(corpus, ctx)
 
     split = split or []
     split_set = set(split)

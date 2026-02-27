@@ -10,15 +10,15 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-
-from fastapi import Path
+from pathlib import Path
 
 from korp import utils
 
 router = utils.Plugin("authenticate", __name__)
 
 
-@router.route("/authenticate", methods=["GET", "POST"])
+@router.get("/authenticate", response_model=None)
+@router.post("/authenticate", response_model=None, include_in_schema=False)
 @utils.api_handler(cache_headers=False)
 def authenticate(ctx: utils.CtxDep) -> dict:
     """Authenticate a user against an authentication server.
@@ -95,7 +95,7 @@ def _authenticate_from_auth_header(auth_header: str | None) -> dict:
 class Auth(utils.Authorizer):
     """Authorizer class that checks if the user has access to protected corpora based on the authentication response."""
 
-    def get_protected_corpora(self, auth_ctx: utils.AuthContext) -> list[str]:
+    async def get_protected_corpora(self, auth_ctx: utils.AuthContext) -> list[str]:
         """Get list of protected corpora.
 
         Args:
@@ -105,9 +105,8 @@ class Auth(utils.Authorizer):
             A list of protected corpora.
         """
         if auth_ctx.cache_enabled:
-            with self.cache.get_client() as mc:
-                key = f"protected:{utils.cache_prefix_sync(mc)}"
-                result = mc.get(key)
+            key = f"protected:{await utils.cache_prefix(self.cache)}"
+            result = await self.cache.get(key)
             if result is not None:
                 return result
 
@@ -118,11 +117,10 @@ class Auth(utils.Authorizer):
             protected_corpora = []
 
         if auth_ctx.cache_enabled:
-            with self.cache.get_client() as mc:
-                mc.add(key, protected_corpora)
+            await self.cache.add(key, protected_corpora)
         return protected_corpora
 
-    def check_authorization(
+    async def check_authorization(
         self, corpora: list[str], auth_ctx: utils.AuthContext
     ) -> tuple[bool, list[str], str | None]:
         """Take a list of corpora, and check if the user has access to them.
@@ -138,7 +136,7 @@ class Auth(utils.Authorizer):
                 - An optional message (not used in this implementation).
         """
         if router.config("PROTECTED_FILE"):
-            protected = self.get_protected_corpora(auth_ctx)
+            protected = await self.get_protected_corpora(auth_ctx)
             c = [c for c in corpora if c.upper() in protected]
             if c:
                 auth = _authenticate_from_auth_header(auth_ctx.request.headers.get("Authorization"))

@@ -59,7 +59,7 @@ async def loglike(
         A dictionary with log-likelihood results.
     """
     # Handle parameters common to count
-    params = count.parse_parameters(
+    params = await count.parse_parameters(
         ctx=ctx,
         corpus=[],
         cqp=[],
@@ -85,7 +85,7 @@ async def loglike(
     set2_corpora = set(set2_corpus)
 
     corpora = set1_corpora.union(set2_corpora)
-    utils.check_authorization(corpora, ctx)
+    await utils.check_authorization(corpora, ctx)
 
     same_cqp = set1_cqp == set2_cqp
 

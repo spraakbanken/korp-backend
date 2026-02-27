@@ -1407,7 +1407,7 @@ async def _relations_impl(
         Progress updates as dictionaries with keys like "progress_corpora" or "progress_{index}",
         and finally a dictionary containing the results.
     """
-    utils.check_authorization(corpora, ctx)
+    await utils.check_authorization(corpora, ctx)
 
     if not include_split and not include_overall:
         yield {"ERROR": "Both split and overall results are disabled."}
@@ -1782,7 +1782,7 @@ async def _relations_sentences_impl(
     abort_signal: utils.AbortSignal | None = None,
 ) -> dict[str, Any]:
     source_map = _parse_source(source)
-    utils.check_authorization(source_map.keys(), ctx)
+    await utils.check_authorization(source_map.keys(), ctx)
 
     table_suffix = f"{SPLIT_SUFFIX}_sentences" if yearly else "_sentences"
     shown = show or "word"
@@ -1852,7 +1852,7 @@ async def _relations_sentences_impl(
         if abort_signal and abort_signal.is_set():
             return result
         cqp = '<sentence_id="{}"> []* </sentence_id> within sentence'.format("|".join(set(sids.keys())))
-        query_params = query.parse_parameters(
+        query_params = await query.parse_parameters(
             ctx=ctx,
             corpus=[corpus],
             cqp=[cqp],

@@ -119,7 +119,7 @@ class QueryParameters:
     query_data: str | None = None
 
 
-def parse_parameters(
+async def parse_parameters(
     ctx: utils.CtxDep,
     corpus: list[str],
     cqp: list[str],
@@ -171,7 +171,7 @@ def parse_parameters(
         ValueError: If any of the parameters are invalid.
     """
     corpora = corpus or []
-    utils.check_authorization(corpora, ctx)
+    await utils.check_authorization(corpora, ctx)
 
     show_set = set(show)
     show_set.add("word")  # Always include word
@@ -541,7 +541,7 @@ async def query_sample(
     Yields:
         A single KWIC result as a dictionary, or an empty result if no matches are found.
     """
-    query_params = parse_parameters(
+    query_params = await parse_parameters(
         ctx=ctx,
         corpus=corpus,
         cqp=cqp,
@@ -604,7 +604,7 @@ async def query(
     Yields:
         KWIC results as dictionaries, followed by a final dictionary containing the total hit count and other metadata.
     """
-    query_params = parse_parameters(
+    query_params = await parse_parameters(
         ctx=ctx,
         corpus=corpus,
         cqp=cqp,
