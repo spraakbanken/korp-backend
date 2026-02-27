@@ -762,7 +762,7 @@ def query_corpus(
     # This prints the attributes and their relative order:
     cmd += cwb.show_attributes()
 
-    retcode = 0
+    retcode = utils.QueryOptimizeResult.SUCCESS
 
     if is_cached:
         # This exact query has been done before. Read corpus positions from cache.
@@ -803,7 +803,7 @@ def query_corpus(
         cmd += [f"{cache_query_temp} = Last; save {cache_query_temp};"]
 
     if not no_results and not (use_cache and cached_no_hits):
-        if free_search and retcode == 0:
+        if free_search and retcode == utils.QueryOptimizeResult.SUCCESS:
             tokens, _ = utils.parse_cqp(cqp[-1])
             cmd += ["Last;"]
             cmd += [f"cut {start} {end};"]
@@ -820,7 +820,8 @@ def query_corpus(
             cmd += [f"set PrintStructures '{', '.join(show_structs)}';"]
         cmd += ["set ExternalSort yes;"]
         cmd += sortcmd
-        if free_search:
+        if free_search and retcode == utils.QueryOptimizeResult.SUCCESS:
+            # The results are already cut to the right range, so print all of them
             cmd += ["cat Last;"]
         else:
             cmd += [f"cat Last {start} {end};"]
