@@ -16,6 +16,14 @@ class CWB:
     ABORT_TIMEOUT = 1  # seconds
     MAX_LINE_LENGTH = 65536  # Maximum length of a line from cwb-scan-corpus output
 
+    # Error substrings to ignore in CQP output
+    _IGNORED_ERRORS = (
+        "is not defined for corpus",
+        "cl->range && cl->size > 0",
+        "neither a positional/structural attribute",
+        "CL: major error, cannot compose string: invalid UTF8 string passed to cl_string_canonical...",
+    )
+
     def __init__(self, executable: str, scan_executable: str, registry: str, locale: str, encoding: str) -> None:
         """Initialize CWB interface.
 
@@ -31,6 +39,55 @@ class CWB:
         self.registry = registry
         self.locale = locale
         self.encoding = encoding
+
+    def _communicate_with_abort(
+        self,
+        process: subprocess.Popen,
+        input_data: bytes | None = None,
+        abort_signal: utils.AbortSignal | None = None,
+    ) -> tuple[bytes, bytes] | None:
+        """Communicate with a subprocess, periodically checking for abort signals.
+
+        Args:
+            process: The subprocess to communicate with.
+            input_data: Optional data to send to the process's stdin.
+            abort_signal: An optional abort event to stop the process.
+
+        Returns:
+            A tuple of (stdout, stderr) bytes, or None if the process was aborted.
+        """
+        try:
+            return process.communicate(input_data, timeout=self.ABORT_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            pass
+        while True:
+            if abort_signal and abort_signal.is_set():
+                children = psutil.Process(process.pid).children(recursive=True)
+                process.kill()
+                for child in children:
+                    child.kill()
+                return None
+            try:
+                return process.communicate(timeout=self.ABORT_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                continue
+
+    @staticmethod
+    def _iter_lines(data: str, max_length: int | None = None) -> Iterator[str]:
+        r"""Iterate over non-empty lines in data.
+
+        Uses str.split("\n") instead of splitlines() to avoid splitting on special characters in corpus data.
+
+        Args:
+            data: The string to split into lines.
+            max_length: If set, skip lines longer than this value.
+
+        Yields:
+            Non-empty lines from the data.
+        """
+        for line in data.split("\n"):
+            if line and (max_length is None or len(line) < max_length):
+                yield line
 
     def run_cqp(
         self, command: str | list[str], attr_ignore: bool = False, abort_signal: utils.AbortSignal | None = None
@@ -50,10 +107,10 @@ class CWB:
         """
         env = os.environ.copy()
         env["LC_COLLATE"] = self.locale
-        command_string = "\n".join(command) if not isinstance(command, str) else command
+        if isinstance(command, list):
+            command = "\n".join(command)
+        command_bytes = f"set PrettyPrint off;\n{command}".encode(self.encoding)
 
-        command_string = "set PrettyPrint off;\n" + command_string
-        command_string = command_string.encode(self.encoding)
         process = subprocess.Popen(
             [self.executable, "-c", "-r", self.registry],
             stdin=subprocess.PIPE,
@@ -62,49 +119,25 @@ class CWB:
             env=env,
         )
 
-        # Use a loop and timeout to be able to kill aborted searches
-        try:
-            reply, error = process.communicate(command_string, timeout=self.ABORT_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            while True:
-                if abort_signal and abort_signal.is_set():
-                    # Kill cqp process and its children
-                    children = psutil.Process(process.pid).children(recursive=True)
-                    process.kill()
-                    for child in children:
-                        child.kill()
-                    return
-                try:
-                    reply, error = process.communicate(timeout=self.ABORT_TIMEOUT)
-                except subprocess.TimeoutExpired:
-                    continue
-                break
+        result = self._communicate_with_abort(process, command_bytes, abort_signal)
+        if result is None:
+            return
 
+        reply, error = result
         if error:
             error = error.decode(self.encoding)
-            # Remove newlines from the error string:
-            error = re.sub(r"\s+", r" ", error)
-            # Keep only the first CQP error (the rest are consequences):
-            error = re.sub(r"^CQP Error: *", r"", error)
-            error = re.sub(r" *(CQP Error:).*$", r"", error)
-            # Ignore certain errors:
-            # 1) "show +attr" for unknown attr,
-            # 2) querying unknown structural attribute,
-            # 3) calculating statistics for empty results
-            if (
-                not (attr_ignore and "No such attribute:" in error)
-                and "is not defined for corpus" not in error
-                and "cl->range && cl->size > 0" not in error
-                and "neither a positional/structural attribute" not in error
-                and "CL: major error, cannot compose string: invalid UTF8 string passed to cl_string_canonical..."
-                not in error
-            ):
+            # Normalize whitespace and keep only the first CQP error (the rest are consequences)
+            error = re.sub(r"\s+", " ", error)
+            error = re.sub(r"^CQP Error: *", "", error)
+            error = re.sub(r" *CQP Error:.*$", "", error)
+
+            ignore_error = (attr_ignore and "No such attribute:" in error) or any(
+                ignored in error for ignored in self._IGNORED_ERRORS
+            )
+            if not ignore_error:
                 raise utils.CQPError(error)
-        for line in reply.decode(self.encoding, errors="ignore").split(
-            "\n"
-        ):  # We don't use splitlines() since it might split on special characters in the data
-            if line:
-                yield line
+
+        yield from self._iter_lines(reply.decode(self.encoding, errors="ignore"))
 
     def run_cwb_scan(
         self, corpus: str, attrs: list[str], abort_signal: utils.AbortSignal | None = None
@@ -128,27 +161,16 @@ class CWB:
             stderr=subprocess.PIPE,
         )
 
-        # Use a loop and timeout to be able to kill aborted searches
-        timeout = 1
-        while True:
-            if abort_signal and abort_signal.is_set():
-                process.kill()
-                return
-            try:
-                reply, error = process.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                continue
-            break
+        result = self._communicate_with_abort(process, abort_signal=abort_signal)
+        if result is None:
+            return
 
+        reply, error = result
         if error:
-            # Remove newlines from the error string:
-            error = re.sub(r"\s+", r" ", error.decode())
+            error = re.sub(r"\s+", " ", error.decode())
             raise utils.CQPError(error)
-        for line in reply.decode(self.encoding, errors="ignore").split(
-            "\n"
-        ):  # We don't use splitlines() since it might split on special characters in the data
-            if line and len(line) < self.MAX_LINE_LENGTH:
-                yield line
+
+        yield from self._iter_lines(reply.decode(self.encoding, errors="ignore"), max_length=self.MAX_LINE_LENGTH)
 
     @staticmethod
     def show_attributes() -> list[str]:
