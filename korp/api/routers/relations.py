@@ -1,5 +1,6 @@
 """Routes for Word Picture queries."""
 
+import asyncio
 import math
 import operator
 import time
@@ -7,7 +8,7 @@ from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Container, Mapping, Sequence
 from copy import deepcopy
 from enum import StrEnum
-from typing import Annotated, Any, TypeAlias, cast
+from typing import Annotated, Any, Literal, TypeAlias
 
 from fastapi import APIRouter, Query
 from pydantic import BeforeValidator
@@ -232,8 +233,6 @@ def _build_overall_triples_query(
     rel_table = tables["rel"]
     head_rel = tables["head_rel"]
     dep_rel = tables["dep_rel"]
-    lemgram_clause_1 = f"AND{_lemgram_clause(lemgram)}"
-    lemgram_clause_2 = f"AND{_lemgram_clause(lemgram, second=True)}"
     corpus_label = utils.sql_escape(corpus.upper())
     freq_clause = ""
     params: dict[str, object] = {}
@@ -241,9 +240,20 @@ def _build_overall_triples_query(
         freq_clause = " AND f.freq >= :min_freq"
         params["min_freq"] = min_freq
 
-    head_select = f"""
+    def _role_select(role: Literal["head", "dep"]) -> str:
+        """Build one half of the UNION ALL for a given role.
+
+        Returns:
+            SQL SELECT statement for the given role.
+        """
+        word_alias = "s1" if role == "head" else "s2"
+        other_alias = "s2" if role == "head" else "s1"
+        join_col = role  # "head" or "dep"
+        other_col = "dep" if role == "head" else "head"
+        lc = f"AND{_lemgram_clause(lemgram, second=(role == 'dep'))}"
+        return f"""
     SELECT STRAIGHT_JOIN
-        'head' AS role,
+        '{role}' AS role,
         f.id AS relation_id,
         f.rel,
         f.head,
@@ -259,49 +269,19 @@ def _build_overall_triples_query(
         hr.freq AS head_rel_freq,
         dr.freq AS dep_rel_freq,
         '{corpus_label}' AS corpus
-    FROM `{strings}` AS s1
-    JOIN `{main}` AS f ON s1.id = f.head
-    JOIN `{strings}` AS s2 ON f.dep = s2.id
+    FROM `{strings}` AS {word_alias}
+    JOIN `{main}` AS f ON {word_alias}.id = f.{join_col}
+    JOIN `{strings}` AS {other_alias} ON f.{other_col} = {other_alias}.id
     JOIN `{rel_table}` AS r ON f.rel = r.rel
     JOIN `{head_rel}` AS hr ON f.head = hr.head AND f.rel = hr.rel
     JOIN `{dep_rel}` AS dr ON f.dep = dr.dep AND f.rel = dr.rel
     WHERE
-        s1.string = :word
-        {lemgram_clause_1}
+        {word_alias}.string = :word
+        {lc}
         {freq_clause}
     """
 
-    dep_select = f"""
-    SELECT STRAIGHT_JOIN
-        'dep' AS role,
-        f.id AS relation_id,
-        f.rel,
-        f.head,
-        s1.string AS head_string,
-        s1.stringextra AS head_extra,
-        s1.pos AS head_pos,
-        f.dep,
-        s2.string AS dep_string,
-        s2.stringextra AS dep_extra,
-        s2.pos AS dep_pos,
-        f.freq,
-        r.freq AS rel_freq,
-        hr.freq AS head_rel_freq,
-        dr.freq AS dep_rel_freq,
-        '{corpus_label}' AS corpus
-    FROM `{strings}` AS s2
-    JOIN `{main}` AS f ON s2.id = f.dep
-    JOIN `{strings}` AS s1 ON f.head = s1.id
-    JOIN `{rel_table}` AS r ON f.rel = r.rel
-    JOIN `{head_rel}` AS hr ON f.head = hr.head AND f.rel = hr.rel
-    JOIN `{dep_rel}` AS dr ON f.dep = dr.dep AND f.rel = dr.rel
-    WHERE
-        s2.string = :word
-        {lemgram_clause_2}
-        {freq_clause}
-    """
-
-    sql = f"{head_select} UNION ALL {dep_select}"
+    sql = f"{_role_select('head')} UNION ALL {_role_select('dep')}"
     return sql, params
 
 
@@ -396,17 +376,19 @@ def _build_split_triples_query(
     return sql, params
 
 
-def _build_head_query(
+def _build_head_or_dep_query(
     corpus: str,
     *,
+    role: Literal["head", "dep"],
     lemgram: bool,
     start_year: int | None = None,
     end_year: int | None = None,
 ) -> tuple[str, dict[str, int]]:
-    """Build SQL query for head relations (split tables only).
+    """Build SQL query for head or dep relations (split tables only).
 
     Args:
         corpus: The corpus name.
+        role: Whether to build a query for "head" or "dep" relations.
         lemgram: If `True`, select lemgrams; if `False`, select wordforms.
         start_year: Start year (inclusive) or `None`.
         end_year: End year (inclusive) or `None`.
@@ -420,22 +402,30 @@ def _build_head_query(
     scope_clause, scope_params = _year_clause("f.yearfrom", start_year, end_year, prefix="scope")
     if scope_clause:
         scope_clause = "AND " + scope_clause
-    year_clause, year_params = _year_clause("hr.yearfrom", start_year, end_year, prefix="head")
+
+    # Role-specific aliases and table/column names
+    alias = "hr" if role == "head" else "dr"
+    col = role  # "head" or "dep"
+    str_alias = "hs" if role == "head" else "ds"
+    freq_alias = f"{col}_rel_freq"
+    rel_table_key = f"{col}_rel"
+
+    year_clause, year_params = _year_clause(f"{alias}.yearfrom", start_year, end_year, prefix=role)
     sql = f"""
     WITH target AS (
         SELECT s.id
         FROM `{tables["strings"]}` AS s
         WHERE s.string = :word
     ),
-    head_scope AS (
-        SELECT DISTINCT f.head, f.rel
+    {col}_scope AS (
+        SELECT DISTINCT f.{col}, f.rel
         FROM `{tables["main"]}` AS f
         JOIN target AS t ON f.head = t.id
         WHERE
         {lemgram_clause_1}
         {scope_clause}
         UNION
-        SELECT DISTINCT f.head, f.rel
+        SELECT DISTINCT f.{col}, f.rel
         FROM `{tables["main"]}` AS f
         JOIN target AS t ON f.dep = t.id
         WHERE
@@ -443,94 +433,23 @@ def _build_head_query(
         {scope_clause}
     )
     SELECT
-        hr.head,
-        hs.string AS head_string,
-        hs.stringextra AS head_extra,
-        hs.pos AS head_pos,
-        hr.rel,
-        hr.yearfrom,
-        hr.freq AS head_rel_freq,
+        {alias}.{col},
+        {str_alias}.string AS {col}_string,
+        {str_alias}.stringextra AS {col}_extra,
+        {str_alias}.pos AS {col}_pos,
+        {alias}.rel,
+        {alias}.yearfrom,
+        {alias}.freq AS {freq_alias},
         rr.freq AS rel_freq
-    FROM head_scope AS hsco
-    JOIN `{tables["head_rel"]}` AS hr
-    ON hr.head = hsco.head AND hr.rel = hsco.rel
+    FROM {col}_scope AS sco
+    JOIN `{tables[rel_table_key]}` AS {alias}
+    ON {alias}.{col} = sco.{col} AND {alias}.rel = sco.rel
     JOIN `{tables["rel"]}` AS rr
-    ON rr.rel = hr.rel AND rr.yearfrom <=> hr.yearfrom
-    JOIN `{tables["strings"]}` AS hs
-    ON hr.head = hs.id
+    ON rr.rel = {alias}.rel AND rr.yearfrom <=> {alias}.yearfrom
+    JOIN `{tables["strings"]}` AS {str_alias}
+    ON {alias}.{col} = {str_alias}.id
     {"WHERE " + year_clause if year_clause else ""}
-    ORDER BY hr.head, hr.rel, hr.yearfrom
-    """
-    params: dict[str, int] = {}
-    params.update(scope_params)
-    params.update(year_params)
-    return sql, params
-
-
-def _build_dep_query(
-    corpus: str,
-    *,
-    lemgram: bool,
-    start_year: int | None = None,
-    end_year: int | None = None,
-) -> tuple[str, dict[str, int]]:
-    """Build SQL query for dependent relations (split tables only).
-
-    Args:
-        corpus: The corpus name.
-        lemgram: If `True`, select lemgrams; if `False`, select wordforms.
-        start_year: Start year (inclusive) or `None`.
-        end_year: End year (inclusive) or `None`.
-
-    Returns:
-        A tuple containing the SQL query as a string and a dictionary of parameters.
-    """
-    tables = _table_names(corpus, split=True)
-    lemgram_clause_1 = _lemgram_clause(lemgram)
-    lemgram_clause_2 = _lemgram_clause(lemgram, second=True)
-    scope_clause, scope_params = _year_clause("f.yearfrom", start_year, end_year, prefix="scope")
-    if scope_clause:
-        scope_clause = "AND " + scope_clause
-    year_clause, year_params = _year_clause("dr.yearfrom", start_year, end_year, prefix="dep")
-    sql = f"""
-    WITH target AS (
-        SELECT s.id
-        FROM `{tables["strings"]}` AS s
-        WHERE s.string = :word
-    ),
-    dep_scope AS (
-        SELECT DISTINCT f.dep, f.rel
-        FROM `{tables["main"]}` AS f
-        JOIN target AS t ON f.head = t.id
-        WHERE
-        {lemgram_clause_1}
-        {scope_clause}
-        UNION
-        SELECT DISTINCT f.dep, f.rel
-        FROM `{tables["main"]}` AS f
-        JOIN target AS t ON f.dep = t.id
-        WHERE
-        {lemgram_clause_2}
-        {scope_clause}
-    )
-    SELECT
-        dr.dep,
-        ds.string AS dep_string,
-        ds.pos AS dep_pos,
-        ds.stringextra AS dep_extra,
-        dr.rel,
-        dr.yearfrom,
-        dr.freq AS dep_rel_freq,
-        rr.freq AS rel_freq
-    FROM dep_scope AS dsco
-    JOIN `{tables["dep_rel"]}` AS dr
-    ON dr.dep = dsco.dep AND dr.rel = dsco.rel
-    JOIN `{tables["rel"]}` AS rr
-    ON rr.rel = dr.rel AND rr.yearfrom <=> dr.yearfrom
-    JOIN `{tables["strings"]}` AS ds
-    ON dr.dep = ds.id
-    {"WHERE " + year_clause if year_clause else ""}
-    ORDER BY dr.dep, dr.rel, dr.yearfrom
+    ORDER BY {alias}.{col}, {alias}.rel, {alias}.yearfrom
     """
     params: dict[str, int] = {}
     params.update(scope_params)
@@ -622,7 +541,7 @@ def _build_overall_only_relations(
     Returns:
         List of overall relation statistics.
     """
-    relation_buckets: dict[RelationKey, dict[str, object]] = {}
+    relation_buckets: dict[RelationKey, dict[str, Any]] = {}
 
     # Aggregate data across corpora
     for corpus in corpora:
@@ -630,34 +549,32 @@ def _build_overall_only_relations(
         if not data:
             continue
 
-        triples = cast(list[dict[str, object]], data.get("triples", []))
-        head_rel_map = cast(Counter[tuple[int, str, str]], data.get("head_rel_map", Counter()))
-        dep_rel_map = cast(Counter[tuple[int, str, str, str]], data.get("dep_rel_map", Counter()))
-        rel_map = cast(Counter[str], data.get("rel_map", Counter()))
+        triples: list[dict[str, Any]] = data.get("triples", [])
+        head_rel_map: Counter[tuple[int, str, str]] = data.get("head_rel_map", Counter())
+        dep_rel_map: Counter[tuple[int, str, str, str]] = data.get("dep_rel_map", Counter())
+        rel_map: Counter[str] = data.get("rel_map", Counter())
 
         for row in triples:
-            head_id = cast(int, row["head"])
-            head_pos = cast(str, row["head_pos"])
-            dep_id = cast(int, row["dep"])
-            dep_pos = cast(str, row["dep_pos"])
-            dep_extra = cast(str, row["dep_extra"])
-            rel = cast(str, row["rel"])
-            freq = cast(int, row["freq"])
+            head_id = row["head"]
+            head_pos = row["head_pos"]
+            dep_id = row["dep"]
+            dep_pos = row["dep_pos"]
+            dep_extra = row["dep_extra"]
+            rel = row["rel"]
+            freq = row["freq"]
             if freq <= 0:
                 continue
 
-            head_rel_freq = cast(int, row.get("head_rel_freq", head_rel_map.get((head_id, head_pos, rel), 0)))
-            dep_rel_freq = cast(
-                int, row.get("dep_rel_freq", dep_rel_map.get((dep_id, dep_pos, dep_extra, rel), 0))
-            )
-            rel_freq = cast(int, row.get("rel_freq", rel_map.get(rel, 0)))
+            head_rel_freq = row.get("head_rel_freq", head_rel_map.get((head_id, head_pos, rel), 0))
+            dep_rel_freq = row.get("dep_rel_freq", dep_rel_map.get((dep_id, dep_pos, dep_extra, rel), 0))
+            rel_freq = row.get("rel_freq", rel_map.get(rel, 0))
 
             aggregate_key: RelationKey = (
-                cast(str, row["role"]),
-                cast(str, row["head_string"]),
+                row["role"],
+                row["head_string"],
                 head_pos,
                 rel,
-                cast(str, row["dep_string"]),
+                row["dep_string"],
                 dep_pos,
                 dep_extra,
             )
@@ -678,14 +595,14 @@ def _build_overall_only_relations(
                     "source": set(),
                 },
             )
-            bucket["freq"] = cast(int, bucket["freq"]) + freq
-            bucket["head_rel_freq"] = cast(int, bucket["head_rel_freq"]) + head_rel_freq
-            bucket["dep_rel_freq"] = cast(int, bucket["dep_rel_freq"]) + dep_rel_freq
-            bucket["rel_freq"] = cast(int, bucket["rel_freq"]) + rel_freq
+            bucket["freq"] += freq
+            bucket["head_rel_freq"] += head_rel_freq
+            bucket["dep_rel_freq"] += dep_rel_freq
+            bucket["rel_freq"] += rel_freq
             rel_id = row.get("relation_id")
             if rel_id is None:
                 continue
-            cast(set[str], bucket["source"]).add(f"{corpus}:{rel_id}")
+            bucket["source"].add(f"{corpus}:{rel_id}")
 
     if not relation_buckets:
         return []
@@ -694,10 +611,10 @@ def _build_overall_only_relations(
 
     # Compute MI and build entries
     for key, bucket in relation_buckets.items():
-        freq = cast(int, bucket["freq"])
-        head_rel_freq = cast(int, bucket["head_rel_freq"])
-        dep_rel_freq = cast(int, bucket["dep_rel_freq"])
-        rel_freq = cast(int, bucket["rel_freq"])
+        freq = bucket["freq"]
+        head_rel_freq = bucket["head_rel_freq"]
+        dep_rel_freq = bucket["dep_rel_freq"]
+        rel_freq = bucket["rel_freq"]
         mi_value = _calc_mi(freq, head_rel_freq, dep_rel_freq, rel_freq)
         relation_entries.append(
             {
@@ -713,7 +630,7 @@ def _build_overall_only_relations(
                 "freq_relative": _calc_freq_relative(freq, corpus_size),
                 "mi": mi_value,
                 "rmi": _calc_rmi(mi_value, rel_freq),
-                "source": sorted(cast(set[str], bucket["source"])),
+                "source": sorted(bucket["source"]),
             }
         )
 
@@ -1165,16 +1082,20 @@ async def _fetch_split_relation_rows(
         start_year=start_year,
         end_year=end_year,
     )
-    triples = await _fetch_mappings(conn, triple_sql, {"word": word, **triple_params})
-
-    head_sql, head_params = _build_head_query(corpus, lemgram=is_lemgram, start_year=start_year, end_year=end_year)
-    heads = await _fetch_mappings(conn, head_sql, {"word": word, **head_params})
-
-    dep_sql, dep_params = _build_dep_query(corpus, lemgram=is_lemgram, start_year=start_year, end_year=end_year)
-    deps = await _fetch_mappings(conn, dep_sql, {"word": word, **dep_params})
-
+    head_sql, head_params = _build_head_or_dep_query(
+        corpus, role="head", lemgram=is_lemgram, start_year=start_year, end_year=end_year
+    )
+    dep_sql, dep_params = _build_head_or_dep_query(
+        corpus, role="dep", lemgram=is_lemgram, start_year=start_year, end_year=end_year
+    )
     rel_sql, rel_params = _build_rel_query(corpus, start_year=start_year, end_year=end_year)
-    rels = await _fetch_mappings(conn, rel_sql, rel_params)
+
+    triples, heads, deps, rels = await asyncio.gather(
+        _fetch_mappings(conn, triple_sql, {"word": word, **triple_params}),
+        _fetch_mappings(conn, head_sql, {"word": word, **head_params}),
+        _fetch_mappings(conn, dep_sql, {"word": word, **dep_params}),
+        _fetch_mappings(conn, rel_sql, rel_params),
+    )
 
     return {
         "triples": triples,
@@ -1204,47 +1125,17 @@ async def _fetch_overall_relation_rows(
         A dictionary containing relation rows and frequency maps.
     """
     sql, params = _build_overall_triples_query(corpus, lemgram=is_lemgram, min_freq=min_freq)
-    rows = await _fetch_mappings(conn, sql, {"word": word, **params})
+    triples = await _fetch_mappings(conn, sql, {"word": word, **params})
 
-    triples: list[dict[str, object]] = []
     # Maps for deduplicating head/dep/rel frequencies across rows
     head_rel_map: Counter[tuple[int, str, str]] = Counter()
     dep_rel_map: Counter[tuple[int, str, str, str]] = Counter()
     rel_map: Counter[str] = Counter()
 
-    for row in rows:
-        head_id = row["head"]
-        dep_id = row["dep"]
-        rel = row["rel"]
-        head_pos = row["head_pos"]
-        dep_pos = row["dep_pos"]
-        dep_extra = row["dep_extra"]
-        triples.append(
-            {
-                "role": row["role"],
-                "relation_id": row["relation_id"],
-                "rel": rel,
-                "head": head_id,
-                "head_string": row["head_string"],
-                "head_extra": row["head_extra"],
-                "head_pos": head_pos,
-                "dep": dep_id,
-                "dep_string": row["dep_string"],
-                "dep_extra": dep_extra,
-                "dep_pos": dep_pos,
-                "freq": row["freq"],
-                "head_rel_freq": row["head_rel_freq"],
-                "dep_rel_freq": row["dep_rel_freq"],
-                "rel_freq": row["rel_freq"],
-                "corpus": row["corpus"],
-            }
-        )
-        head_key = (head_id, head_pos, rel)
-        dep_key = (dep_id, dep_pos, dep_extra, rel)
-        # Head/dep/rel frequencies are deduplicated using maps
-        head_rel_map[head_key] = row["head_rel_freq"]
-        dep_rel_map[dep_key] = row["dep_rel_freq"]
-        rel_map[rel] = row["rel_freq"]
+    for row in triples:
+        head_rel_map[row["head"], row["head_pos"], row["rel"]] = row["head_rel_freq"]
+        dep_rel_map[row["dep"], row["dep_pos"], row["dep_extra"], row["rel"]] = row["dep_rel_freq"]
+        rel_map[row["rel"]] = row["rel_freq"]
 
     return {
         "triples": triples,
@@ -1343,7 +1234,7 @@ def _limit_rows_per_bucket(
         counters: Counter[tuple[str, str]] = Counter()
         bucket_limited: list[dict[str, object]] = []
         for row in bucket_rows:
-            counter_key = (cast(str, row["rel"]), cast(str, row["role"]))
+            counter_key = (str(row["rel"]), str(row["role"]))
             counters[counter_key] += 1
             if counters[counter_key] > max_results:
                 continue
@@ -1421,11 +1312,11 @@ async def _relations_impl(
     overall_only = not include_split
 
     result: dict[str, Any] = {}
-    corpora_rest = corpora.copy()
     corpus_results: dict[str, dict[str, Any]] = {}
     cache_prefixes: dict[str, str] = {}
     memcached_keys: dict[str, str] = {}
     cache_checksum: str | None = None
+    cached_corpora: set[str] = set()
 
     if ctx.common.cache:
         cache_checksum = utils.get_hash((word, is_lemgram, min_freq, use_split_data, start_year, end_year))
@@ -1446,8 +1337,7 @@ async def _relations_impl(
             if not expected_keys <= data.keys():
                 continue
             corpus_results[corpus_name] = data
-            if corpus_name in corpora_rest:
-                corpora_rest.remove(corpus_name)
+            cached_corpora.add(corpus_name)
 
     async with ctx.db.async_connection() as conn:
         await conn.execute(text("SET @@session.long_query_time = 1000;"))
@@ -1456,7 +1346,7 @@ async def _relations_impl(
 
         # Filter out corpora which don't exist in database
         corpora = [c for c in corpora if f"{settings.DB_WP_TABLE}_{c.upper()}{table_suffix}" in tables]
-        corpora_rest = [c for c in corpora_rest if c in corpora]
+        corpora_rest = [c for c in corpora if c not in cached_corpora]
 
         if not corpora:
             yield {"ERROR": "No word picture data available for the selected corpora."}
@@ -1594,8 +1484,8 @@ async def _relations_impl(
                 }
             )
 
-    selected_entries: list[dict[str, dict]] = []
-    selected_keys: list[tuple] = []
+    selected_entries: list[dict[str, Any]] = []
+    selected_keys: list[RelationKey] = []
 
     if overall_relation_entries:
         # We have overall entries, meaning either overall results were requested or they are needed for scoping
@@ -1607,7 +1497,7 @@ async def _relations_impl(
         )
         counters: Counter[tuple[object, str]] = Counter()
         for entry in overall_relation_entries:
-            key = (cast(str, entry["rel"]), cast(str, entry["role"]))
+            key = (entry["rel"], entry["role"])
             counters[key] += 1
             if max_results and counters[key] > max_results:
                 continue
@@ -1616,7 +1506,7 @@ async def _relations_impl(
             result["relations"] = [_relation_output(entry, measures) for entry in selected_entries]
         if not limit_per_period:
             # max_scope=overall: time results must be scoped to selected overall relations
-            selected_keys = [cast(RelationKey, entry["key"]) for entry in selected_entries]
+            selected_keys = [entry["key"] for entry in selected_entries]
     else:
         # No overall entries available
         if include_overall:
