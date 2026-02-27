@@ -67,7 +67,6 @@ async def info(
     }
 
     if ctx.common.cache:
-        cache_prefix = await utils.cache_prefix(cache)
         try:
             added = await cache.add(f"{cache_prefix}:info", result)
         except CacheError:
@@ -109,12 +108,17 @@ async def get_corpus_info(ctx: utils.CtxDep, corpora: list[str], no_combined_cac
     Returns:
         Information about the specified corpus or corpora.
     """
-    # Check if whole query is cached
+    cache = ctx.cache
+    save_cache: list[str] = []
+    combined_cache_key = ""
+
     if ctx.common.cache:
+        all_prefixes = await utils.cache_prefix(cache, ["multi", *corpora])
+
         checksum_combined = utils.get_hash((sorted(corpora),))
-        save_cache = []
-        cache = ctx.cache
-        combined_cache_key = f"{await utils.cache_prefix(cache)}:info_{checksum_combined}"
+        combined_cache_key = f"{all_prefixes['multi']}:info_{checksum_combined}"
+
+        # Check if whole query is cached
         if cached_result := await cache.get(combined_cache_key):
             if ctx.common.debug:
                 cached_result.setdefault("DEBUG", {})
@@ -129,9 +133,7 @@ async def get_corpus_info(ctx: utils.CtxDep, corpora: list[str], no_combined_cac
     cmd = []
 
     if ctx.common.cache:
-        memcached_keys = {}
-        for c in corpora:
-            memcached_keys[f"{await utils.cache_prefix(cache, c)}:info"] = c
+        memcached_keys = {f"{all_prefixes[c]}:info": c for c in corpora}
         cached_corpora = await cache.get_many(memcached_keys.keys())
 
         for key, c in memcached_keys.items():
@@ -183,8 +185,8 @@ async def get_corpus_info(ctx: utils.CtxDep, corpora: list[str], no_combined_cac
                     total_sentences += int(infoval)
 
         result["corpora"][c] = {"attrs": attrs, "info": info}
-        if ctx.common.cache and c in save_cache:
-            memcached_data[f"{await utils.cache_prefix(cache, c)}:info"] = result["corpora"][c]
+        if c in save_cache:
+            memcached_data[f"{all_prefixes[c]}:info"] = result["corpora"][c]
 
     if memcached_data:
         await cache.set_many(memcached_data)
