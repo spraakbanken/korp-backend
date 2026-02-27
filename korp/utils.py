@@ -293,7 +293,7 @@ def enforce_ctx_dependency(
         signature = inspect.signature(r.endpoint)
         p = signature.parameters.get(param_name) or signature.parameters.get(f"_{param_name}")
 
-        methods = f"[{','.join(sorted(r.methods or []))}]" or "N/A"
+        methods = f"[{','.join(sorted(r.methods or []))}]"
         where = f"{r.path:30s} {methods:12s} {r.endpoint.__module__}.{r.endpoint.__name__}"
         if p is None:
             violations.append(f"{where}\n  - missing required parameter `{param_name}: {ctx_dependency_name}`")
@@ -697,10 +697,10 @@ def sync_generator_to_dict(generator: Generator[dict, None, None]) -> dict:
     Returns:
         A single dict containing all key-value pairs from the yielded dicts.
     """
-    d = next(generator)
-    for v in generator:
-        d.update(v)
-    return d
+    result: dict = {}
+    for d in generator:
+        result.update(d)
+    return result
 
 
 async def async_generator_to_dict(generator: AsyncGenerator[dict, None]) -> dict:
@@ -725,7 +725,7 @@ def get_corpus_timestamps() -> dict[str, float]:
     Returns:
         A dictionary mapping corpus names to their modification timestamps.
     """
-    return {Path(f).name.upper(): Path(f).stat().st_mtime for f in Path(settings.CWB_REGISTRY).glob("*")}
+    return {f.name.upper(): f.stat().st_mtime for f in Path(settings.CWB_REGISTRY).glob("*")}
 
 
 def get_corpus_config_timestamps() -> tuple[dict[str, float], float, float]:
@@ -738,12 +738,11 @@ def get_corpus_config_timestamps() -> tuple[dict[str, float], float, float]:
         - The latest modification timestamp among preset config files.
     """
     corpora = {
-        Path(f).name[:-5].upper(): Path(f).stat().st_mtime
-        for f in Path(settings.CORPUS_CONFIG_DIR, "corpora").glob("*.yaml")
+        f.name[:-5].upper(): f.stat().st_mtime for f in Path(settings.CORPUS_CONFIG_DIR, "corpora").glob("*.yaml")
     }
-    modes = max([Path(f).stat().st_mtime for f in Path(settings.CORPUS_CONFIG_DIR, "modes").glob("*.yaml")] or [0])
+    modes = max((f.stat().st_mtime for f in Path(settings.CORPUS_CONFIG_DIR, "modes").glob("*.yaml")), default=0)
     presets = max(
-        [Path(f).stat().st_mtime for f in Path(settings.CORPUS_CONFIG_DIR, "attributes").glob("*/*.yaml")] or [0]
+        (f.stat().st_mtime for f in Path(settings.CORPUS_CONFIG_DIR, "attributes").glob("*/*.yaml")), default=0
     )
     return corpora, modes, presets
 
@@ -1133,11 +1132,14 @@ def make_cqp(cqp: str, within: str | None = None, cut: str | None = None, expand
     Returns:
         The combined CQP query string with options appended, and terminated with a semicolon.
     """
-    cqp_with_options = [cqp]
-    cqp_with_options.extend(
-        f"{arg[0]} {arg[1]}" for arg in (("within", within), ("cut", cut), ("expand", expand)) if arg[1]
-    )
-    return " ".join(cqp_with_options) + ";"
+    parts = [cqp]
+    if within:
+        parts.append(f"within {within}")
+    if cut:
+        parts.append(f"cut {cut}")
+    if expand:
+        parts.append(f"expand {expand}")
+    return " ".join(parts) + ";"
 
 
 def make_query(cqp: str | list[str]) -> list[str]:
@@ -1181,7 +1183,7 @@ def get_hash(values: Iterable[Any]) -> str:
     Returns:
         A SHA-256 hash of the concatenated values.
     """
-    return hashlib.sha256(bytes(";".join(v if isinstance(v, str) else str(v) for v in values), "UTF-8")).hexdigest()
+    return hashlib.sha256(";".join(v if isinstance(v, str) else str(v) for v in values).encode()).hexdigest()
 
 
 class CQPError(Exception):
@@ -1196,12 +1198,20 @@ class Namespace(SimpleNamespace):
     """Simple namespace class to hold attributes."""
 
 
+def _make_auth_context(ctx: Ctx) -> AuthContext:
+    """Create an AuthContext from a request context.
+
+    Returns:
+        An AuthContext with request and cache settings from the given context.
+    """
+    return AuthContext(request=ctx.request, cache_enabled=ctx.common.cache)
+
+
 def get_protected_corpora(ctx: Ctx) -> list[str]:
     """Return a list of corpora with restricted access."""
     authorizer = ctx.request.app.state.authorizer
     if authorizer:
-        auth_ctx = AuthContext(request=ctx.request, cache_enabled=ctx.common.cache)
-        return authorizer.get_protected_corpora(auth_ctx)
+        return authorizer.get_protected_corpora(_make_auth_context(ctx))
     return []
 
 
@@ -1219,9 +1229,8 @@ def check_authorization(corpora: Iterable[str], ctx: Ctx) -> None:
     if authorizer:
         # Split parallel corpora
         corpora = [cc for c in corpora for cc in c.split("|")]
-        auth_ctx = AuthContext(request=ctx.request, cache_enabled=ctx.common.cache)
 
-        success, unauthorized, message = authorizer.check_authorization(corpora, auth_ctx)
+        success, unauthorized, message = authorizer.check_authorization(corpora, _make_auth_context(ctx))
         if not success:
             if not message:
                 message = "You do not have access to the following corpora: {}".format(", ".join(unauthorized))
