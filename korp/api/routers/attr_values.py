@@ -60,19 +60,19 @@ async def attr_values(
     utils.check_authorization(corpus, ctx)
 
     split = split or []
-    progress_state = utils.Namespace()  # To make variables writable from nested functions
+    split_set = set(split)
     result = {"corpora": defaultdict(dict), "combined": {}}
     from_cache = set()  # Keep track of what has been read from cache
+    cache_prefixes: dict[str, str] = {}  # Reused between cache read and write phases
 
     if ctx.common.cache:
         all_cache = True
         for c in corpus:
-            cache_prefix = await utils.cache_prefix(ctx.cache, c)
+            cache_prefixes[c] = await utils.cache_prefix(ctx.cache, c)
             for attribute in attr:
                 checksum = utils.get_hash((c, attribute, split, include_count))
-                data = await ctx.cache.get(f"{cache_prefix}:attr_values_{checksum}")
+                data = await ctx.cache.get(f"{cache_prefixes[c]}:attr_values_{checksum}")
                 if data is not None:
-                    result["corpora"].setdefault(c, {})
                     result["corpora"][c][attribute] = data
                     if ctx.common.debug:
                         result.setdefault("DEBUG", {"caches_read": []})
@@ -84,7 +84,7 @@ async def attr_values(
         all_cache = False
 
     if not all_cache:
-        progress_state.progress_count = 0
+        progress_count = 0
         if incremental:
             yield {"progress_corpora": list(corpus)}
 
@@ -116,48 +116,52 @@ async def attr_values(
             await send.aclose()  # Close the original send channel
 
             async for c, attribute, lines in receive:
-                corpus_stats_dict = {}  # For include_count=True
-                corpus_stats_set = set()
-                vals_dict = {}
-                attr_list = attribute.split(">")
+                corpus_stats_dict: dict[str, int] = {}
+                corpus_stats_set: set[str] = set()
+                vals_dict: dict = {}
+                attr_parts = attribute.split(">")
+                is_nested = len(attr_parts) > 1
 
                 for line in lines:
-                    freq, val = line.lstrip().split(" ", 1)
+                    freq_str, raw_val = line.lstrip().split(" ", 1)
+                    freq = int(freq_str)
 
-                    if ">" in attribute:
-                        vals = val.split("\t")
+                    if is_nested:
+                        vals = raw_val.split("\t")
 
-                        if split:
+                        if split_set:
                             vals = [
-                                [x for x in n.split("|") if x] if attr_list[i] in split and n else [n]
-                                for i, n in enumerate(vals)
+                                [x for x in v.split("|") if x] if attr_parts[i] in split_set and v else [v]
+                                for i, v in enumerate(vals)
                             ]
                             vals_prod = itertools.product(*vals)
                         else:
                             vals_prod = [vals]
 
-                        for val in vals_prod:
+                        for combo in vals_prod:
                             if include_count:
                                 cur = vals_dict
-                                for part in val[:-1]:
+                                for part in combo[:-1]:
                                     cur = cur.setdefault(part, {})
-                                cur.setdefault(val[-1], 0)
-                                cur[val[-1]] += int(freq)
+                                cur[combo[-1]] = cur.get(combo[-1], 0) + freq
                             else:
                                 cur = vals_dict
-                                for part in val[:-2]:
+                                for part in combo[:-2]:
                                     cur = cur.setdefault(part, {})
-                                last_part = cur.setdefault(val[-2], [])
-                                last_part.append(val[-1])
+                                cur.setdefault(combo[-2], []).append(combo[-1])
                     else:
-                        vals = ([x for x in val.split("|") if x] if val else [""]) if attribute in split else [val]
-                        for val in vals:
+                        split_vals = (
+                            ([x for x in raw_val.split("|") if x] if raw_val else [""])
+                            if attribute in split_set
+                            else [raw_val]
+                        )
+                        for v in split_vals:
                             if include_count:
-                                corpus_stats_dict[val] = int(freq)
+                                corpus_stats_dict[v] = freq
                             else:
-                                corpus_stats_set.add(val)
+                                corpus_stats_set.add(v)
 
-                if ">" in attribute:
+                if is_nested:
                     result["corpora"][c][attribute] = vals_dict
                 elif include_count and corpus_stats_dict:
                     result["corpora"][c][attribute] = corpus_stats_dict
@@ -165,47 +169,25 @@ async def attr_values(
                     result["corpora"][c][attribute] = sorted(corpus_stats_set)
 
                 if incremental:
-                    yield {f"progress_{progress_state.progress_count}": c}
-                    progress_state.progress_count += 1
-
-    def merge(d1: dict, d2: dict) -> dict:
-        """Merge two attribute value dicts recursively.
-
-        Args:
-            d1: First dict.
-            d2: Second dict.
-
-        Returns:
-            Merged dict.
-        """
-        merged = deepcopy(d1)
-        for key in d2:  # noqa: PLC0206
-            if key in d1:
-                if isinstance(d1[key], dict) and isinstance(d2[key], dict):
-                    merged[key] = merge(d1[key], d2[key])
-                elif isinstance(d1[key], int):
-                    merged[key] += d2[key]
-                elif isinstance(d1[key], list):
-                    merged[key].extend(d2[key])
-                    merged[key] = sorted(set(merged[key]))
-            else:
-                merged[key] = d2[key]
-        return merged
+                    yield {f"progress_{progress_count}": c}
+                    progress_count += 1
 
     if combined:
         for c in result["corpora"]:
-            result["combined"] = merge(result["combined"], result["corpora"][c])
+            _merge_into(result["combined"], result["corpora"][c])
     else:
         del result["combined"]
 
     if ctx.common.cache and not all_cache:
         for c in corpus:
+            if c not in cache_prefixes:
+                cache_prefixes[c] = await utils.cache_prefix(ctx.cache, c)
             for attribute in attr:
                 if (c, attribute) in from_cache:
                     continue
                 checksum = utils.get_hash((c, attribute, split, include_count))
                 try:
-                    cache_key = f"{await utils.cache_prefix(ctx.cache, c)}:attr_values_{checksum}"
+                    cache_key = f"{cache_prefixes[c]}:attr_values_{checksum}"
                     await ctx.cache.add(cache_key, result["corpora"][c].get(attribute, {}))
                 except CacheError:
                     pass
@@ -219,3 +201,22 @@ async def attr_values(
         del result["corpora"]
 
     yield result
+
+
+def _merge_into(target: dict, source: dict) -> None:
+    """Merge source attribute value dict into target in place.
+
+    Args:
+        target: Target dict (modified in-place).
+        source: Source dict to merge from.
+    """
+    for key, value in source.items():
+        if key in target:
+            if isinstance(target[key], dict) and isinstance(value, dict):
+                _merge_into(target[key], value)
+            elif isinstance(target[key], int):
+                target[key] += value
+            elif isinstance(target[key], list):
+                target[key] = sorted(set(target[key] + value))
+        else:
+            target[key] = deepcopy(value)
