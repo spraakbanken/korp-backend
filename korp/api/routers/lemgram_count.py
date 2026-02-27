@@ -47,28 +47,28 @@ async def lemgram_count(
     corpora = corpus or []
     utils.check_authorization(corpora, ctx)
 
-    lemgrams_string = ", ".join(f"'{utils.sql_escape(l)}'" for l in set(lemgram))
+    bind_params: dict[str, str] = {}
+    lemgram_placeholders = ", ".join(f":lemgram_{i}" for i in range(len(lemgram)))
+    for i, l in enumerate(lemgram):
+        bind_params[f"lemgram_{i}"] = l
 
-    corpora_sql = (
-        " AND corpus IN ({})".format(", ".join(f"'{utils.sql_escape(c)}'" for c in corpora)) if corpora else ""
-    )
+    corpora_sql = ""
+    if corpora:
+        corpus_placeholders = ", ".join(f":corpus_{i}" for i in range(len(corpora)))
+        for i, c in enumerate(corpora):
+            bind_params[f"corpus_{i}"] = c
+        corpora_sql = f" AND corpus IN ({corpus_placeholders})"
 
-    sql = f"""
-        SELECT
-            lemgram, SUM(freq) AS freq
-        FROM
-            lemgram_index
-        WHERE
-            lemgram IN ({lemgrams_string})
+    sql = text(f"""
+        SELECT lemgram, SUM(freq) AS freq
+        FROM lemgram_index
+        WHERE lemgram IN ({lemgram_placeholders})
             {corpora_sql}
-        GROUP BY
-            lemgram;
-    """
+        GROUP BY lemgram
+    """)
 
-    result = {}
     async with ctx.db.async_connection() as conn:
-        query_result = await conn.execute(text(sql))
-        for row in query_result.mappings():
-            result[row["lemgram"]] = int(row["freq"])
+        query_result = await conn.execute(sql, bind_params)
+        result = {row["lemgram"]: int(row["freq"]) for row in query_result.mappings()}
 
     yield result
