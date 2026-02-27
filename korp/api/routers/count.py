@@ -1,6 +1,5 @@
 """Routes for counting word/attribute occurrences in corpora."""
 
-import asyncio
 import dataclasses
 import itertools
 import re
@@ -106,8 +105,8 @@ class CountParameters:
     ignore_case: set[str] = dataclasses.field(default_factory=set)
     simple: bool = False
     relative_to_struct: list[tuple[str, bool]] = dataclasses.field(default_factory=list)
-    split: list[str] = dataclasses.field(default_factory=list)
-    strip_pointer: list[str] = dataclasses.field(default_factory=list)
+    split: set[str] = dataclasses.field(default_factory=set)
+    strip_pointer: set[str] = dataclasses.field(default_factory=set)
     top: dict[str, int] = dataclasses.field(default_factory=dict)
     expand_prequeries: bool = True
     start: int = 0
@@ -194,8 +193,8 @@ def parse_parameters(
         ignore_case=ignore_case_set,
         simple=simple,
         relative_to_struct=relative_to,
-        split=split or [],
-        strip_pointer=strip_pointer or [],
+        split=set(split) if split else set(),
+        strip_pointer=set(strip_pointer) if strip_pointer else set(),
         top=tops,
         expand_prequeries=expand_prequeries,
         start=start,
@@ -223,8 +222,8 @@ def _strip_pointer(tok: str) -> str:
 def _parse_ngram_groups(
     ngram_groups: list[str],
     group_by: list[tuple[str, bool]],
-    split: list[str],
-    strip_pointer: list[str],
+    split: set[str],
+    strip_pointer: set[str],
     top: dict[str, int],
 ) -> list[tuple[tuple[str, ...], ...]]:
     """Parse ngram groups into expanded ngram tuples.
@@ -296,27 +295,43 @@ def _accumulate_ngram_stats(
         relative_to_freqs: Pre-computed frequencies for relative calculation.
         corpus: Current corpus name.
     """
+    cs_rows = corpus_stats[query_no]["rows"]
+    cs_sums = corpus_stats[query_no]["sums"]
+    ts_rows = total_stats[query_no]["rows"]
+    ts_sums = total_stats[query_no]["sums"]
+
     for ngram in cross:
-        corpus_stats[query_no]["rows"][ngram]["absolute"] += freq
-        corpus_stats[query_no]["sums"]["absolute"] += freq
-        total_stats[query_no]["rows"][ngram]["absolute"] += freq
-        total_stats[query_no]["sums"]["absolute"] += freq
+        cs_rows[ngram]["absolute"] += freq
+        cs_sums["absolute"] += freq
+        ts_rows[ngram]["absolute"] += freq
+        ts_sums["absolute"] += freq
 
         if relative_to_struct and relative_to_freqs:
             # Only use the first token of each relative_to_struct attribute
             relativeto_ngram = tuple(ngram[pos][0:1] for pos in relative_to_pos)
-            corpus_stats[query_no]["rows"][ngram]["relative"] += (
-                freq / float(relative_to_freqs["corpora"][corpus][relativeto_ngram]) * RELATIVE_MULTIPLIER
-            )
-            corpus_stats[query_no]["sums"]["relative"] += (
-                freq / float(relative_to_freqs["corpora"][corpus][relativeto_ngram]) * RELATIVE_MULTIPLIER
-            )
-            total_stats[query_no]["rows"][ngram]["relative"] += (
-                freq / float(relative_to_freqs["combined"][relativeto_ngram]) * RELATIVE_MULTIPLIER
+            corpus_rel = freq / relative_to_freqs["corpora"][corpus][relativeto_ngram] * RELATIVE_MULTIPLIER
+            cs_rows[ngram]["relative"] += corpus_rel
+            cs_sums["relative"] += corpus_rel
+            ts_rows[ngram]["relative"] += (
+                freq / relative_to_freqs["combined"][relativeto_ngram] * RELATIVE_MULTIPLIER
             )
         else:
-            corpus_stats[query_no]["rows"][ngram]["relative"] += freq / float(corpus_size) * RELATIVE_MULTIPLIER
-            corpus_stats[query_no]["sums"]["relative"] += freq / float(corpus_size) * RELATIVE_MULTIPLIER
+            rel = freq / corpus_size * RELATIVE_MULTIPLIER
+            cs_rows[ngram]["relative"] += rel
+            cs_sums["relative"] += rel
+
+
+def _rows_to_list(rows: dict, group_by: list[tuple[str, bool]]) -> list[dict]:
+    """Convert ngram-keyed row dict to a list of result dicts.
+
+    Args:
+        rows: Dict mapping ngram tuples to stat dicts (absolute/relative).
+        group_by: List of (attribute, is_struct) tuples.
+
+    Returns:
+        List of dicts with "value" key and stat values.
+    """
+    return [{"value": {key[0]: ngram[i] for i, key in enumerate(group_by)}, **vals} for ngram, vals in rows.items()]
 
 
 def _finalize_count_results(
@@ -366,12 +381,9 @@ def _finalize_count_results(
                 )
 
         for c in corpora:
-            new_list = []
-            for ngram, vals in result["corpora"][c][query_no]["rows"].items():
-                row = {"value": {key[0]: ngram[i] for i, key in enumerate(group_by)}}
-                row.update(vals)
-                new_list.append(row)
-            result["corpora"][c][query_no]["rows"] = new_list
+            result["corpora"][c][query_no]["rows"] = _rows_to_list(
+                result["corpora"][c][query_no]["rows"], group_by
+            )
 
         total_stats[query_no]["sums"]["relative"] = (
             total_stats[query_no]["sums"]["absolute"] / float(total_size) * RELATIVE_MULTIPLIER
@@ -382,12 +394,7 @@ def _finalize_count_results(
         if subcqp and query_no > 0:
             total_stats[query_no]["cqp"] = subcqp[query_no - 1]
 
-        new_list = []
-        for ngram, vals in total_stats[query_no]["rows"].items():
-            row = {"value": {key[0]: ngram[i] for i, key in enumerate(group_by)}}
-            row.update(vals)
-            new_list.append(row)
-        total_stats[query_no]["rows"] = new_list
+        total_stats[query_no]["rows"] = _rows_to_list(total_stats[query_no]["rows"], group_by)
 
 
 async def perform_count(
@@ -428,7 +435,7 @@ async def perform_count(
 
     result: dict[str, Any] = {"corpora": {}}
     debug = {}
-    zero_hits = []
+    zero_hits: set[str] = set()
     read_from_cache = 0
     count_state = utils.Namespace()
     count_state.total_size = 0
@@ -448,7 +455,7 @@ async def perform_count(
             nr_hits = cached_size[key][0]
             read_from_cache += 1
             if nr_hits == 0:
-                zero_hits.append(memcached_keys[key])
+                zero_hits.add(memcached_keys[key])
                 count_state.total_size += cached_size[key][1]
 
         if ctx.common.debug:
@@ -493,6 +500,9 @@ async def perform_count(
 
     if abort_signal and abort_signal.is_set():
         return
+
+    # Calculate which positions in group_by correspond to relative_to_struct for later use in workers
+    relative_to_pos = [i for i, g in enumerate(group_by) if relative_to_struct and g in relative_to_struct]
 
     limiter = CapacityLimiter(settings.PARALLEL_THREADS)
     send, receive = anyio.create_memory_object_stream(0)
@@ -552,9 +562,6 @@ async def perform_count(
                 }
                 for _ in range(len(subcqp) + 1)
             ]
-
-            # Find which group_by positions are used for relative_to_struct
-            relative_to_pos = [i for i, g in enumerate(group_by) if relative_to_struct and g in relative_to_struct]
 
             query_no = 0
             for line in lines:
@@ -850,18 +857,15 @@ async def count_time(
     if df and dt:
         max_points = 3600
 
-        if granularity == granularity.year:
-            add = relativedelta(years=max_points)
-        elif granularity == granularity.month:
-            add = relativedelta(months=max_points)
-        elif granularity == granularity.day:
-            add = relativedelta(days=max_points)
-        elif granularity == granularity.hour:
-            add = relativedelta(hours=max_points)
-        elif granularity == granularity.minute:
-            add = relativedelta(minutes=max_points)
-        elif granularity == granularity.second:
-            add = relativedelta(seconds=max_points)
+        granularity_units = {
+            granularity.year: "years",
+            granularity.month: "months",
+            granularity.day: "days",
+            granularity.hour: "hours",
+            granularity.minute: "minutes",
+            granularity.second: "seconds",
+        }
+        add = relativedelta(**{granularity_units[granularity]: max_points})  # type: ignore
 
         if dt > (df + add):
             raise ValueError(
@@ -900,8 +904,6 @@ async def count_time(
 
         yield result
         return
-
-    corpora_sizes = {}
 
     ns = utils.Namespace()
     total_rows = [[] for _ in range(len(count_params.subcqp) + 1)]
@@ -959,7 +961,6 @@ async def count_time(
         await send.aclose()  # Close the original send channel
 
         async for c, lines, corpus_size in receive:
-            corpora_sizes[c] = corpus_size
             ns.total_size += corpus_size
 
             query_no = 0
@@ -1360,12 +1361,12 @@ def count_query_worker_simple(
     if ignore_case:
         ic_index = [i for i, g in enumerate(group_by) if g[0] in ignore_case]
 
-    for i in range(len(lines)):
-        c, v = lines[i].split("\t", 1)
+    for i, line in enumerate(lines):
+        c, v = line.split("\t", 1)
         nr_hits += int(c)
 
         if ic_index:
-            v = "\t".join(vv.lower() if i in ic_index else vv for i, vv in enumerate(v.split("\t")))
+            v = "\t".join(vv.lower() if j in ic_index else vv for j, vv in enumerate(v.split("\t")))
             new_lines[v] = new_lines.get(v, 0) + int(c)
         else:
             # Convert result to the same format as the regular CQP count
