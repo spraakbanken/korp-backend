@@ -7,7 +7,7 @@ import os
 import random
 import uuid
 import zlib
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from collections.abc import AsyncGenerator, Iterable, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, cast
 
 import anyio
+import anyio.to_thread
+from anyio import CapacityLimiter
+from fastapi import APIRouter, Query
 from pydantic import BeforeValidator
 from pydantic.json_schema import SkipJsonSchema
 
@@ -22,9 +25,6 @@ from korp.api import params
 
 if TYPE_CHECKING:
     import anyio.abc
-import anyio.to_thread
-from anyio import CapacityLimiter
-from fastapi import APIRouter, Query
 
 from korp import utils
 from korp.config import settings
@@ -176,10 +176,7 @@ def parse_parameters(
     show_set = set(show)
     show_set.add("word")  # Always include word
 
-    show_structs = show_struct or []
-    if isinstance(show_structs, str):
-        show_structs = show_structs.split(utils.QUERY_DELIM)
-    show_structs = set(show_structs)
+    show_structs = set(show_struct) if show_struct else set()
 
     if settings.MAX_KWIC_ROWS and end - start >= settings.MAX_KWIC_ROWS:
         raise ValueError(f"At most {settings.MAX_KWIC_ROWS} KWIC rows can be returned per call.")
@@ -275,8 +272,7 @@ async def perform_query(
     if ctx.common.debug:
         debug["checksum"] = checksum
 
-    query_state = utils.Namespace()
-    query_state.total_hits = 0
+    total_hits = 0
     corpus_hit_stats = {}
 
     cached_corpus_hit_stats = {}  # Information about which corpora have how many hits, either from query_data or cache
@@ -313,8 +309,8 @@ async def perform_query(
         for key in cached_corpus_hits:
             cached_corpus_hit_stats[memcached_keys[key]] = cached_corpus_hits[key]
 
-    query_state.start_local = start
-    query_state.end_local = end
+    start_local = start
+    end_local = end
 
     if cached_corpus_hit_stats:
         if ctx.common.debug:
@@ -330,10 +326,10 @@ async def perform_query(
         # We have cached_corpus_hit_stats available for all corpora, so calculate which corpora need to be queried and
         # then query them in parallel
         corpora_hits = which_hits(corpora, cached_corpus_hit_stats, start, end)
-        query_state.total_hits = sum(cached_corpus_hit_stats.values())
+        total_hits = sum(cached_corpus_hit_stats.values())
         corpus_hit_stats = cached_corpus_hit_stats
         corpora_kwics = {}
-        query_state.progress_count = 0
+        progress_count = 0
 
         if len(corpora_hits) > 0:
             if incremental:
@@ -379,12 +375,12 @@ async def perform_query(
                     corpora_kwics[corpus] = kwic
                     if incremental:
                         yield {
-                            f"progress_{query_state.progress_count}": {
+                            f"progress_{progress_count}": {
                                 "corpus": corpus,
                                 "hits": corpora_hits[corpus][1] - corpora_hits[corpus][0] + 1,
                             }
                         }
-                        query_state.progress_count += 1
+                        progress_count += 1
 
             for corpus in corpora:
                 if corpus in corpora_hits:
@@ -395,20 +391,20 @@ async def perform_query(
         # in parallel to get number of hits.
         if incremental:
             yield {"progress_corpora": corpora}
-        query_state.progress_count = 0
-        query_state.rest_corpora = []
+        progress_count = 0
+        rest_corpora: list[str] = []
 
         # Serial until we've got all the requested rows
         for i, corpus in enumerate(corpora):
             if abort_signal and abort_signal.is_set():
                 return
-            if query_state.end_local < 0:
-                query_state.rest_corpora = corpora[i:]
+            if end_local < 0:
+                rest_corpora = corpora[i:]
                 break
             skip_corpus = False
             if corpus in cached_corpus_hit_stats:
                 nr_hits = cached_corpus_hit_stats[corpus]
-                if nr_hits - 1 < query_state.start_local:
+                if nr_hits - 1 < start_local:
                     kwic = []
                     skip_corpus = True
 
@@ -418,8 +414,8 @@ async def perform_query(
                         query_and_parse,
                         query_params,
                         corpus,
-                        start=query_state.start_local,
-                        end=query_state.end_local,
+                        start=start_local,
+                        end=end_local,
                         cwb=ctx.cwb,
                         use_cache=use_cache,
                         abort_signal=abort_signal,
@@ -427,29 +423,29 @@ async def perform_query(
                 )
 
             corpus_hit_stats[corpus] = nr_hits
-            query_state.total_hits += nr_hits
+            total_hits += nr_hits
 
             # Calculate which hits from next corpus we need, if any
-            query_state.start_local -= nr_hits
-            query_state.end_local -= nr_hits
-            query_state.start_local = max(query_state.start_local, 0)
+            start_local -= nr_hits
+            end_local -= nr_hits
+            start_local = max(start_local, 0)
 
             result["kwic"].extend(kwic)
 
             if incremental:
-                yield {f"progress_{query_state.progress_count}": {"corpus": corpus, "hits": nr_hits}}
-                query_state.progress_count += 1
+                yield {f"progress_{progress_count}": {"corpus": corpus, "hits": nr_hits}}
+                progress_count += 1
 
         if incremental:
             yield result
             result = {}
 
-        if query_state.rest_corpora:
+        if rest_corpora:
             if cached_corpus_hit_stats:
-                for corpus in query_state.rest_corpora:
+                for corpus in rest_corpora:
                     if corpus in cached_corpus_hit_stats:
                         corpus_hit_stats[corpus] = cached_corpus_hit_stats[corpus]
-                        query_state.total_hits += cached_corpus_hit_stats[corpus]
+                        total_hits += cached_corpus_hit_stats[corpus]
 
             limiter = CapacityLimiter(settings.PARALLEL_THREADS)
             send, receive = anyio.create_memory_object_stream(0)
@@ -479,7 +475,7 @@ async def perform_query(
                     await send_channel.send((corpus, nr_hits))
 
             async with anyio.create_task_group() as tg:
-                for corpus in query_state.rest_corpora:
+                for corpus in rest_corpora:
                     if corpus not in cached_corpus_hit_stats:
                         tg.start_soon(_worker, corpus, send.clone())
 
@@ -490,15 +486,15 @@ async def perform_query(
                         tg.cancel_scope.cancel()
                         return
                     corpus_hit_stats[corpus] = nr_hits
-                    query_state.total_hits += nr_hits
+                    total_hits += nr_hits
                     if incremental:
-                        yield {f"progress_{query_state.progress_count}": {"corpus": corpus, "hits": nr_hits}}
-                        query_state.progress_count += 1
+                        yield {f"progress_{progress_count}": {"corpus": corpus, "hits": nr_hits}}
+                        progress_count += 1
 
     if ctx.common.debug:
         debug["cqp"] = cqp
 
-    result["hits"] = query_state.total_hits
+    result["hits"] = total_hits
     result["corpus_hits"] = corpus_hit_stats
     result["corpus_order"] = corpora
     result["query_data"] = (
@@ -689,13 +685,12 @@ def query_corpus(
         cache_query = f"query_data_{checksum}"
         cache_query_temp = cache_query + "_" + unique_id
 
-        cache_filename = Path(cache_dir) / f"{corpus.split('|', 1)[0]}:query_data_{checksum}"
+        corpus_base = corpus.split("|", 1)[0]
+        cache_filename = Path(cache_dir) / f"{corpus_base}:query_data_{checksum}"
         cache_filename_temp = cache_filename.with_name(cache_filename.name + "_" + unique_id)
 
         with memcached.get_client() as mc:
-            cache_size_key = "{}:query_size_{}".format(
-                utils.cache_prefix_sync(mc, corpus.split("|", maxsplit=1)[0]), checksum
-            )
+            cache_size_key = f"{utils.cache_prefix_sync(mc, corpus_base)}:query_size_{checksum}"
             cache_hits = mc.get(cache_size_key)
         is_cached = cache_hits is not None and cache_filename.is_file()
         cached_no_hits = cache_hits == 0
@@ -755,9 +750,9 @@ def query_corpus(
     cmd = []
 
     if use_cache:
-        cmd += [f'set DataDirectory "{cache_dir}";']
+        cmd.append(f'set DataDirectory "{cache_dir}";')
 
-    cmd += [f"{corpus};"]
+    cmd.append(f"{corpus};")
 
     # This prints the attributes and their relative order:
     cmd += cwb.show_attributes()
@@ -767,7 +762,7 @@ def query_corpus(
     if is_cached:
         # This exact query has been done before. Read corpus positions from cache.
         if not cached_no_hits:
-            cmd += [f"Last = {cache_query};"]
+            cmd.append(f"Last = {cache_query};")
             # Touch cache file to delay its removal
             os.utime(cache_filename)
     else:
@@ -790,43 +785,43 @@ def query_corpus(
                 cmd += utils.make_query(utils.make_cqp(c, **cqpparams_temp))
 
             if pre_query:
-                cmd += ["Last;"]
+                cmd.append("Last;")
 
     if use_cache and cached_no_hits:
         # Print EOL if no hits
-        cmd += [".EOL.;"]
+        cmd.append(".EOL.;")
     else:
         # This prints the size of the query (i.e., the number of results):
-        cmd += ["size Last;"]
+        cmd.append("size Last;")
 
     if use_cache and not is_cached:
-        cmd += [f"{cache_query_temp} = Last; save {cache_query_temp};"]
+        cmd.append(f"{cache_query_temp} = Last; save {cache_query_temp};")
 
     if not no_results and not (use_cache and cached_no_hits):
         if free_search and retcode == utils.QueryOptimizeResult.SUCCESS:
             tokens, _ = utils.parse_cqp(cqp[-1])
-            cmd += ["Last;"]
-            cmd += [f"cut {start} {end};"]
+            cmd.append("Last;")
+            cmd.append(f"cut {start} {end};")
             cmd += utils.make_query(utils.make_cqp(f"({' | '.join(set(tokens))})", **cqpparams))
 
-        cmd += [f"show +{' +'.join(show)};"]
+        cmd.append(f"show +{' +'.join(show)};")
         if len(context) == 1:
-            cmd += [f"set Context {context[0]};"]
+            cmd.append(f"set Context {context[0]};")
         else:
-            cmd += [f"set LeftContext {context[0]};"]
-            cmd += [f"set RightContext {context[1]};"]
-        cmd += [f"set LeftKWICDelim '{utils.LEFT_DELIM} '; set RightKWICDelim ' {utils.RIGHT_DELIM}';"]
+            cmd.append(f"set LeftContext {context[0]};")
+            cmd.append(f"set RightContext {context[1]};")
+        cmd.append(f"set LeftKWICDelim '{utils.LEFT_DELIM} '; set RightKWICDelim ' {utils.RIGHT_DELIM}';")
         if show_structs:
-            cmd += [f"set PrintStructures '{', '.join(show_structs)}';"]
-        cmd += ["set ExternalSort yes;"]
+            cmd.append(f"set PrintStructures '{', '.join(show_structs)}';")
+        cmd.append("set ExternalSort yes;")
         cmd += sortcmd
         if free_search and retcode == utils.QueryOptimizeResult.SUCCESS:
             # The results are already cut to the right range, so print all of them
-            cmd += ["cat Last;"]
+            cmd.append("cat Last;")
         else:
-            cmd += [f"cat Last {start} {end};"]
+            cmd.append(f"cat Last {start} {end};")
 
-    cmd += ["exit;"]
+    cmd.append("exit;")
 
     # Then we call the CQP binary, and read the results
     lines = cwb.run_cqp(cmd, attr_ignore=True, abort_signal=abort_signal)
@@ -875,7 +870,7 @@ def _parse_line_header(line: str) -> tuple[str | None, int | None, str]:
         Otherwise, aligned_corpus is None and position contains the match position.
     """
     header, remainder = line.split(":", 1)
-    if header[:3] == "-->":
+    if header.startswith("-->"):
         # For aligned corpora, every other line is the aligned result
         return header[3:], None, remainder
     # This is the result row for the query corpus
@@ -929,8 +924,6 @@ def _parse_line_structs(line: str, ls_attrs: set[str]) -> tuple[dict[str, str | 
 class _TokenParseState:
     """State maintained while parsing tokens from a concordance line."""
 
-    match_start: int | None = None
-    match_end: int | None = None
     struct: str | None = None
     struct_value: list[str] = dataclasses.field(default_factory=list)
     structs: dict = dataclasses.field(default_factory=dict)
@@ -968,7 +961,7 @@ def _parse_tokens(
 
             struct_v, word = word.split(">", 1)
             struct_tag, struct_attr = state.struct.split("_", 1)
-            state.structs.setdefault("open", OrderedDict()).setdefault(struct_tag, {})
+            state.structs.setdefault("open", {}).setdefault(struct_tag, {})
             state.structs["open"][struct_tag][struct_attr] = " ".join([*state.struct_value, struct_v])
             state.struct = None
             state.struct_value = []
@@ -991,7 +984,7 @@ def _parse_tokens(
             if ">" in word and word[1 : word.find(">")] in s_attrs:
                 # We have found a structural attribute without a value (<s>)
                 struct_name, word = word[1:].split(">", 1)
-                state.structs.setdefault("open", OrderedDict()).setdefault(struct_name, {})
+                state.structs.setdefault("open", {}).setdefault(struct_name, {})
             else:
                 # What we've found is not a structural attribute
                 break
@@ -1018,9 +1011,9 @@ def _parse_tokens(
             attr: utils.translate_undef(val) for (attr, val) in zip(p_attrs, values, strict=True)
         }
         if state.structs:
-            # Convert OrderedDict into list
+            # Convert dict into list
             if "open" in state.structs:
-                state.structs["open"] = [{k: state.structs["open"][k]} for k in state.structs["open"]]
+                state.structs["open"] = [{k: v} for k, v in state.structs["open"].items()]
             token["structs"] = state.structs
             state.structs = {}
         tokens.append(token)
