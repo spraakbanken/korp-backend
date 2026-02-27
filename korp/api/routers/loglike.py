@@ -1,5 +1,6 @@
 """Router for log-likelihood comparison."""
 
+import asyncio
 import dataclasses
 import math
 from collections import defaultdict
@@ -88,20 +89,19 @@ async def loglike(
 
     same_cqp = set1_cqp == set2_cqp
 
-    def expected(total: float, wordtotal: float, sumtotal: float) -> float:
-        """Calculate expected frequency.
-
-        The expectation is that the words are uniformly distributed over the corpora.
+    def _make_freq_key(value: dict) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        """Create a hashable frequency key from a count result row's value dict.
 
         Args:
-            total: Total word count in the corpus.
-            wordtotal: Total count of the word in both corpora.
-            sumtotal: Total word count in both corpora.
+            value: A dict mapping attribute names to their values.
 
         Returns:
-            Expected frequency of the word in the corpus.
+            A sorted tuple of (attr_name, values_tuple) pairs.
         """
-        return wordtotal * (float(total) / sumtotal)
+        return tuple(
+            (k, v if isinstance(v, tuple) else (v,))
+            for k, v in sorted(value.items())
+        )
 
     def compute_loglike(wf1: int, tot1: int, wf2: int, tot2: int) -> float:
         """Compute log-likelihood for a single pair.
@@ -115,8 +115,12 @@ async def loglike(
         Returns:
             Log-likelihood value.
         """
-        e1 = expected(tot1, wf1 + wf2, tot1 + tot2)
-        e2 = expected(tot2, wf1 + wf2, tot1 + tot2)
+        # Expected frequencies
+        wf_total = wf1 + wf2
+        tot_total = tot1 + tot2
+        e1 = wf_total * (tot1 / tot_total)
+        e2 = wf_total * (tot2 / tot_total)
+
         (l1, l2) = (0, 0)
         if wf1 > 0:
             l1 = wf1 * math.log(wf1 / e1)
@@ -126,7 +130,7 @@ async def loglike(
         return round(loglike, 2)
 
     def compute_list(d1: dict, tot1: int, ref: dict, reftot: int) -> list[tuple[float, str]]:
-        """Compute log-likelyhood for lists.
+        """Compute log-likelihood for lists.
 
         Args:
             d1: Word frequency dictionary for set 1.
@@ -137,12 +141,11 @@ async def loglike(
         Returns:
             List of tuples (log-likelihood, word), sorted by log-likelihood descending.
         """
-        result = []
-        # Get all words in either set
-        all_w = set(d1.keys()).union(set(ref.keys()))
-        for w in all_w:
-            ll = compute_loglike(d1.get(w, 0), tot1, ref.get(w, 0), reftot)
-            result.append((ll, w))
+        all_words = d1.keys() | ref.keys()
+        result = [
+            (compute_loglike(d1.get(w, 0), tot1, ref.get(w, 0), reftot), w)
+            for w in all_words
+        ]
         result.sort(reverse=True)
         return result
 
@@ -150,51 +153,43 @@ async def loglike(
         ll_list: list[tuple[float, str]],
         count: int,
         sets: list[dict],
-    ) -> tuple[list[tuple[float, str]], float, float, float]:
-        """Calculate max, min, average, and truncate word list.
+    ) -> tuple[list[tuple[float, str]], float]:
+        """Calculate average and truncate word list.
+
+        Words more prominent in set 1 get a negated log-likelihood value.
 
         Args:
             ll_list: List of tuples (log-likelihood, word).
-            count: Maximum number of words to include from each set.
+            count: Maximum number of words to include from each set. 0 means no limit.
             sets: List of two dictionaries with 'total' and 'freq' keys for each set.
 
         Returns:
             A tuple containing:
                 - Truncated list of tuples (log-likelihood, word).
                 - Average log-likelihood.
-                - Minimum log-likelihood.
-                - Maximum log-likelihood.
         """
-        tot = len(ll_list)
         new_list = []
-
         set1count, set2count = 0, 0
-        for ll_w in ll_list:
-            ll, w = ll_w
 
-            if (sets[0]["freq"].get(w) and not sets[1]["freq"].get(w)) or (
-                sets[0]["freq"].get(w)
-                and (sets[0]["freq"].get(w, 0) / (sets[0]["total"] * 1.0))
-                > (sets[1]["freq"].get(w, 0) / (sets[1]["total"] * 1.0))
-            ):
+        for ll, w in ll_list:
+            freq1 = sets[0]["freq"].get(w, 0)
+            freq2 = sets[1]["freq"].get(w, 0)
+            in_set1 = freq1 and (not freq2 or freq1 / sets[0]["total"] > freq2 / sets[1]["total"])
+
+            if in_set1:
                 set1count += 1
-                if set1count <= count or not count:
-                    new_list.append((ll * -1, w))
+                if not count or set1count <= count:
+                    new_list.append((-ll, w))
             else:
                 set2count += 1
-                if set2count <= count or not count:
+                if not count or set2count <= count:
                     new_list.append((ll, w))
 
-            if count and (set1count >= count and set2count >= count):
+            if count and set1count >= count and set2count >= count:
                 break
 
-        nums = [ll for (ll, _) in ll_list]
-        return (
-            new_list,
-            round(sum(nums) / float(tot), 2) if tot else 0.0,
-            min(nums) if nums else 0.0,
-            max(nums) if nums else 0.0,
-        )
+        avg = round(sum(ll for ll, _ in ll_list) / len(ll_list), 2) if ll_list else 0.0
+        return new_list, avg
 
     result = {}
 
@@ -210,22 +205,12 @@ async def loglike(
                 sets[i]["total"] += count_result["corpora"][corpus]["sums"]["absolute"]
                 if len(cset) == 1:
                     sets[i]["freq"] = {
-                        tuple(
-                            (y[0], y[1] if isinstance(y[1], tuple) else (y[1],)) for y in sorted(x["value"].items())
-                        ): x["absolute"]
+                        _make_freq_key(x["value"]): x["absolute"]
                         for x in count_result["corpora"][corpus]["rows"]
                     }
                 else:
-                    for w, f in (
-                        (
-                            tuple(
-                                (y[0], y[1] if isinstance(y[1], tuple) else (y[1],)) for y in sorted(x["value"].items())
-                            ),
-                            x["absolute"],
-                        )
-                        for x in count_result["corpora"][corpus]["rows"]
-                    ):
-                        sets[i]["freq"][w] += f
+                    for x in count_result["corpora"][corpus]["rows"]:
+                        sets[i]["freq"][_make_freq_key(x["value"])] += x["absolute"]
 
     else:
         params_2 = dataclasses.replace(params)
@@ -233,23 +218,21 @@ async def loglike(
         params.cqp = [set1_cqp]
         params_2.corpora = list(set2_corpora)
         params_2.cqp = [set2_cqp]
-        count_result = [
-            await utils.async_generator_to_dict(count.perform_count(params, ctx, abort_signal)),
-            await utils.async_generator_to_dict(count.perform_count(params_2, ctx, abort_signal)),
-        ]
+        count_result_1, count_result_2 = await asyncio.gather(
+            utils.async_generator_to_dict(count.perform_count(params, ctx, abort_signal)),
+            utils.async_generator_to_dict(count.perform_count(params_2, ctx, abort_signal)),
+        )
 
         sets = [{}, {}]
-        for i, res in enumerate(count_result):
+        for i, res in enumerate((count_result_1, count_result_2)):
             sets[i]["total"] = res["combined"]["sums"]["absolute"]
             sets[i]["freq"] = {
-                tuple((y[0], y[1] if isinstance(y[1], tuple) else (y[1],)) for y in sorted(row["value"].items())): row[
-                    "absolute"
-                ]
+                _make_freq_key(row["value"]): row["absolute"]
                 for row in res["combined"]["rows"]
             }
 
     ll_list = compute_list(sets[0]["freq"], sets[0]["total"], sets[1]["freq"], sets[1]["total"])
-    (ws, avg, _mi, _ma) = compute_ll_stats(ll_list, max_results, sets)
+    ws, avg = compute_ll_stats(ll_list, max_results, sets)
 
     result["loglike"] = {}
     result["average"] = avg
