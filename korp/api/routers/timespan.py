@@ -1,10 +1,18 @@
 """Router for timespan information."""
 
+import bisect
+import functools
 import itertools
 from collections import defaultdict
 from collections.abc import AsyncIterator, Iterable, Mapping
+from dataclasses import dataclass
+from logging import getLogger
+from operator import itemgetter
+from time import perf_counter
 from typing import Annotated, Any
 
+import anyio.to_process
+import anyio.to_thread
 from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Query
 from sqlalchemy import text
@@ -12,9 +20,75 @@ from sqlalchemy import text
 from korp import utils
 from korp.api import params
 from korp.api.params import GranularityValues
+from korp.config import settings
 from korp.memcached import CacheError
 
 router = APIRouter(tags=["Statistics"])
+logger = getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _GranularityConfig:
+    """Precomputed configuration for a single granularity level."""
+
+    sql_left_len: int
+    """Number of characters to keep with SQL LEFT() (includes separators, e.g. 'YYYY-MM' = 7)."""
+    digit_len: int
+    """Number of digits in the shortened date string (e.g. 'YYYYMM' = 6)."""
+    date_fmt: str
+    """strftime format for the granularity level."""
+    delta: relativedelta
+    """One unit of this granularity as a relativedelta."""
+    uses_date_table: bool
+    """Whether to use the 'timedata_date' table (True) or 'timedata' (False)."""
+
+
+_GRANULARITY: dict[GranularityValues, _GranularityConfig] = {
+    GranularityValues.year: _GranularityConfig(4, 4, "%Y", relativedelta(years=1), True),
+    GranularityValues.month: _GranularityConfig(7, 6, "%Y%m", relativedelta(months=1), True),
+    GranularityValues.day: _GranularityConfig(10, 8, "%Y%m%d", relativedelta(days=1), True),
+    GranularityValues.hour: _GranularityConfig(13, 10, "%Y%m%d%H", relativedelta(hours=1), False),
+    GranularityValues.minute: _GranularityConfig(16, 12, "%Y%m%d%H%M", relativedelta(minutes=1), False),
+    GranularityValues.second: _GranularityConfig(19, 14, "%Y%m%d%H%M%S", relativedelta(seconds=1), False),
+}
+
+
+def _digits_only(value: Any) -> str:
+    """Extract only digit characters from a value.
+
+    Returns an empty string if the value is falsy or contains only zeros.
+
+    Returns:
+        A string containing only the digit characters, or an empty string.
+    """
+    if not value:
+        return ""
+    result = "".join(c for c in str(value) if c.isdigit())
+    if not result or not result.strip("0"):
+        return ""
+    return result
+
+
+@functools.lru_cache(maxsize=4096)
+def _adjust_date(date_str: str, granularity: GranularityValues, *, subtract: bool = False) -> int:
+    """Adjust a date by adding or subtracting one granularity unit.
+
+    Args:
+        date_str: The date string (digits only).
+        granularity: The granularity level determining the delta and format.
+        subtract: If True, subtract the delta; otherwise add it.
+
+    Returns:
+        The adjusted date as an integer.
+    """
+    g_config = _GRANULARITY[granularity]
+    padded = "0" + date_str if len(date_str) % 2 else date_str
+    d = utils.strptime(padded)
+    if subtract:
+        d -= g_config.delta
+    else:
+        d += g_config.delta
+    return int(d.strftime(g_config.date_fmt))
 
 
 @router.get("/timespan", response_model=None)
@@ -61,7 +135,6 @@ async def timespan(
         A dictionary containing the timespan information.
     """
     corpora = corpus or []
-    # check_authorization(corpora)
 
     yield await get_timespan(
         ctx,
@@ -108,21 +181,18 @@ async def get_timespan(
     """
     if (date_from or date_to) and not (date_from and date_to):
         raise ValueError("When using 'from' or 'to', both need to be specified.")
+    total_start = perf_counter()
+    fetch_duration = 0.0
+    cache_write_duration = 0.0
+    calc_duration = 0.0
 
-    # Mapping from GranularityValues to number of characters to shorten date strings in the database to
-    shorten = {
-        GranularityValues.year: 4,
-        GranularityValues.month: 7,
-        GranularityValues.day: 10,
-        GranularityValues.hour: 13,
-        GranularityValues.minute: 16,
-        GranularityValues.second: 19,
-    }
+    g_config = _GRANULARITY[granularity]
 
     cached_data = []
     corpora_rest = corpora.copy()
 
-    if ctx.common.cache:
+    cache_enabled = ctx.common.cache
+    if cache_enabled:
         # Check if whole query is cached
         combined_checksum = utils.get_hash(
             (granularity, strategy, combined, per_corpus, date_from, date_to, sorted(corpora))
@@ -137,9 +207,9 @@ async def get_timespan(
             return result
 
         # Look for per-corpus caches
+        corpus_checksum = utils.get_hash((date_from, date_to, granularity, strategy))
         cache_prefixes = await utils.cache_prefix(ctx.cache, corpora)
         for c in corpora:
-            corpus_checksum = utils.get_hash((date_from, date_to, granularity, strategy))
             cache_key = f"{cache_prefixes[c]}:timespan_{corpus_checksum}"
             corpus_cached_data = await ctx.cache.get(cache_key)
             if corpus_cached_data is not None:
@@ -147,90 +217,160 @@ async def get_timespan(
                 corpora_rest.remove(c)
 
     if corpora_rest:
-        corpora_sql = "({})".format(", ".join(f"'{utils.sql_escape(c)}'" for c in corpora_rest))
-        fromto = ""
+        bind_params: dict[str, Any] = {}
+        corpus_placeholders = ", ".join(f":corpus_{i}" for i in range(len(corpora_rest)))
+        for i, c in enumerate(corpora_rest):
+            bind_params[f"corpus_{i}"] = c
 
+        fromto = ""
         if strategy == params.StrategyValues.some_overlaps:
             if date_from and date_to:
                 fromto = (
-                    f" AND ((datefrom >= '{utils.sql_escape(date_from)}'"
-                    f" AND dateto <= '{utils.sql_escape(date_to)}')"
-                    f" OR (datefrom <= '{utils.sql_escape(date_from)}'"
-                    f" AND dateto >= '{utils.sql_escape(date_to)}'))"
+                    " AND ((datefrom >= :date_from AND dateto <= :date_to)"
+                    " OR (datefrom <= :date_from AND dateto >= :date_to))"
                 )
+                bind_params["date_from"] = date_from
+                bind_params["date_to"] = date_to
         elif strategy == params.StrategyValues.all_overlaps:
             if date_to:
-                fromto = f" AND datefrom <= '{utils.sql_escape(date_to)}'"
+                fromto = " AND datefrom <= :date_to"
+                bind_params["date_to"] = date_to
             if date_from:
-                fromto += f" AND dateto >= '{utils.sql_escape(date_from)}'"
+                fromto += " AND dateto >= :date_from"
+                bind_params["date_from"] = date_from
         elif strategy == params.StrategyValues.strict:
             if date_from:
-                fromto = f" AND datefrom >= '{utils.sql_escape(date_from)}'"
+                fromto = " AND datefrom >= :date_from"
+                bind_params["date_from"] = date_from
             if date_to:
-                fromto += f" AND dateto <= '{utils.sql_escape(date_to)}'"
+                fromto += " AND dateto <= :date_to"
+                bind_params["date_to"] = date_to
 
         # TODO: Skip grouping on corpus when we're only after the combined results.
         # We do the granularity truncation and summation in the DB query if we can (depending on strategy),
         # since it's much faster than doing it afterwards
 
-        timedata_corpus = (
-            "timedata_date"
-            if granularity in {GranularityValues.year, GranularityValues.month, GranularityValues.day}
-            else "timedata"
-        )
+        timedata_table = "timedata_date" if g_config.uses_date_table else "timedata"
         if strategy == params.StrategyValues.some_overlaps:
             # We need the full dates for this strategy, so no truncating of the results
-            # We cast datefrom/dateto to CHAR to avoid issues with year zero
-            sql = (
-                "SELECT corpus, CAST(datefrom AS CHAR) AS df, CAST(dateto AS CHAR) AS dt, tokens AS sum FROM "
-                + timedata_corpus
-                + " WHERE corpus IN "
-                + corpora_sql
-                + fromto
-                + " ORDER BY NULL;"  # Avoid implicit ordering in older MySQL versions
+            # We cast datefrom/dateto to CHAR to avoid issues with year zero (which we use to represent unknown dates)
+            sql = text(
+                f"SELECT corpus, CAST(datefrom AS CHAR) AS df, CAST(dateto AS CHAR) AS dt, tokens AS sum"
+                f" FROM {timedata_table}"
+                f" WHERE corpus IN ({corpus_placeholders})"
+                f"{fromto}"
+                f" ORDER BY NULL"  # Avoid implicit ordering in older MySQL versions
             )
         else:
-            sql = (
-                "SELECT corpus, LEFT(datefrom, "
-                + str(shorten[granularity])
-                + ") AS df, LEFT(dateto, "
-                + str(shorten[granularity])
-                + ") AS dt, SUM(tokens) AS sum FROM "
-                + timedata_corpus
-                + " WHERE corpus IN "
-                + corpora_sql
-                + fromto
-                + " GROUP BY corpus, df, dt ORDER BY NULL;"
+            left_len = g_config.sql_left_len
+            sql = text(
+                f"SELECT corpus, LEFT(datefrom, {left_len}) AS df, LEFT(dateto, {left_len}) AS dt,"
+                f" SUM(tokens) AS sum"
+                f" FROM {timedata_table}"
+                f" WHERE corpus IN ({corpus_placeholders})"
+                f"{fromto}"
+                f" GROUP BY corpus, df, dt ORDER BY NULL"
             )
 
         async with ctx.db.async_connection() as conn:
             try:
-                result = await conn.execute(text(sql))
-                rows_result = result.mappings().all()
-                rows = [dict(row) for row in rows_result] if ctx.common.cache else rows_result
+                fetch_start = perf_counter()
+                query_result = await conn.execute(sql, bind_params)
+                rows_result = query_result.mappings().all()
+                rows = [dict(row) for row in rows_result]
+                fetch_duration = perf_counter() - fetch_start
             except Exception:
                 await conn.invalidate()
                 raise
     else:
         rows = []
+        fetch_duration = 0.0
 
-    if ctx.common.cache:
+    max_cache_rows = max(0, settings.TIMESPAN_CACHE_MAX_ROWS)
+    if cache_enabled and max_cache_rows and len(rows) > max_cache_rows:
+        cache_enabled = False
+        logger.debug(
+            "Skipping timespan cache writes for large response (rows=%d > limit=%d)",
+            len(rows),
+            max_cache_rows,
+        )
+
+    if cache_enabled:
+        cache_write_start = perf_counter()
 
         async def save_cache(corpus: str, data: list[Mapping[str, Any]]) -> None:
-            corpus_checksum = utils.get_hash((date_from, date_to, granularity, strategy))
             cache_key = f"{cache_prefixes[corpus]}:timespan_{corpus_checksum}"
             try:
                 await ctx.cache.add(cache_key, data)
             except CacheError:
                 pass
 
-        corpus_data: defaultdict[str, list[Mapping[Any, Any]]] = defaultdict(list)
-        for row in rows:
-            corpus_data[row["corpus"]].append(row)
+        corpus_data = await _run_timespan_cpu_bound(_group_rows_by_corpus, rows, row_count=len(rows))
         for corpus, data in corpus_data.items():
             await save_cache(corpus, data)
+        cache_write_duration = perf_counter() - cache_write_start
 
-    result = timespan_calculator(
+    calc_start = perf_counter()
+    result = await _run_timespan_cpu_bound(
+        _calculate_timespan_from_rows,
+        cached_data,
+        rows,
+        granularity,
+        combined,
+        per_corpus,
+        strategy,
+        row_count=len(cached_data) + len(rows),
+    )
+    calc_duration = perf_counter() - calc_start
+
+    if cache_enabled and not no_combined_cache:
+        # Save cache for whole query
+        try:
+            await ctx.cache.add(cache_combined_key, result)
+        except CacheError:
+            pass
+    phase_log_seconds = max(0.0, settings.TIMESPAN_PHASE_LOG_SECONDS)
+    total_duration = perf_counter() - total_start
+    if phase_log_seconds and total_duration >= phase_log_seconds:
+        logger.warning(
+            "Timespan phases total=%.3fs fetch=%.3fs cache_write=%.3fs calculate=%.3fs rows=%d cached_rows=%d",
+            total_duration,
+            fetch_duration,
+            cache_write_duration,
+            calc_duration,
+            len(rows),
+            len(cached_data),
+        )
+
+    return result
+
+
+def _group_rows_by_corpus(rows: list[Mapping[str, Any]]) -> defaultdict[str, list[Mapping[str, Any]]]:
+    """Group SQL rows by corpus for per-corpus cache writes.
+
+    Returns:
+        A mapping from corpus name to all rows for that corpus.
+    """
+    corpus_data: defaultdict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in rows:
+        corpus_data[row["corpus"]].append(row)
+    return corpus_data
+
+
+def _calculate_timespan_from_rows(
+    cached_data: list[Mapping[str, Any]],
+    rows: list[Mapping[str, Any]],
+    granularity: GranularityValues,
+    combined: bool,
+    per_corpus: bool,
+    strategy: params.StrategyValues,
+) -> dict:
+    """Calculate timespan output from cached and newly fetched rows.
+
+    Returns:
+        The final timespan response payload.
+    """
+    return timespan_calculator(
         itertools.chain(cached_data, rows),
         granularity=granularity,
         combined=combined,
@@ -238,14 +378,94 @@ async def get_timespan(
         strategy=strategy,
     )
 
-    if ctx.common.cache and not no_combined_cache:
-        # Save cache for whole query
-        try:
-            await ctx.cache.add(cache_combined_key, result)
-        except CacheError:
-            pass
 
-    return result
+async def _run_timespan_cpu_bound(function: Any, *args: Any, row_count: int) -> Any:
+    """Run CPU-heavy timespan work in process for large inputs, with thread fallback.
+
+    Returns:
+        The return value produced by `function`.
+    """
+    threshold = max(0, settings.TIMESPAN_PROCESS_THRESHOLD_ROWS)
+    if threshold and row_count >= threshold:
+        logger.debug("Offloading timespan CPU stage to process (rows=%d)", row_count)
+        try:
+            return await anyio.to_process.run_sync(function, *args)
+        except Exception as error:
+            logger.debug("Timespan process offload failed, falling back to thread: %r", error)
+
+    return await anyio.to_thread.run_sync(function, *args)
+
+
+def _calculate_series_sweepline(
+    segments: list[tuple[int, int]],
+    corpus_intervals: list[tuple[int, int, int]],
+    granularity: GranularityValues,
+) -> defaultdict[str, int]:
+    """Calculate timeseries using a sweep-line over interval starts.
+
+    This algorithm efficiently calculates the frequency for each time bucket defined by the segments, taking into
+    account the intervals that may start and end within those buckets. It uses a Fenwick tree to keep track of the
+    frequencies of intervals that have started but not yet ended as we sweep through the segments.
+
+    It requires that the segments are monotonic (non-decreasing) in their start points, which is guaranteed by the
+    way we generate segments from the sorted nodes.
+
+    Args:
+        segments: List of (start, end) tuples representing the time buckets to calculate frequency for.
+        corpus_intervals: List of (start, end, frequency) tuples representing the intervals for the corpus.
+        granularity: The granularity level for date adjustments.
+
+    Returns:
+        A mapping from start date key to frequency for one corpus.
+    """
+    data: defaultdict[str, int] = defaultdict(int)
+    if not segments:
+        return data
+    if not corpus_intervals:
+        for start, end in segments:
+            if start:
+                data[str(start)] = 0
+            if end:
+                data[str(_adjust_date(str(end), granularity))] = 0
+        return data
+
+    intervals_by_start = sorted(corpus_intervals, key=itemgetter(0))
+    end_values = sorted({item[1] for item in corpus_intervals})
+    end_index = {value: index + 1 for index, value in enumerate(end_values)}  # 1-based for Fenwick tree
+    fenwick = [0] * (len(end_values) + 1)
+
+    def fenwick_add(index: int, value: int) -> None:
+        while index < len(fenwick):
+            fenwick[index] += value
+            index += index & -index
+
+    def fenwick_prefix_sum(index: int) -> int:
+        total = 0
+        while index > 0:
+            total += fenwick[index]
+            index -= index & -index
+        return total
+
+    total_started_freq = 0
+    next_interval = 0
+
+    for start, end in segments:
+        while next_interval < len(intervals_by_start) and intervals_by_start[next_interval][0] <= start:
+            _, interval_end, interval_freq = intervals_by_start[next_interval]
+            fenwick_add(end_index[interval_end], interval_freq)
+            total_started_freq += interval_freq
+            next_interval += 1
+
+        if start:
+            data[str(start)] = 0
+
+        excluded_freq = fenwick_prefix_sum(bisect.bisect_left(end_values, end))
+        data[str(start or "")] += total_started_freq - excluded_freq
+
+        if end:
+            data[str(_adjust_date(str(end), granularity))] = 0
+
+    return data
 
 
 def timespan_calculator(
@@ -269,95 +489,36 @@ def timespan_calculator(
     Returns:
         A dictionary containing the timespan information.
     """
-    gs = {
-        GranularityValues.year: 4,
-        GranularityValues.month: 6,
-        GranularityValues.day: 8,
-        GranularityValues.hour: 10,
-        GranularityValues.minute: 12,
-        GranularityValues.second: 14,
-    }
+    g_config = _GRANULARITY[granularity]
+    digit_len = g_config.digit_len
 
-    def plusminusone(date: str, value: relativedelta, df: str, negative: bool = False) -> int:
-        """Add or subtract one unit of the given granularity to/from the date.
-
-        Args:
-            date: The date string.
-            value: The relativedelta value to add or subtract.
-            df: The date format string.
-            negative: If True, subtract the value; otherwise, add it.
-
-        Returns:
-            The modified date as an integer.
-        """
-        date = "0" + date if len(date) % 2 else date  # Handle years with three digits
-        d = utils.strptime(date)
-        if negative:
-            d -= value
-        else:
-            d += value
-        return int(d.strftime(df))
-
-    def shorten(date: str, g: GranularityValues) -> int:
+    def shorten_date(date: str) -> int:
         """Return a shortened version of the date according to the granularity."""
         alt = 1 if len(date) % 2 else 0  # Handle years with three digits
-        return int(date[: gs[g] - alt])
+        return int(date[: digit_len - alt])
 
-    if granularity == GranularityValues.year:
-        df = "%Y"
-        add = relativedelta(years=1)
-    elif granularity == GranularityValues.month:
-        df = "%Y%m"
-        add = relativedelta(months=1)
-    elif granularity == GranularityValues.day:
-        df = "%Y%m%d"
-        add = relativedelta(days=1)
-    elif granularity == GranularityValues.hour:
-        df = "%Y%m%d%H"
-        add = relativedelta(hours=1)
-    elif granularity == GranularityValues.minute:
-        df = "%Y%m%d%H%M"
-        add = relativedelta(minutes=1)
-    elif granularity == GranularityValues.second:
-        df = "%Y%m%d%H%M%S"
-        add = relativedelta(seconds=1)
-
-    rows = defaultdict(list)
+    intervals: defaultdict[str, list[tuple[int, int, int]]] = defaultdict(list)
     nodes: defaultdict[str, set[tuple[str, int]]] = defaultdict(set)
 
-    datemin = (
-        "00000101"
-        if granularity in {GranularityValues.year, GranularityValues.month, GranularityValues.day}
-        else "00000101000000"
-    )
-    datemax = (
-        "99991231"
-        if granularity in {GranularityValues.year, GranularityValues.month, GranularityValues.day}
-        else "99991231235959"
-    )
+    datemin = "00000101" if g_config.uses_date_table else "00000101000000"
+    datemax = "99991231" if g_config.uses_date_table else "99991231235959"
 
     for row in timedata:
         corpus = row["corpus"]
-        datefrom = "".join(x for x in str(row["df"]) if x.isdigit()) if row["df"] else ""
-        if datefrom == "0" * len(datefrom):
-            datefrom = ""
-        dateto = "".join(x for x in str(row["dt"]) if x.isdigit()) if row["dt"] else ""
-        if dateto == "0" * len(dateto):
-            dateto = ""
-        datefrom_short = shorten(datefrom, granularity) if datefrom else 0
-        dateto_short = shorten(dateto, granularity) if dateto else 0
+        datefrom = _digits_only(row["df"])
+        dateto = _digits_only(row["dt"])
+        datefrom_short = shorten_date(datefrom) if datefrom else 0
+        dateto_short = shorten_date(dateto) if dateto else 0
 
         if strategy == params.StrategyValues.some_overlaps:
             # Some overlaps permitted
             # (t1 >= t1' AND t2 <= t2') OR (t1 <= t1' AND t2 >= t2')
             if datefrom_short != dateto_short:
-                if datefrom[gs[granularity] :] != datemin[gs[granularity] :]:
-                    # Add 1 to datefrom_short
-                    datefrom_short = plusminusone(str(datefrom_short), add, df)
+                if datefrom[digit_len:] != datemin[digit_len:]:
+                    datefrom_short = _adjust_date(str(datefrom_short), granularity)
 
-                if dateto[gs[granularity] :] != datemax[gs[granularity] :]:
-                    # Subtract 1 from dateto_short
-                    dateto_short = plusminusone(str(dateto_short), add, df, negative=True)
+                if dateto[digit_len:] != datemax[digit_len:]:
+                    dateto_short = _adjust_date(str(dateto_short), granularity, subtract=True)
 
                 # Check that datefrom is still before dateto
                 if not datefrom < dateto:
@@ -373,47 +534,45 @@ def timespan_calculator(
             if datefrom_short != dateto_short:
                 continue
 
-        r = {"datefrom": datefrom_short, "dateto": dateto_short, "corpus": corpus, "freq": int(row["sum"])}
+        interval = (datefrom_short, dateto_short, int(row["sum"]))
         if combined:
-            rows["__combined__"].append(r)
+            intervals["__combined__"].append(interval)
             nodes["__combined__"].add(("f", datefrom_short))
             nodes["__combined__"].add(("t", dateto_short))
         if per_corpus:
-            rows[corpus].append(r)
+            intervals[corpus].append(interval)
             nodes[corpus].add(("f", datefrom_short))
             nodes[corpus].add(("t", dateto_short))
 
     corpusnodes = {k: sorted(v, key=lambda x: (x[1] or 0, x[0])) for k, v in nodes.items()}
-    result = {}
+    result: dict[str, Any] = {}
     if per_corpus:
         result["corpora"] = {}
     if combined:
         result["combined"] = {}
 
     for corpus, nodes_ in corpusnodes.items():
-        data = defaultdict(int)
-
-        for i in range(len(nodes_) - 1):
-            start = nodes_[i]
-            end = nodes_[i + 1]
-            if start[0] == "t":
-                start = plusminusone(str(start[1]), add, df) if start[1] else 0
-                if start == end[1] and end[0] == "f":
+        segments = []  # List of (start, end) tuples representing the time buckets to calculate frequency for
+        for start_marker, end_marker in itertools.pairwise(nodes_):
+            if start_marker[0] == "t":
+                start = _adjust_date(str(start_marker[1]), granularity) if start_marker[1] else 0
+                if start == end_marker[1] and end_marker[0] == "f":
                     continue
             else:
-                start = start[1]
+                start = start_marker[1]
 
-            end = 0 if not end[1] else end[1] if end[0] == "t" else plusminusone(str(end[1]), add, df, True)
+            end = (
+                0
+                if not end_marker[1]
+                else end_marker[1]
+                if end_marker[0] == "t"
+                else _adjust_date(str(end_marker[1]), granularity, subtract=True)
+            )
+            segments.append((start, end))
 
-            if start:
-                data[str(start)] = 0
-
-            for row in rows[corpus]:
-                if row["datefrom"] <= start and row["dateto"] >= end:
-                    data[str(start or "")] += row["freq"]
-
-            if end:
-                data[str(plusminusone(str(end), add, df, False))] = 0
+        corpus_intervals = intervals[corpus]
+        # Segments are generated from node boundaries sorted by date; therefore start points are monotonic
+        data = _calculate_series_sweepline(segments, corpus_intervals, granularity)
 
         if combined and corpus == "__combined__":
             result["combined"] = data
