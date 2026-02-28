@@ -38,7 +38,8 @@ test = [
     "pytest-sugar>=1.1.1",
 ]
 server = [
-    "uvicorn[standard]~=0.40.0",
+    "gunicorn>=25.1.0",
+    "uvloop"  # Used by Gunicorn's ASGI worker for improved performance
 ]
 jwt = [
     "pyjwt[crypto]"  # For JWT support in authentication plugin

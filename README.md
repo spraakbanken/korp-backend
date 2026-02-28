@@ -110,11 +110,7 @@ If `PLUGINS_CONFIG` is also set in `.env`, its values override matching keys fro
 
 ## Running the backend
 
-For deployment, use an ASGI server. We recommend [Uvicorn](https://www.uvicorn.org/) (included with the development dependencies):
-
-```sh
-uvicorn korp.main:app --host 0.0.0.0 --port 8000
-```
+### Development
 
 During development, you can use FastAPI's built-in development server, which will automatically reload the server when
 you make changes to the code:
@@ -122,6 +118,16 @@ you make changes to the code:
 ```sh
 fastapi dev korp/main.py
 ```
+
+### Production
+
+For deployment, use an ASGI server. We recommend using [Gunicorn](https://gunicorn.org/) with its native ASGI worker:
+
+```sh
+gunicorn korp.main:app --worker-class asgi --bind 0.0.0.0:8000 --workers 4
+```
+
+For improved performance with Gunicorn or Uvicorn, we recommend also installing the package `uvloop`.
 
 ## Cache management
 
