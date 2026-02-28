@@ -124,14 +124,13 @@ class KorpDatabase:
             A list of SQL statements.
         """
         statements: list[str] = []
-        buf: list[str] = []
+        start = 0
         in_single = False
         in_double = False
         in_backtick = False
         escaped = False
 
-        for char in sql:
-            buf.append(char)
+        for i, char in enumerate(sql):
             if escaped:
                 escaped = False
                 continue
@@ -148,11 +147,11 @@ class KorpDatabase:
                 in_backtick = not in_backtick
                 continue
             if char == ";" and not in_single and not in_double and not in_backtick:
-                if statement := "".join(buf).strip():
+                if statement := sql[start : i + 1].strip():
                     statements.append(statement)
-                buf = []
+                start = i + 1
 
-        if tail := "".join(buf).strip():
+        if tail := sql[start:].strip():
             statements.append(tail)
 
         return statements
@@ -271,20 +270,17 @@ class KorpDatabase:
         """
         statements = self._split_sql_statements(sql if isinstance(sql, str) else "".join(sql))
 
-        def run(connection: Connection) -> int:
-            count = 0
-            for statement in statements:
-                result = connection.exec_driver_sql(statement)
-                count += result.rowcount
+        def _run(connection: Connection) -> int:
+            count = sum(connection.exec_driver_sql(stmt).rowcount for stmt in statements)
             if commit:
                 connection.commit()
             return count
 
         if conn is not None:
-            return run(conn)
+            return _run(conn)
 
         with self._connection(include_database=True) as connection:
-            return run(connection)
+            return _run(connection)
 
     def execute_file(self, sqlfile: Path, conn: Connection | None = None, commit: bool = True) -> int:
         """Execute SQL statements in `sqlfile` on `conn` and commit if `commit`.
@@ -438,34 +434,19 @@ class KorpDatabase:
                 filenames_re.append(re.compile(regex))
             return filenames_re
 
-        def add_table_type(table_info_items: list[dict], table_type: str) -> list[dict]:
-            """Return a copy of `table_info_items` with key "table_type" set to `table_type`.
+        def process_table_info(table_info_items: list[dict], table_type: str) -> list[dict]:
+            """Return processed table info items with `table_type` set and definition variables expanded.
 
-            Items lacking key "filenames" are not modified.
+            Adds the `table_type` key and expands definition variable references. Items containing key "definition_vars"
+            define variable values and are removed from the result; their values are used to expand "{var}" references
+            in the "definition" of subsequent items.
 
             Args:
                 table_info_items: A list of table information dicts.
                 table_type: The table type to add to the dicts in table_info_items.
 
             Returns:
-                The list of table information dicts with key "table_type" added.
-            """
-            new_items = deepcopy(table_info_items)
-            for item in new_items:
-                if "filenames" in item:
-                    item["table_type"] = table_type
-            return new_items
-
-        def expand_vars(table_info_items: list[dict]) -> list[dict]:
-            """Return a copy of `table_info_items` with variable references in "definition" expanded.
-
-            Replace variable references "{var}" in the value of "definition" of table_info_items.
-
-            Variable values are defined in separate sequence items that are mappings containing key "definition_vars",
-            whose value is a mapping whose keys are variable names and values the replacement values.
-
-            The returned result contains table_info_items with mappings containing key "definition_vars" removed and
-            values for "definition" expanded in other mappings.
+                The processed list of table information dicts.
             """
             result = []
             vardefs = {}
@@ -474,6 +455,8 @@ class KorpDatabase:
                     vardefs.update(item["definition_vars"])
                 else:
                     item["definition"] = item["definition"].format(**vardefs)
+                    if "filenames" in item:
+                        item["table_type"] = table_type
                     result.append(item)
             return result
 
@@ -482,8 +465,7 @@ class KorpDatabase:
         for filepath in table_info_dir.glob("*.yaml"):
             with filepath.open("r") as f:
                 table_info_new = yaml.safe_load(f)
-                table_info_new = add_table_type(table_info_new, filepath.stem)
-                table_info.extend(expand_vars(table_info_new))
+                table_info.extend(process_table_info(table_info_new, filepath.stem))
         for info in table_info:
             # For filenames and exclude_filenames, add corresponding *_re keys with compiled regular expressions
             for propname in ["filenames", "exclude_filenames"]:
@@ -520,16 +502,25 @@ class KorpDatabase:
 
     def _find_table_files(self, corpora: Iterable[str], table_types: Iterable[str]) -> list[str]:
         """Return a list of table data file names for corpora and table_types."""
+        # Pre-compile all patterns for each corpus and table type combination
+        table_types = list(table_types)
+        compiled_patterns = []
+        for table_type in table_types:
+            for corpus in corpora:
+                for patt in self._table_type_patts[table_type]:
+                    for ext in ["sql", "tsv"]:
+                        full_patt = patt.replace("{corpus}", corpus) + f".{ext}"
+                        compiled_patterns.append(re.compile(full_patt))
+
         files = []
-        for ext in ["sql", "tsv"]:
-            for filename in self._datadir.rglob(f"*.{ext}"):
-                filename_str = str(filename)
-                for table_type in table_types:
-                    for corpus in corpora:
-                        for patt in self._table_type_patts[table_type]:
-                            patt = patt.replace("{corpus}", corpus) + f".{ext}"  # noqa: PLW2901
-                            if re.fullmatch(patt, filename_str):
-                                files.append(filename_str)
+        for filename in self._datadir.rglob("*.sql"):
+            filename_str = str(filename)
+            if any(patt.fullmatch(filename_str) for patt in compiled_patterns):
+                files.append(filename_str)
+        for filename in self._datadir.rglob("*.tsv"):
+            filename_str = str(filename)
+            if any(patt.fullmatch(filename_str) for patt in compiled_patterns):
+                files.append(filename_str)
         return files
 
     def drop_tables(self, corpora: Iterable[str], table_types: Iterable[str]) -> None:
@@ -539,14 +530,14 @@ class KorpDatabase:
             corpora: An iterable of corpus ids whose tables to drop.
             table_types: An iterable of table types whose tables to drop.
         """
-        tables = []
+        tables: set[str] = set()
         for table_type in table_types:
             for info in self._table_type_info[table_type]:
                 if "{" in info["tablename"]:
                     # Table name contains corpus id
-                    tables.extend(self._make_table_name(info, corpus) for corpus in corpora)
+                    tables.update(self._make_table_name(info, corpus) for corpus in corpora)
                 else:
-                    tables.append(info["tablename"])
+                    tables.add(info["tablename"])
 
         if not tables:
             return
@@ -569,7 +560,7 @@ class KorpDatabase:
             An iterable of Paths matching `table_file_glob`, or a single Path if `table_file_glob` is an absolute file
                 name.
         """
-        if table_file_glob and table_file_glob[0] == "/":
+        if table_file_glob and table_file_glob.startswith("/"):
             return [Path(table_file_glob)]
         return datadir.glob(table_file_glob)
 
@@ -587,7 +578,7 @@ class KorpDatabase:
                 for table_file in self._resolve_table_files(self._datadir, table_file_glob):
                     table_file: Path
                     if table_file.suffix == ".sql":
-                        self.execute_file(table_file, conn=conn)
+                        self.execute_file(table_file, conn=conn, commit=False)
                     else:
                         self._import_table(conn, table_file)
             conn.commit()
