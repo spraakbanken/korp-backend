@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+import itertools
 import pickle
-from collections.abc import Iterable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from functools import cached_property
 from logging import getLogger
 from typing import Any
 
 import aiomcache
 import anyio.from_thread
 
-logger = getLogger("__name__")
+logger = getLogger(__name__)
 
 
 class CacheError(Exception):
@@ -44,7 +46,7 @@ def _parse_server(server: str) -> tuple[str, int]:
 class MemcachedSyncClient:
     """Synchronous Memcached client wrapper.
 
-    Use `Memcached.get_client()` context manager to obtain an instance.
+    Use `Memcached.sync` property to obtain an instance.
     """
 
     cache: Memcached
@@ -258,19 +260,14 @@ class Memcached:
             return
         encoded = {_encode_key(k): _serialize(v) for k, v in items.items()}
         try:
-            for key, value in encoded.items():
-                await client.set(key, value)
+            await asyncio.gather(*itertools.starmap(client.set, encoded.items()))
         except Exception as exc:
             raise CacheError(str(exc)) from exc
 
-    @contextmanager
-    def get_client(self) -> Iterator[MemcachedSyncClient]:
-        """Get a synchronous Memcached client wrapper.
-
-        Yields:
-            A synchronous cache client.
-        """
-        yield MemcachedSyncClient(self)
+    @cached_property
+    def sync(self) -> MemcachedSyncClient:
+        """Get a synchronous Memcached client wrapper."""
+        return MemcachedSyncClient(self)
 
 
 memcached = Memcached()

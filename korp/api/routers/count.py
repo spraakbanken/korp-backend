@@ -1117,8 +1117,7 @@ def _get_count_cache_keys(
         A _CountCacheKeys instance with data and size cache keys.
     """
     checksum = utils.get_hash((cqp, group_by, within, sorted(ignore_case), expand_prequeries))
-    with memcached.get_client() as mc:
-        prefix = utils.cache_prefix_sync(mc, corpus)
+    prefix = utils.cache_prefix_sync(memcached.sync, corpus)
     return _CountCacheKeys(
         data_key=f"{prefix}:count_data_{checksum}",
         size_key=f"{prefix}:count_size_{checksum}",
@@ -1138,18 +1137,18 @@ def _check_count_cache(
     Returns:
         Cached result tuple (lines, hits, size) if found, None otherwise.
     """
-    with memcached.get_client() as mc:
-        cached_size = mc.get(cache_keys.size_key)
-        if cached_size is None:
-            return None
+    mc = memcached.sync
+    cached_size = mc.get(cache_keys.size_key)
+    if cached_size is None:
+        return None
 
-        corpus_hits, corpus_size = cached_size
-        if corpus_hits == 0:
-            return zero_hit_result, corpus_hits, corpus_size
+    corpus_hits, corpus_size = cached_size
+    if corpus_hits == 0:
+        return zero_hit_result, corpus_hits, corpus_size
 
-        cached_result = mc.get(cache_keys.data_key)
-        if cached_result is not None:
-            return cached_result, corpus_hits, corpus_size
+    cached_result = mc.get(cache_keys.data_key)
+    if cached_result is not None:
+        return cached_result, corpus_hits, corpus_size
 
     return None
 
@@ -1174,17 +1173,17 @@ def _save_count_cache(
         The lines as a tuple (for consistent return type).
     """
     lines_list = list(lines) if not isinstance(lines, list) else lines
-    with memcached.get_client() as mc:
-        mc.add(cache_keys.size_key, (nr_hits, corpus_size))
+    mc = memcached.sync
+    mc.add(cache_keys.size_key, (nr_hits, corpus_size))
 
-        # Only save actual data if number of lines doesn't exceed the limit
-        if len(lines_list) <= cache_max:
-            lines_tuple = tuple(lines_list)
-            try:
-                mc.add(cache_keys.data_key, lines_tuple)
-            except CacheError:
-                pass
-            return lines_tuple
+    # Only save actual data if number of lines doesn't exceed the limit
+    if len(lines_list) <= cache_max:
+        lines_tuple = tuple(lines_list)
+        try:
+            mc.add(cache_keys.data_key, lines_tuple)
+        except CacheError:
+            pass
+        return lines_tuple
     return tuple(lines_list)
 
 

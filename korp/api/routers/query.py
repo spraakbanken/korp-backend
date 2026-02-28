@@ -689,9 +689,9 @@ def query_corpus(
         cache_filename = Path(cache_dir) / f"{corpus_base}:query_data_{checksum}"
         cache_filename_temp = cache_filename.with_name(cache_filename.name + "_" + unique_id)
 
-        with memcached.get_client() as mc:
-            cache_size_key = f"{utils.cache_prefix_sync(mc, corpus_base)}:query_size_{checksum}"
-            cache_hits = mc.get(cache_size_key)
+        mc = memcached.sync
+        cache_size_key = f"{utils.cache_prefix_sync(mc, corpus_base)}:query_size_{checksum}"
+        cache_hits = mc.get(cache_size_key)
         is_cached = cache_hits is not None and cache_filename.is_file()
         cached_no_hits = cache_hits == 0
     else:
@@ -847,8 +847,7 @@ def query_corpus(
 
     if use_cache and not is_cached and not cached_no_hits:
         # Save number of hits
-        with memcached.get_client() as mc:
-            mc.add(cache_size_key, nr_hits)
+        memcached.sync.add(cache_size_key, nr_hits)
 
         try:
             cache_filename_temp.rename(cache_filename)
