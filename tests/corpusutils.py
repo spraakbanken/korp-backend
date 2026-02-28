@@ -1,10 +1,10 @@
 """Utility functions used in pytest tests for Korp, in particular for setting up CWB corpus data."""
 
 import re
+import shutil
 import subprocess
 import xml.etree.ElementTree as et  # noqa: N813
 from collections import defaultdict
-from itertools import chain, zip_longest
 from pathlib import Path
 from typing import ClassVar
 from xml.sax.saxutils import escape
@@ -36,8 +36,8 @@ class CWBEncoder:
 
     def __init__(self, corpus_root: Path, cwb_encode: str | None = None, cwb_makeall: str | None = None) -> None:
         """Initialize with paths for corpus root, cwb-encode, cwb-makeall."""
-        cwb_encode = cwb_encode or "cwb-encode"
-        cwb_makeall = cwb_makeall or "cwb-makeall"
+        self._cwb_encode = cwb_encode or "cwb-encode"
+        self._cwb_makeall = cwb_makeall or "cwb-makeall"
         corpus_root = corpus_root.expanduser().resolve()
         self._corpus_root = corpus_root
         self._datarootdir = corpus_root / "data"
@@ -63,6 +63,8 @@ class CWBEncoder:
                 vrt_file = self._tmpdir / f"{corpus_id}.vrt"
                 self.xml_file_to_vrt(xml_file, vrt_file)
                 vrt_files.append(vrt_file)
+            else:
+                corpus_ids.append(corpus_id)
         for vrt_file in vrt_files:
             corpus_id = vrt_file.stem
             if self._cached_corpus_is_outdated(cache_dir, corpus_id, vrt_file):
@@ -87,10 +89,9 @@ class CWBEncoder:
         """
         cache_dir = corpus_src_dir.parent / "cwb-cache"
         try:
-            if not cache_dir.exists():
-                cache_dir.mkdir(parents=True, exist_ok=True)
-                (cache_dir / "data").mkdir(parents=True, exist_ok=True)
-                (cache_dir / "registry").mkdir(parents=True, exist_ok=True)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            (cache_dir / "data").mkdir(exist_ok=True)
+            (cache_dir / "registry").mkdir(exist_ok=True)
         except OSError:
             return None, set()
         cached_corpora = self._copy_corpora_from_cache(cache_dir)
@@ -118,15 +119,9 @@ class CWBEncoder:
             target: The directory where the corpus data should be copied to.
             corpus_id: The ID of the corpus to be copied.
         """
-        subprocess.run(["cp", "-dpr", source / "data" / corpus_id, target / "data"], check=True)
-        with (
-            (source / "registry" / corpus_id).open("r") as in_regf,
-            (target / "registry" / corpus_id).open("w") as out_regf,
-        ):
-            for line in in_regf:
-                if line.startswith(("HOME", "INFO")):
-                    line = line.replace(str(source), str(target))  # noqa: PLW2901
-                out_regf.write(line)
+        shutil.copytree(source / "data" / corpus_id, target / "data" / corpus_id, symlinks=True, dirs_exist_ok=True)
+        reg_content = (source / "registry" / corpus_id).read_text()
+        (target / "registry" / corpus_id).write_text(reg_content.replace(str(source), str(target)))
 
     @staticmethod
     def _cached_corpus_is_outdated(cache_dir: Path | None, corpus_id: str, src_file: Path) -> bool:
@@ -143,25 +138,15 @@ class CWBEncoder:
         Returns:
             True if the cached corpus data is outdated, False otherwise.
         """
-
-        def get_mtime(fname: Path) -> float:
-            """Return modification time for file fname; 0 if it does not exist."""
-            if not fname.exists():
-                return 0
-            return fname.stat().st_mtime
-
         if cache_dir is None:
             return True
         cached_regfile = cache_dir / "registry" / corpus_id
         if not cached_regfile.exists():
             return True
-        cached_regfile_mtime = cached_regfile.stat().st_mtime
+        cached_mtime = cached_regfile.stat().st_mtime
         src_file_noext = src_file.with_suffix("")
-        return (
-            cached_regfile_mtime < get_mtime(src_file)
-            or cached_regfile_mtime < get_mtime(src_file_noext.with_suffix(".info"))
-            or cached_regfile_mtime < get_mtime(src_file_noext.with_suffix(".attrs.yaml"))
-        )
+        related_files = [src_file, src_file_noext.with_suffix(".info"), src_file_noext.with_suffix(".attrs.yaml")]
+        return any(f.exists() and cached_mtime < f.stat().st_mtime for f in related_files)
 
     def encode_corpus(self, corpus_id: str, vrt_file: Path, corpus_src_dir: Path) -> None:
         """Encode `vrt_file` with `corpus_id`."""
@@ -171,17 +156,12 @@ class CWBEncoder:
 
     def encode_vrt_file(self, corpus_id: str, vrt_file: Path, corpus_src_dir: Path) -> None:
         """Run cwb-encode for `vrt_file` for `corpus_id`."""
-
-        def interleave(s: str, seq: list[str]) -> list[str]:
-            """Return [s, seq[0], s, seq[1], ... , s, seq[-1]."""
-            return [*chain(*zip_longest([], seq, fillvalue=s))]
-
         attrs = self._get_attrs(vrt_file, corpus_src_dir)
         data_dir = self._datarootdir / corpus_id
         data_dir.mkdir(exist_ok=True, parents=True)
         subprocess.run(
             [
-                "cwb-encode",
+                self._cwb_encode,
                 "-f",
                 vrt_file,
                 "-d",
@@ -193,8 +173,8 @@ class CWBEncoder:
                 "utf8",
                 "-p",
                 "-",
-                *interleave("-P", attrs["positional"]),
-                *interleave("-S", attrs["structural"]),
+                *[x for attr in attrs["positional"] for x in ("-P", attr)],
+                *[x for attr in attrs["structural"] for x in ("-S", attr)],
             ],
             check=True,
         )
@@ -245,11 +225,11 @@ class CWBEncoder:
         if "struct_attributes" in attr_info:
             attrs["structural"] = []
             for struct_attrs in attr_info["struct_attributes"]:
-                for structname, attrnames in struct_attrs.items():
-                    parts = re.split(r"[:\s]+", structname, maxsplit=1)
-                    structname = parts[0]  # noqa: PLW2901
+                for struct_key, attrnames in struct_attrs.items():
+                    parts = re.split(r"[:\s]+", struct_key, maxsplit=1)
+                    name = parts[0]
                     depth = int(parts[1]) if len(parts) > 1 else 0
-                    attrs["structural"].append(self._make_struct_spec(structname, depth, attrnames))
+                    attrs["structural"].append(self._make_struct_spec(name, depth, attrnames))
         return attrs
 
     @staticmethod
@@ -265,7 +245,7 @@ class CWBEncoder:
             A string of the form "name:depth+a1+a2+...+an" where a1, a2, ..., an are the annotation names of the
             structural attribute.
         """
-        return f"{name}:{depth}" + "".join(f"+{attrname}" for attrname in attrnames)
+        return "+".join([f"{name}:{depth}", *attrnames])
 
     def _get_attrs_from_vrt(self, vrt_file: Path, attrs: dict[str, list[str]] | None = None) -> dict[str, list[str]]:
         """Get the positional and strucutral attribute info from `vrt_file`.
@@ -348,11 +328,7 @@ class CWBEncoder:
                 self._default_pos_attr_name + str(attrnum + 1)
                 for attrnum in range(len(self._default_pos_attrs), pos_attr_count)
             ]
-            attrs["positional"] = list(
-                self._make_set_valued(
-                    {pos_attr_names[attrnum]: pos_attr_is_featset[attrnum] for attrnum in range(pos_attr_count)}
-                )
-            )
+            attrs["positional"] = self._make_set_valued(dict(zip(pos_attr_names, pos_attr_is_featset, strict=True)))
         if not attrs["structural"]:
             attrs["structural"] = [
                 self._make_struct_spec(
@@ -447,10 +423,10 @@ class CWBEncoder:
 
     def cwb_makeall(self, corpus_id: str) -> None:
         """Run cwb-makeall for corpus `corpus_id`."""
-        subprocess.run(["cwb-makeall", "-r", self._registrydir, corpus_id], check=True)
+        subprocess.run([self._cwb_makeall, "-r", self._registrydir, corpus_id], check=True)
 
     def copy_info_file(self, corpus_id: str, corpus_src_dir: Path) -> None:
         """Copy `corpus.info` from source dir to the corpus data dir as `.info`."""
         info_file = corpus_src_dir / (corpus_id + ".info")
         if info_file.is_file():
-            subprocess.run(["cp", "-p", info_file, self._datarootdir / corpus_id / ".info"], check=True)
+            shutil.copy2(info_file, self._datarootdir / corpus_id / ".info")
