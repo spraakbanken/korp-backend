@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from korp import utils
 
-router = APIRouter()
+router = APIRouter(tags=["Statistics"])
 
 CorpusParamOptional: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],

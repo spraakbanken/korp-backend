@@ -23,6 +23,26 @@ from korp.memcached import memcached
 
 logger = getLogger(__name__)
 
+_TAGS = [
+    {
+        "name": "Corpus Information",
+        "description": "Routes for retrieving information about corpora and their attributes.",
+    },
+    {
+        "name": "Concordance",
+        "description": "Routes for retrieving concordance lines and related information.",
+    },
+    {"name": "Statistics", "description": "Routes for retrieving various corpus statistics."},
+    {
+        "name": "Word Relations",
+        "description": "Routes for querying word relations.",
+    },
+    {
+        "name": "Administration",
+        "description": "Routes for administrative tasks.",
+    },
+]
+
 
 def _apply_settings_override(config_override: dict[str, Any] | None) -> bool:
     """Apply config overrides to the global settings object.
@@ -113,6 +133,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         title="Korp Backend",
         version=importlib.metadata.version("korp-backend"),
         lifespan=lifespan,
+        openapi_tags=_TAGS,
     )
 
     app.state.testing = testing

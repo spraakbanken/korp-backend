@@ -8,7 +8,7 @@ from fastapi import APIRouter
 from korp import utils
 from korp.config import settings
 
-router = APIRouter()
+router = APIRouter(tags=["Administration"])
 
 
 @router.get("/cache", response_model=dict)

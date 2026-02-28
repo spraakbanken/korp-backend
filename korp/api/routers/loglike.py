@@ -15,7 +15,7 @@ from korp.api import params
 
 from . import count
 
-router = APIRouter()
+router = APIRouter(tags=["Statistics"])
 
 
 @router.get("/loglike", response_model=dict)

@@ -23,7 +23,7 @@ from korp.memcached import CacheError
 
 from . import query, timespan
 
-router = APIRouter(tags=["Word Picture"])
+router = APIRouter(tags=["Word Relations"])
 
 
 # (role, head_string, head_pos, rel, dep_string, dep_pos, dep_extra)

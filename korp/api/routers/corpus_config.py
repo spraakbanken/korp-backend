@@ -24,7 +24,7 @@ from fastapi import APIRouter, Query
 
 from korp import utils
 
-router = APIRouter(tags=["Information"])
+router = APIRouter(tags=["Corpus Information"])
 
 
 CorpusParam: TypeAlias = Annotated[

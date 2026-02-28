@@ -11,7 +11,7 @@ from korp import utils
 from korp.api import params, schemas
 from korp.memcached import CacheError
 
-router = APIRouter(tags=["Information"])
+router = APIRouter(tags=["Corpus Information"])
 
 
 class InfoResponse(schemas.CommonResponse):

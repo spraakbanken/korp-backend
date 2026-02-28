@@ -23,7 +23,7 @@ from korp.memcached import CacheError
 
 from . import count as count_route
 
-router = APIRouter()
+router = APIRouter(tags=["Corpus Information"])
 
 
 @router.get("/attr_values", response_model=dict)
