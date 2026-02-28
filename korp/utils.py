@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from korp.db import MySQL
     from korp.memcached import Memcached, MemcachedSyncClient
 
-from korp.db import mysql
+from korp.db import escape_string as _db_escape_string
 
 from .config import settings
 
@@ -1259,7 +1259,7 @@ def strptime(date: str) -> datetime.datetime:
 
 def sql_escape(s: str) -> str:
     """Return SQL-escaped version of string s."""
-    return mysql.escape_string(s) if isinstance(s, str) else s
+    return _db_escape_string(s) if isinstance(s, str) else s
 
 
 class Plugin(APIRouter):

@@ -35,22 +35,25 @@ _SQL_TRUNCATION_SUFFIX = "..."
 
 
 def _compact_sql(statement: str, max_length: int) -> str:
-    """Compact SQL into a single line and truncate for logging.
+    """Compact SQL into a single line and optionally truncate for logging.
+
+    Args:
+        statement: The SQL statement to compact.
+        max_length: Maximum length of the returned string. 0 or negative means no limit.
 
     Returns:
         The compacted SQL string, optionally truncated.
     """
     compact = " ".join(statement.split())
-    min_truncation_length = len(_SQL_TRUNCATION_SUFFIX)
-    if max_length <= min_truncation_length:
-        return compact
     if max_length > 0 and len(compact) > max_length:
-        return f"{compact[: max_length - min_truncation_length]}{_SQL_TRUNCATION_SUFFIX}"
+        return compact[: max(0, max_length - len(_SQL_TRUNCATION_SUFFIX))] + _SQL_TRUNCATION_SUFFIX
     return compact
 
 
 class MySQL:
     """Database helper with async SQLAlchemy engine."""
+
+    __slots__ = ("_async_engine",)
 
     def __init__(self) -> None:
         """Initialize MySQL helper."""
@@ -89,38 +92,38 @@ class MySQL:
 
     def _register_query_logging(self, *, slow_query_seconds: float, sql_max_length: int) -> None:
         """Register SQLAlchemy event listeners for query timing/error logging."""
-        if slow_query_seconds <= 0:
-            return
         engine = self._require_async_engine()
 
-        @event.listens_for(engine.sync_engine, "before_cursor_execute")
-        def before_cursor_execute(
-            conn: Any,
-            cursor: Any,
-            statement: str,
-            parameters: Any,
-            context: Any,
-            executemany: bool,
-        ) -> None:
-            del cursor, statement, parameters, context, executemany
-            conn.info[_QUERY_START_TIME_KEY] = perf_counter()
+        if slow_query_seconds > 0:
 
-        @event.listens_for(engine.sync_engine, "after_cursor_execute")
-        def after_cursor_execute(
-            conn: Any,
-            cursor: Any,
-            statement: str,
-            parameters: Any,
-            context: Any,
-            executemany: bool,
-        ) -> None:
-            del cursor, parameters, context, executemany
-            started_at = conn.info.pop(_QUERY_START_TIME_KEY, None)
-            if started_at is None:
-                return
-            elapsed = perf_counter() - started_at
-            if elapsed >= slow_query_seconds:
-                logger.warning("Slow DB query %.3fs: %s", elapsed, _compact_sql(statement, sql_max_length))
+            @event.listens_for(engine.sync_engine, "before_cursor_execute")
+            def before_cursor_execute(
+                conn: Any,
+                cursor: Any,
+                statement: str,
+                parameters: Any,
+                context: Any,
+                executemany: bool,
+            ) -> None:
+                del cursor, statement, parameters, context, executemany
+                conn.info[_QUERY_START_TIME_KEY] = perf_counter()
+
+            @event.listens_for(engine.sync_engine, "after_cursor_execute")
+            def after_cursor_execute(
+                conn: Any,
+                cursor: Any,
+                statement: str,
+                parameters: Any,
+                context: Any,
+                executemany: bool,
+            ) -> None:
+                del cursor, parameters, context, executemany
+                started_at = conn.info.pop(_QUERY_START_TIME_KEY, None)
+                if started_at is None:
+                    return
+                elapsed = perf_counter() - started_at
+                if elapsed >= slow_query_seconds:
+                    logger.warning("Slow DB query %.3fs: %s", elapsed, _compact_sql(statement, sql_max_length))
 
         @event.listens_for(engine.sync_engine, "handle_error")
         def handle_error(exception_context: Any) -> None:
@@ -168,17 +171,17 @@ class MySQL:
         if engine is not None:
             await engine.dispose()
 
-    @staticmethod
-    def escape_string(value: str) -> str:
-        """Escape a string for safe use in SQL queries.
-
-        Args:
-            value: The string to escape.
-
-        Returns:
-            The escaped string.
-        """
-        return _ESCAPE_RE.sub(lambda m: _ESCAPE_MAP[m.group(0)], value)
-
 
 mysql = MySQL()
+
+
+def escape_string(value: str) -> str:
+    """Escape a string for safe use in SQL queries.
+
+    Args:
+        value: The string to escape.
+
+    Returns:
+        The escaped string.
+    """
+    return _ESCAPE_RE.sub(lambda m: _ESCAPE_MAP[m.group(0)], value)
