@@ -10,6 +10,17 @@ from korp import utils
 router = APIRouter()
 
 
+@router.post("/health", response_model=dict, include_in_schema=False)
+@router.get("/health", response_model=dict, tags=["Administration"])
+async def health(_ctx: utils.CtxDep) -> dict:
+    """Health check endpoint for monitoring.
+
+    Returns:
+        A dictionary with the health status.
+    """
+    return {"status": "ok"}
+
+
 @router.get("/sleep", response_model=dict[str, int], include_in_schema=False)
 @router.post("/sleep", response_model=dict[str, int], include_in_schema=False)
 @utils.api_handler
