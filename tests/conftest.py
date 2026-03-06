@@ -1,4 +1,5 @@
 """Pytest fixtures for testing the Korp backend as a FastAPI app."""
+# ruff: noqa: E402 - pytest.register_assert_rewrite needs to be called before importing testutils
 
 import warnings
 from collections.abc import Callable, Iterator
@@ -10,15 +11,13 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+# Functions in tests.utils are called by tests and contain assertions that should be rewritten by pytest
+pytest.register_assert_rewrite("tests.testutils")
+
 from korp.app import create_app
 from tests.corpusutils import CWBEncoder
 from tests.dbutils import KorpDatabase
 from tests.testutils import get_response_json
-
-# Functions in tests.utils are called by tests and contain assertions
-# that should be rewritten
-pytest.register_assert_rewrite("tests.testutils")
-
 
 # Test data (source) directory
 _datadir = Path(__file__).parent / "data"
