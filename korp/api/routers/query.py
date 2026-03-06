@@ -26,9 +26,11 @@ from korp.api import params
 if TYPE_CHECKING:
     import anyio.abc
 
-from korp import utils
+from korp import auth, caching, cqp, utils
 from korp.config import settings
 from korp.cwb import CWB
+from korp.dependencies import AbortDep, AbortSignal, CtxDep
+from korp.handler import api_handler
 from korp.memcached import memcached
 
 router = APIRouter(tags=["Concordance"])
@@ -102,7 +104,7 @@ class QueryParameters:
     """Parameters for query routes, parsed and validated."""
 
     corpora: list[str]
-    cqp: list[str]
+    cqp_query: list[str]
     start: int = 0
     end: int = 9
     show: set[str] = dataclasses.field(default_factory=lambda: {"word"})
@@ -120,9 +122,9 @@ class QueryParameters:
 
 
 async def parse_parameters(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpus: list[str],
-    cqp: list[str],
+    cqp_query: list[str],
     start: int,
     end: int,
     show: Sequence[str],
@@ -145,7 +147,7 @@ async def parse_parameters(
     Args:
         ctx: The request context.
         corpus: List of corpora to query.
-        cqp: List of CQP query strings.
+        cqp_query: List of CQP query strings.
         start: The index of the first row to return (0-based).
         end: The index of the last row to return (0-based, inclusive).
         show: List of positional attributes to show in the results.
@@ -171,7 +173,7 @@ async def parse_parameters(
         ValueError: If any of the parameters are invalid.
     """
     corpora = corpus or []
-    await utils.check_authorization(corpora, ctx)
+    await auth.check_authorization(corpora, ctx)
 
     show_set = set(show)
     show_set.add("word")  # Always include word
@@ -181,7 +183,7 @@ async def parse_parameters(
     if settings.MAX_KWIC_ROWS and end - start >= settings.MAX_KWIC_ROWS:
         raise ValueError(f"At most {settings.MAX_KWIC_ROWS} KWIC rows can be returned per call.")
 
-    within_dict = utils.parse_within(within, default_within)
+    within_dict = cqp.parse_within(within, default_within)
 
     # Parse context/left_context/right_context/default_context
     context_dict: defaultdict[str, tuple[str, ...]] = defaultdict(lambda: (default_context or "",))
@@ -212,14 +214,14 @@ async def parse_parameters(
         else:
             context_dict[context_corpus] = (contexts["context"].get(context_corpus, default_context),)
 
-    cqp = [c.strip().removesuffix(";") for c in cqp]
+    cqp_query = [c.strip().removesuffix(";") for c in cqp_query]
 
-    if len(cqp) > 1 and expand_prequeries and not all(within_dict[c] for c in corpora):
+    if len(cqp_query) > 1 and expand_prequeries and not all(within_dict[c] for c in corpora):
         raise ValueError("Multiple CQP queries requires 'within' or 'expand_prequeries=false'")
 
     return QueryParameters(
         corpora=corpora,
-        cqp=cqp,
+        cqp_query=cqp_query,
         within=within_dict,
         start=start,
         end=end,
@@ -238,7 +240,7 @@ async def parse_parameters(
 
 
 async def perform_query(
-    query_params: QueryParameters, ctx: utils.CtxDep, abort_signal: utils.AbortSignal | None = None
+    query_params: QueryParameters, ctx: CtxDep, abort_signal: AbortSignal | None = None
 ) -> AsyncGenerator[dict]:
     """Execute a corpus query and stream KWIC results.
 
@@ -255,7 +257,7 @@ async def perform_query(
     free_search = not query_params.in_order
 
     corpora = query_params.corpora
-    cqp = query_params.cqp
+    cqp_query = query_params.cqp_query
     within = query_params.within
     cut = query_params.cut
     expand_prequeries = query_params.expand_prequeries
@@ -266,7 +268,7 @@ async def perform_query(
     result: dict[str, Any] = {"kwic": []}
 
     # Checksum for whole query, used to verify query_data from the client
-    checksum = utils.get_hash((sorted(corpora), cqp, sorted(within.items()), cut, expand_prequeries, free_search))
+    checksum = utils.get_hash((sorted(corpora), cqp_query, sorted(within.items()), cut, expand_prequeries, free_search))
 
     debug = {}
     if ctx.common.debug:
@@ -300,9 +302,9 @@ async def perform_query(
     # If we have no usable query_data, try to get cached corpus hit counts from memcached instead
     if use_cache and not cached_corpus_hit_stats:
         memcached_keys = {}
-        cache_prefixes = await utils.cache_prefix(ctx.cache, [corpus.split("|")[0] for corpus in corpora])
+        cache_prefixes = await caching.cache_prefix(ctx.cache, [corpus.split("|")[0] for corpus in corpora])
         for corpus in corpora:
-            corpus_checksum = utils.get_hash((cqp, within[corpus], cut, expand_prequeries, free_search))
+            corpus_checksum = utils.get_hash((cqp_query, within[corpus], cut, expand_prequeries, free_search))
             memcached_keys[f"{cache_prefixes[corpus.split('|')[0]]}:query_size_{corpus_checksum}"] = corpus
 
         cached_corpus_hits = await ctx.cache.get_many(memcached_keys.keys())
@@ -357,7 +359,7 @@ async def perform_query(
                             limiter=limiter,
                         )
                     except Exception as e:
-                        raise utils.CQPError(e) from e
+                        raise cqp.CQPError(e) from e
 
                     await send_channel.send((corpus, kwic))
 
@@ -470,7 +472,7 @@ async def perform_query(
                             limiter=limiter,
                         )
                     except Exception as e:
-                        raise utils.CQPError(e) from e
+                        raise cqp.CQPError(e) from e
 
                     await send_channel.send((corpus, nr_hits))
 
@@ -492,7 +494,7 @@ async def perform_query(
                         progress_count += 1
 
     if ctx.common.debug:
-        debug["cqp"] = cqp
+        debug["cqp"] = cqp_query
 
     result["hits"] = total_hits
     result["corpus_hits"] = corpus_hit_stats
@@ -514,11 +516,11 @@ async def perform_query(
 
 @router.get("/query_sample", response_model=dict)
 @router.post("/query_sample", response_model=dict, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def query_sample(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpus: params.CorpusParam,
-    cqp: params.CQPParam,
+    cqp_query: params.CQPParam,
     show: ShowParam = ("word",),
     show_struct: ShowStructParam = (),
     random_seed: RandomSeedParam = None,
@@ -531,7 +533,7 @@ async def query_sample(
     right_context: RightContextParam | None = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
     query_data: QueryDataParam = None,
-    abort_signal: utils.AbortDep = None,
+    abort_signal: AbortDep = None,
 ) -> AsyncGenerator[dict]:
     """Perform a CQP query and return a random match.
 
@@ -544,7 +546,7 @@ async def query_sample(
     query_params = await parse_parameters(
         ctx=ctx,
         corpus=corpus,
-        cqp=cqp,
+        cqp_query=cqp_query,
         start=0,
         end=0,
         show=show,
@@ -576,11 +578,11 @@ async def query_sample(
 
 @router.get("/query", response_model=None)
 @router.post("/query", response_model=None, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def query(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpus: params.CorpusParam,
-    cqp: params.CQPParam,
+    cqp_query: params.CQPParam,
     start: StartParam = 0,
     end: EndParam = 9,
     show: ShowParam = ("word",),
@@ -597,7 +599,7 @@ async def query(
     context: params.ContextParam = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
     query_data: QueryDataParam = None,
-    abort_signal: utils.AbortDep = None,
+    abort_signal: AbortDep = None,
 ) -> AsyncGenerator[dict]:
     """Perform a CQP query and return a number of matches.
 
@@ -607,7 +609,7 @@ async def query(
     query_params = await parse_parameters(
         ctx=ctx,
         corpus=corpus,
-        cqp=cqp,
+        cqp_query=cqp_query,
         start=start,
         end=end,
         show=show,
@@ -638,7 +640,7 @@ def query_corpus(
     cwb: CWB,
     no_results: bool = False,
     use_cache: bool = False,
-    abort_signal: utils.AbortSignal | None = None,
+    abort_signal: AbortSignal | None = None,
 ) -> tuple[Iterable[str], int, dict]:
     """Perform a CQP query on a single corpus and return parsed results.
 
@@ -659,9 +661,9 @@ def query_corpus(
             - A dictionary with additional metadata (currently unused).
 
     Raises:
-        utils.CQPError: If the CQP query fails.
+        CQPError: If the CQP query fails.
     """
-    cqp = query_params.cqp
+    cqp_query = query_params.cqp_query
     show = query_params.show
     within = query_params.within[corpus]
     context = query_params.context[corpus]
@@ -677,7 +679,7 @@ def query_corpus(
 
     if use_cache and cache_dir:
         # Calculate checksum (needs to contain all arguments that may influence the results)
-        checksum_data = (cqp, within, cut, expand_prequeries, free_search)
+        checksum_data = (cqp_query, within, cut, expand_prequeries, free_search)
 
         checksum = utils.get_hash(checksum_data)
         unique_id = str(uuid.uuid4())
@@ -690,7 +692,7 @@ def query_corpus(
         cache_filename_temp = cache_filename.with_name(cache_filename.name + "_" + unique_id)
 
         mc = memcached.sync
-        cache_size_key = f"{utils.cache_prefix_sync(mc, corpus_base)}:query_size_{checksum}"
+        cache_size_key = f"{caching.cache_prefix_sync(mc, corpus_base)}:query_size_{checksum}"
         cache_hits = mc.get(cache_size_key)
         is_cached = cache_hits is not None and cache_filename.is_file()
         cached_no_hits = cache_hits == 0
@@ -709,7 +711,7 @@ def query_corpus(
         linked = corpus.split("|")
         cqp_final = []
 
-        for c in cqp:
+        for c in cqp_query:
             cs = c.split("LINKED_CORPUS:")
 
             # In a multi-language query, the "within" argument must be placed directly
@@ -727,7 +729,7 @@ def query_corpus(
 
             cqp_final.append("".join(cc).rstrip(": "))
 
-        cqp = cqp_final
+        cqp_query = cqp_final
         corpus = linked[0]
         show.add(linked[1].lower())
 
@@ -757,7 +759,7 @@ def query_corpus(
     # This prints the attributes and their relative order:
     cmd += cwb.show_attributes()
 
-    retcode = utils.QueryOptimizeResult.SUCCESS
+    retcode = cqp.QueryOptimizeResult.SUCCESS
 
     if is_cached:
         # This exact query has been done before. Read corpus positions from cache.
@@ -766,23 +768,23 @@ def query_corpus(
             # Touch cache file to delay its removal
             os.utime(cache_filename)
     else:
-        for i, c in enumerate(cqp):
+        for i, c in enumerate(cqp_query):
             cqpparams_temp = cqpparams.copy()
-            pre_query = i + 1 < len(cqp)
+            pre_query = i + 1 < len(cqp_query)
 
             if pre_query and expand_prequeries:
                 cqpparams_temp["expand"] = "to " + cast(str, within)
 
             if free_search:
-                retcode, free_query = utils.optimize_query(c, cqpparams_temp, free_search=True)
-                if retcode == utils.QueryOptimizeResult.NOT_POSSIBLE:
-                    raise utils.CQPError("Couldn't convert into free order query.")
+                retcode, free_query = cqp.optimize_query(c, cqpparams_temp, free_search=True)
+                if retcode == cqp.QueryOptimizeResult.NOT_POSSIBLE:
+                    raise cqp.CQPError("Couldn't convert into free order query.")
                 cmd += free_query
             elif optimize and expand_prequeries:
                 # We can only optimize when expand_prequeries is enabled
-                cmd += utils.optimize_query(c, cqpparams_temp, find_match=(not pre_query))[1]
+                cmd += cqp.optimize_query(c, cqpparams_temp, find_match=(not pre_query))[1]
             else:
-                cmd += utils.make_query(utils.make_cqp(c, **cqpparams_temp))
+                cmd += cqp.make_query(cqp.make_cqp(c, **cqpparams_temp))
 
             if pre_query:
                 cmd.append("Last;")
@@ -798,11 +800,11 @@ def query_corpus(
         cmd.append(f"{cache_query_temp} = Last; save {cache_query_temp};")
 
     if not no_results and not (use_cache and cached_no_hits):
-        if free_search and retcode == utils.QueryOptimizeResult.SUCCESS:
-            tokens, _ = utils.parse_cqp(cqp[-1])
+        if free_search and retcode == cqp.QueryOptimizeResult.SUCCESS:
+            tokens, _ = cqp.parse_cqp(cqp_query[-1])
             cmd.append("Last;")
             cmd.append(f"cut {start} {end};")
-            cmd += utils.make_query(utils.make_cqp(f"({' | '.join(set(tokens))})", **cqpparams))
+            cmd += cqp.make_query(cqp.make_cqp(f"({' | '.join(set(tokens))})", **cqpparams))
 
         cmd.append(f"show +{' +'.join(show)};")
         if len(context) == 1:
@@ -810,12 +812,12 @@ def query_corpus(
         else:
             cmd.append(f"set LeftContext {context[0]};")
             cmd.append(f"set RightContext {context[1]};")
-        cmd.append(f"set LeftKWICDelim '{utils.LEFT_DELIM} '; set RightKWICDelim ' {utils.RIGHT_DELIM}';")
+        cmd.append(f"set LeftKWICDelim '{cqp.LEFT_DELIM} '; set RightKWICDelim ' {cqp.RIGHT_DELIM}';")
         if show_structs:
             cmd.append(f"set PrintStructures '{', '.join(show_structs)}';")
         cmd.append("set ExternalSort yes;")
         cmd += sortcmd
-        if free_search and retcode == utils.QueryOptimizeResult.SUCCESS:
+        if free_search and retcode == cqp.QueryOptimizeResult.SUCCESS:
             # The results are already cut to the right range, so print all of them
             cmd.append("cat Last;")
         else:
@@ -843,7 +845,7 @@ def query_corpus(
 
     # Read the size of the query, i.e., the number of results
     nr_hits = next(lines)
-    nr_hits = 0 if nr_hits == utils.END_OF_LINE else int(nr_hits)
+    nr_hits = 0 if nr_hits == cqp.END_OF_LINE else int(nr_hits)
 
     if use_cache and not is_cached and not cached_no_hits:
         # Save number of hits
@@ -966,10 +968,10 @@ def _parse_tokens(
             state.struct_value = []
 
         # We use special delimiters to see when we enter and leave the match region
-        if word == utils.LEFT_DELIM:
+        if word == cqp.LEFT_DELIM:
             match["start"] = state.token_index
             continue
-        if word == utils.RIGHT_DELIM:
+        if word == cqp.RIGHT_DELIM:
             match["end"] = state.token_index
             continue
 
@@ -1007,7 +1009,7 @@ def _parse_tokens(
         # What's left is the word with its p-attrs
         values = word.rsplit("/", nr_splits)
         token: dict[str, str | dict | None] = {
-            attr: utils.translate_undef(val) for (attr, val) in zip(p_attrs, values, strict=True)
+            attr: cqp.translate_undef(val) for (attr, val) in zip(p_attrs, values, strict=True)
         }
         if state.structs:
             # Convert dict into list
@@ -1026,7 +1028,7 @@ def query_parse_lines(
     corpus: str,
     lines: Iterable[str],
     attrs: dict[str, list[str]],
-    abort_signal: utils.AbortSignal | None = None,
+    abort_signal: AbortSignal | None = None,
 ) -> list[dict]:
     """Parse concordance lines from CWB.
 
@@ -1118,7 +1120,7 @@ def query_and_parse(
     cwb: CWB,
     no_results: bool = False,
     use_cache: bool = False,
-    abort_signal: utils.AbortSignal | None = None,
+    abort_signal: AbortSignal | None = None,
 ) -> tuple[list[dict], int]:
     """Perform a CQP query on a single corpus and return parsed results.
 

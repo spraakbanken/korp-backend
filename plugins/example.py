@@ -10,13 +10,15 @@ plugins.example:
     greeting: "Hello!"
 """
 
-from korp import utils
+from korp import plugin
+from korp.dependencies import CtxDep
+from korp.handler import api_handler
 
-router = utils.Plugin("example", __name__)
+router = plugin.Plugin("example", __name__)
 
 
 @router.get("/hello")
-@utils.api_handler
-def hello(_ctx: utils.CtxDep) -> dict:
+@api_handler
+def hello(_ctx: CtxDep) -> dict:
     """Return a greeting message from the plugin configuration."""
     return {"message": router.config("greeting", "Greeting not set")}

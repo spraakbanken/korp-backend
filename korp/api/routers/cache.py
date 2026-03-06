@@ -5,16 +5,18 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
-from korp import utils
+from korp import caching
 from korp.config import settings
+from korp.dependencies import CtxDep
+from korp.handler import api_handler
 
 router = APIRouter(tags=["Administration"])
 
 
 @router.get("/cache", response_model=dict)
 @router.post("/cache", response_model=dict, include_in_schema=False)
-@utils.api_handler
-async def cache_handler(ctx: utils.CtxDep) -> dict:
+@api_handler
+async def cache_handler(ctx: CtxDep) -> dict:
     """Check for updated corpora and invalidate caches where needed, and remove old cache files.
 
     Returns:
@@ -26,7 +28,7 @@ async def cache_handler(ctx: utils.CtxDep) -> dict:
     cache = ctx.cache
 
     # Set up caching if needed
-    if await utils.setup_cache(cache):
+    if await caching.setup_cache(cache):
         return {"initial_setup": True}
 
     result = {
@@ -39,18 +41,20 @@ async def cache_handler(ctx: utils.CtxDep) -> dict:
     now = time.time()
 
     # Get modification times of corpus registry and config files
-    corpora = utils.get_corpus_timestamps()
-    corpora_configs, config_modes, config_presets = utils.get_corpus_config_timestamps()
+    corpora = caching.get_corpus_timestamps()
+    corpora_configs, config_modes, config_presets = caching.get_corpus_config_timestamps()
 
     # Fetch all needed cache keys at once
     per_corpus_keys: list[str] = []
     for corpus in corpora:
-        per_corpus_keys.extend([
-            f"{corpus}:last_update",
-            f"{corpus}:last_update_config",
-            f"{corpus}:version",
-            f"{corpus}:version_config",
-        ])
+        per_corpus_keys.extend(
+            [
+                f"{corpus}:last_update",
+                f"{corpus}:last_update_config",
+                f"{corpus}:version",
+                f"{corpus}:version_config",
+            ]
+        )
     multi_keys = [
         "multi:version",
         "multi:corpora",

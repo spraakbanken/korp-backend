@@ -22,8 +22,10 @@ from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Query
 from pydantic.json_schema import SkipJsonSchema
 
-from korp import utils
+from korp import auth, caching, cqp, utils
 from korp.config import settings
+from korp.dependencies import AbortDep, AbortSignal, CtxDep
+from korp.handler import api_handler
 from korp.memcached import CacheError, memcached
 
 from . import info, timespan
@@ -98,7 +100,7 @@ class CountParameters:
     """Parameters for count query, parsed and validated."""
 
     corpora: list[str]
-    cqp: list[str | list[str]]
+    cqp_query: list[str | list[str]]
     subcqp: list[str] = dataclasses.field(default_factory=list)
     group_by: list[tuple[str, bool]] = dataclasses.field(default_factory=list)
     within: dict[str, str | None] = dataclasses.field(default_factory=lambda: defaultdict(lambda: None))
@@ -115,9 +117,9 @@ class CountParameters:
 
 
 async def parse_parameters(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpus: list[str],
-    cqp: list[str] | None,
+    cqp_query: list[str] | None,
     subcqp: list[str] | None,
     group_by: list[str] | None,
     group_by_struct: list[str] | None,
@@ -142,7 +144,7 @@ async def parse_parameters(
     Raises:
         ValueError: If any parameter is invalid.
     """
-    await utils.check_authorization(corpus, ctx)
+    await auth.check_authorization(corpus, ctx)
 
     group_by = sorted(set(group_by)) if group_by else []
     group_by_struct = sorted(set(group_by_struct)) if group_by_struct else []
@@ -154,7 +156,7 @@ async def parse_parameters(
 
     ignore_case_set = set(ignore_case) if ignore_case else set()
 
-    within_dict = utils.parse_within(within, default_within)
+    within_dict = cqp.parse_within(within, default_within)
 
     relative_to_structs = sorted(set(relative_to_struct)) if relative_to_struct else []
     if not all(r in group_by_struct for r in relative_to_structs):
@@ -172,8 +174,8 @@ async def parse_parameters(
 
     subcqp = subcqp or []
     cqp_combined: list[str | list[str]] = []
-    if cqp:
-        cqp_combined.extend(cqp)
+    if cqp_query:
+        cqp_combined.extend(cqp_query)
 
     if len(cqp_combined) > 1 and expand_prequeries and not all(within_dict[c] for c in corpus):
         raise ValueError("Multiple CQP queries requires 'within' or 'expand_prequeries=false'")
@@ -186,7 +188,7 @@ async def parse_parameters(
 
     return CountParameters(
         corpora=corpus,
-        cqp=cqp_combined,
+        cqp_query=cqp_combined,
         subcqp=subcqp,
         group_by=group_by_combined,
         within=within_dict,
@@ -312,9 +314,7 @@ def _accumulate_ngram_stats(
             corpus_rel = freq / relative_to_freqs["corpora"][corpus][relativeto_ngram] * RELATIVE_MULTIPLIER
             cs_rows[ngram]["relative"] += corpus_rel
             cs_sums["relative"] += corpus_rel
-            ts_rows[ngram]["relative"] += (
-                freq / relative_to_freqs["combined"][relativeto_ngram] * RELATIVE_MULTIPLIER
-            )
+            ts_rows[ngram]["relative"] += freq / relative_to_freqs["combined"][relativeto_ngram] * RELATIVE_MULTIPLIER
         else:
             rel = freq / corpus_size * RELATIVE_MULTIPLIER
             cs_rows[ngram]["relative"] += rel
@@ -381,9 +381,7 @@ def _finalize_count_results(
                 )
 
         for c in corpora:
-            result["corpora"][c][query_no]["rows"] = _rows_to_list(
-                result["corpora"][c][query_no]["rows"], group_by
-            )
+            result["corpora"][c][query_no]["rows"] = _rows_to_list(result["corpora"][c][query_no]["rows"], group_by)
 
         total_stats[query_no]["sums"]["relative"] = (
             total_stats[query_no]["sums"]["absolute"] / float(total_size) * RELATIVE_MULTIPLIER
@@ -399,8 +397,8 @@ def _finalize_count_results(
 
 async def perform_count(
     count_params: CountParameters,
-    ctx: utils.CtxDep,
-    abort_signal: utils.AbortSignal | None,
+    ctx: CtxDep,
+    abort_signal: AbortSignal | None,
 ) -> AsyncGenerator[dict]:
     """Perform the count query based on the given parameters.
 
@@ -419,7 +417,7 @@ async def perform_count(
     """
     incremental = ctx.common.incremental
     corpora = count_params.corpora
-    cqp_combined = count_params.cqp
+    cqp_combined = count_params.cqp_query
     subcqp = count_params.subcqp
     group_by = count_params.group_by
     within = count_params.within
@@ -443,7 +441,7 @@ async def perform_count(
     if ctx.common.cache:
         # Use cache to skip corpora with zero hits
         memcached_keys = {}
-        cache_prefixes = await utils.cache_prefix(ctx.cache, corpora)
+        cache_prefixes = await caching.cache_prefix(ctx.cache, corpora)
         for c in corpora:
             corpus_checksum = utils.get_hash(
                 (cqp_combined, group_by, within[c], sorted(ignore_case), expand_prequeries)
@@ -469,7 +467,7 @@ async def perform_count(
     # If relative_to_struct is used, perform a separate count to get frequencies for calculating relative numbers
     if relative_to_struct:
         relative_parameters = CountParameters(
-            cqp=["[]"],
+            cqp_query=["[]"],
             corpora=corpora,
             group_by=relative_to_struct,  # Group by struct
             split=split,
@@ -515,7 +513,7 @@ async def perform_count(
             send_channel: The channel to send results back.
 
         Raises:
-            utils.CQPError: If the CQP query fails.
+            CQPError: If the CQP query fails.
         """
         async with send_channel:  # Closes the channel when done
             if abort_signal and abort_signal.is_set():
@@ -526,7 +524,7 @@ async def perform_count(
                         count_function,
                         ctx=ctx,
                         corpus=corpus,
-                        cqp=cqp_combined,
+                        cqp_query=cqp_combined,
                         group_by=group_by,
                         within=within[corpus],
                         ignore_case=ignore_case,
@@ -538,7 +536,7 @@ async def perform_count(
                     limiter=limiter,
                 )
             except Exception as e:
-                raise utils.CQPError(str(e)) from e
+                raise cqp.CQPError(str(e)) from e
 
             await send_channel.send((corpus, lines, nr_hits, corpus_size))
 
@@ -565,7 +563,7 @@ async def perform_count(
 
             query_no = 0
             for line in lines:
-                if line == utils.END_OF_LINE:
+                if line == cqp.END_OF_LINE:
                     # EOL means the start of a new subcqp result
                     query_no += 1
                     if subcqp:
@@ -636,11 +634,11 @@ async def perform_count(
 
 @router.get("/count", response_model=None)
 @router.post("/count", response_model=None, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def count(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpus: params.CorpusParam,
-    cqp: params.CQPParam,
+    cqp_query: params.CQPParam,
     subcqp: SubCQPParam = None,
     group_by: GroupByParam = None,
     group_by_struct: GroupByStructParam = None,
@@ -655,7 +653,7 @@ async def count(
     strip_pointer: StripPointerParam = None,
     top: TopParam = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
-    abort_signal: utils.AbortDep = None,
+    abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
     """Perform a CQP query and return a count of the given words/attributes.
 
@@ -665,7 +663,7 @@ async def count(
     count_params = await parse_parameters(
         ctx=ctx,
         corpus=corpus,
-        cqp=cqp,
+        cqp_query=cqp_query,
         subcqp=subcqp,
         group_by=group_by,
         group_by_struct=group_by_struct,
@@ -689,9 +687,9 @@ async def count(
 
 @router.get("/count_all", response_model=None)
 @router.post("/count_all", response_model=None, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def count_all(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpus: params.CorpusParam,
     group_by: GroupByParam = None,
     group_by_struct: GroupByStructParam = None,
@@ -706,7 +704,7 @@ async def count_all(
     strip_pointer: StripPointerParam = None,
     top: TopParam = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
-    abort_signal: utils.AbortDep = None,
+    abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
     """Like `/count` but for every single value of the given attributes.
 
@@ -716,7 +714,7 @@ async def count_all(
     count_params = await parse_parameters(
         ctx=ctx,
         corpus=corpus,
-        cqp=["[]"],
+        cqp_query=["[]"],
         subcqp=None,
         group_by=group_by,
         group_by_struct=group_by_struct,
@@ -750,11 +748,11 @@ DateToParam: TypeAlias = Annotated[
 
 @router.get("/count_time", response_model=None)
 @router.post("/count_time", response_model=None, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def count_time(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpus: params.CorpusParam,
-    cqp: params.CQPParam,
+    cqp_query: params.CQPParam,
     subcqp: SubCQPParam = None,
     within: params.WithinParam = None,
     default_within: params.DefaultWithinParam = None,
@@ -773,7 +771,7 @@ async def count_time(
     strategy: params.StrategyParam = params.StrategyValues.some_overlaps,
     combined: params.CombinedParam = True,
     per_corpus: params.PerCorpusParam = True,
-    abort_signal: utils.AbortDep = None,
+    abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
     """Count occurrences per time period.
 
@@ -786,7 +784,7 @@ async def count_time(
     count_params = await parse_parameters(
         ctx=ctx,
         corpus=corpus,
-        cqp=cqp,
+        cqp_query=cqp_query,
         subcqp=subcqp,
         group_by=None,
         group_by_struct=None,
@@ -817,7 +815,7 @@ async def count_time(
     if per_corpus:
         result["corpora"] = {}
     if ctx.common.debug:
-        result["DEBUG"] = {"cqp": count_params.cqp}
+        result["DEBUG"] = {"cqp": count_params.cqp_query}
 
     # Get date range of selected corpora
     corpus_data = await info.get_corpus_info(ctx=ctx, corpora=count_params.corpora, no_combined_cache=True)
@@ -924,7 +922,7 @@ async def count_time(
             send_channel: The channel to send results back.
 
         Raises:
-            utils.CQPError: If the CQP query fails.
+            CQPError: If the CQP query fails.
         """
         async with send_channel:
             if abort_signal and abort_signal.is_set():
@@ -934,7 +932,7 @@ async def count_time(
                     partial(  # Use partial to be able to pass keyword arguments
                         count_query_worker,
                         corpus=corpus,
-                        cqp=count_params.cqp,
+                        cqp_query=count_params.cqp_query,
                         group_by=group_by,
                         within=count_params.within[corpus],
                         expand_prequeries=count_params.expand_prequeries,
@@ -950,7 +948,7 @@ async def count_time(
                     # Corpus lacks date attributes required for count_time; treat as no rows
                     await send_channel.send((corpus, (), 0))
                     return
-                raise utils.CQPError(str(e)) from e
+                raise cqp.CQPError(str(e)) from e
 
             await send_channel.send((corpus, lines, corpus_size))
 
@@ -965,7 +963,7 @@ async def count_time(
 
             query_no = 0
             for line in lines:
-                if line == utils.END_OF_LINE:
+                if line == cqp.END_OF_LINE:
                     query_no += 1
                     continue
                 count, values = line.lstrip().split(" ", 1)
@@ -1097,7 +1095,7 @@ class _CountCacheKeys:
 
 def _get_count_cache_keys(
     corpus: str,
-    cqp: list[str | list[str]],
+    cqp_query: list[str | list[str]],
     group_by: list[tuple[str, bool]],
     within: str | None,
     ignore_case: Collection[str],
@@ -1107,7 +1105,7 @@ def _get_count_cache_keys(
 
     Args:
         corpus: The corpus name.
-        cqp: The CQP query.
+        cqp_query: The CQP query.
         group_by: Attributes to group by.
         within: The within context.
         ignore_case: Attributes to ignore case for.
@@ -1116,8 +1114,8 @@ def _get_count_cache_keys(
     Returns:
         A _CountCacheKeys instance with data and size cache keys.
     """
-    checksum = utils.get_hash((cqp, group_by, within, sorted(ignore_case), expand_prequeries))
-    prefix = utils.cache_prefix_sync(memcached.sync, corpus)
+    checksum = utils.get_hash((cqp_query, group_by, within, sorted(ignore_case), expand_prequeries))
+    prefix = caching.cache_prefix_sync(memcached.sync, corpus)
     return _CountCacheKeys(
         data_key=f"{prefix}:count_data_{checksum}",
         size_key=f"{prefix}:count_size_{checksum}",
@@ -1188,23 +1186,23 @@ def _save_count_cache(
 
 
 def count_query_worker(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpus: str,
-    cqp: list[str | list[str]],
+    cqp_query: list[str | list[str]],
     group_by: list[tuple[str, bool]],
     within: str | None,
     ignore_case: Collection[str] = frozenset(),
     expand_prequeries: bool = True,
     use_cache: bool = False,
     cache_max: int = 0,
-    abort_signal: utils.AbortSignal | None = None,
+    abort_signal: AbortSignal | None = None,
 ) -> tuple[Iterable[str], int, int]:
     """Worker for counting word/attribute occurrences in a corpus.
 
     Args:
         ctx: The request context.
         corpus: The corpus to query.
-        cqp: The CQP query or list of queries.
+        cqp_query: The CQP query or list of queries.
         group_by: List of tuples specifying attributes to group by and whether the attribute is a structural one.
         within: The structural context to limit the search to.
         ignore_case: Set of attributes to ignore case for.
@@ -1219,17 +1217,17 @@ def count_query_worker(
             - The number of hits in the corpus.
             - The size of the corpus.
     """
-    if isinstance(cqp[-1], list):
-        subcqp = cqp[-1]
-        base_cqp: list[str] = cast(list[str], cqp[:-1])
+    if isinstance(cqp_query[-1], list):
+        subcqp = cqp_query[-1]
+        base_cqp: list[str] = cast(list[str], cqp_query[:-1])
     else:
         subcqp = None
-        base_cqp = cast(list[str], cqp)
+        base_cqp = cast(list[str], cqp_query)
 
     cache_keys: _CountCacheKeys | None = None
     if use_cache and ctx.cache:
-        cache_keys = _get_count_cache_keys(corpus, cqp, group_by, within, ignore_case, expand_prequeries)
-        zero_hit_result = [utils.END_OF_LINE] * len(subcqp) if subcqp else []
+        cache_keys = _get_count_cache_keys(corpus, cqp_query, group_by, within, ignore_case, expand_prequeries)
+        zero_hit_result = [cqp.END_OF_LINE] * len(subcqp) if subcqp else []
         cached = _check_count_cache(cache_keys, zero_hit_result)
         if cached is not None:
             return cached
@@ -1246,9 +1244,9 @@ def count_query_worker(
             cqpparams_temp["expand"] = "to " + cast(str, within)
 
         if optimize:
-            cmd += utils.optimize_query(c, cqpparams_temp, find_match=(not pre_query))[1]
+            cmd += cqp.optimize_query(c, cqpparams_temp, find_match=(not pre_query))[1]
         else:
-            cmd += utils.make_query(utils.make_cqp(c, **cqpparams_temp))
+            cmd += cqp.make_query(cqp.make_cqp(c, **cqpparams_temp))
 
         if pre_query:
             cmd += ["Last;"]
@@ -1279,7 +1277,7 @@ def count_query_worker(
         for c in subcqp:
             cmd += [".EOL.;"]
             cmd += ["mainresult;"]
-            cmd += utils.optimize_query(c, cqpparams_temp, find_match=True)[1]
+            cmd += cqp.optimize_query(c, cqpparams_temp, find_match=True)[1]
             cmd += [
                 """tabulate Last {} > "| sort | uniq -c | sort -nr";""".format(
                     ", ".join(f"match .. matchend {g[0]}" for g in group_by)
@@ -1301,7 +1299,7 @@ def count_query_worker(
         if line.startswith("Size:"):
             _, corpus_size = line.split(":")
             corpus_size = int(corpus_size.strip())
-        elif line == utils.END_OF_LINE:
+        elif line == cqp.END_OF_LINE:
             break
 
     if cache_keys is not None:
@@ -1311,16 +1309,16 @@ def count_query_worker(
 
 
 def count_query_worker_simple(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpus: str,
-    cqp: list[str | list[str]],
+    cqp_query: list[str | list[str]],
     group_by: list[tuple[str, bool]],
     within: str | None = None,
     ignore_case: Collection[str] = frozenset(),
     expand_prequeries: bool = True,
     use_cache: bool = False,
     cache_max: int = 0,
-    abort_signal: utils.AbortSignal | None = None,
+    abort_signal: AbortSignal | None = None,
 ) -> tuple[Iterable[str], int, int]:
     """Perform a simple count query for all values of the given attributes.
 
@@ -1330,7 +1328,7 @@ def count_query_worker_simple(
     Args:
         ctx: The request context.
         corpus: The corpus to query.
-        cqp: The CQP query or list of queries.
+        cqp_query: The CQP query or list of queries.
         group_by: List of tuples specifying attributes to group by and whether the attribute is a structural one.
         within: The structural context to limit the search to. Unused in simple count queries.
         ignore_case: Collection of attributes to ignore case for.
@@ -1347,7 +1345,7 @@ def count_query_worker_simple(
     """
     cache_keys: _CountCacheKeys | None = None
     if use_cache and ctx.cache:
-        cache_keys = _get_count_cache_keys(corpus, cqp, group_by, within, ignore_case, expand_prequeries)
+        cache_keys = _get_count_cache_keys(corpus, cqp_query, group_by, within, ignore_case, expand_prequeries)
         cached = _check_count_cache(cache_keys, [])
         if cached is not None:
             return cached

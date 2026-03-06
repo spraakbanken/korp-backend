@@ -18,7 +18,7 @@ CorpusParam: TypeAlias = Annotated[
 
 CQPParam: TypeAlias = Annotated[
     list[str],
-    Query(description="CQP query or queries to perform."),
+    Query(description="CQP query or queries to perform.", alias="cqp"),
 ]
 
 DefaultWithinParam: TypeAlias = Annotated[

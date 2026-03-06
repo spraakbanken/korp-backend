@@ -7,7 +7,8 @@ from collections.abc import Iterable, Iterator
 
 import psutil
 
-from korp import utils
+from korp import cqp
+from korp.dependencies import AbortSignal
 
 
 class CWB:
@@ -44,7 +45,7 @@ class CWB:
         self,
         process: subprocess.Popen,
         input_data: bytes | None = None,
-        abort_signal: utils.AbortSignal | None = None,
+        abort_signal: AbortSignal | None = None,
     ) -> tuple[bytes, bytes] | None:
         """Communicate with a subprocess, periodically checking for abort signals.
 
@@ -90,7 +91,7 @@ class CWB:
                 yield line
 
     def run_cqp(
-        self, command: str | list[str], attr_ignore: bool = False, abort_signal: utils.AbortSignal | None = None
+        self, command: str | list[str], attr_ignore: bool = False, abort_signal: AbortSignal | None = None
     ) -> Iterator[str]:
         """Call the cqp binary with the given command(s).
 
@@ -103,7 +104,7 @@ class CWB:
             Lines of output from the CQP command. Empty lines are ignored.
 
         Raises:
-            utils.CQPError: If an error occurs during execution of the command.
+            CQPError: If an error occurs during execution of the command.
         """
         env = os.environ.copy()
         env["LC_COLLATE"] = self.locale
@@ -135,13 +136,11 @@ class CWB:
                 ignored in error for ignored in self._IGNORED_ERRORS
             )
             if not ignore_error:
-                raise utils.CQPError(error)
+                raise cqp.CQPError(error)
 
         yield from self._iter_lines(reply.decode(self.encoding, errors="ignore"))
 
-    def run_cwb_scan(
-        self, corpus: str, attrs: list[str], abort_signal: utils.AbortSignal | None = None
-    ) -> Iterator[str]:
+    def run_cwb_scan(self, corpus: str, attrs: list[str], abort_signal: AbortSignal | None = None) -> Iterator[str]:
         """Call the cwb-scan-corpus binary with the given arguments.
 
         Args:
@@ -153,7 +152,7 @@ class CWB:
             Lines of output from the cwb-scan-corpus command. Empty lines are ignored.
 
         Raises:
-            utils.CQPError: If an error occurs during execution of the command.
+            CQPError: If an error occurs during execution of the command.
         """
         process = subprocess.Popen(
             [self.scan_executable, "-q", "-r", self.registry, corpus, *attrs],
@@ -168,7 +167,7 @@ class CWB:
         reply, error = result
         if error:
             error = re.sub(r"\s+", " ", error.decode())
-            raise utils.CQPError(error)
+            raise cqp.CQPError(error)
 
         yield from self._iter_lines(reply.decode(self.encoding, errors="ignore"), max_length=self.MAX_LINE_LENGTH)
 
@@ -190,7 +189,7 @@ class CWB:
         """
         attrs = {"p": [], "s": [], "a": []}
         for line in lines:
-            if line == utils.END_OF_LINE:
+            if line == cqp.END_OF_LINE:
                 break
             typ, name, *_ = line.split(None, 2)
             attrs[typ[0]].append(name)

@@ -17,8 +17,10 @@ import anyio
 from anyio import CapacityLimiter
 from fastapi import APIRouter, Query
 
-from korp import utils
+from korp import auth, caching, utils
 from korp.config import settings
+from korp.dependencies import CtxDep
+from korp.handler import api_handler
 from korp.memcached import CacheError
 
 from . import count as count_route
@@ -28,9 +30,9 @@ router = APIRouter(tags=["Corpus Information"])
 
 @router.get("/attr_values", response_model=dict)
 @router.post("/attr_values", response_model=dict, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def attr_values(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpus: params.CorpusParam,
     attr: Annotated[
         list[str], Query(description="Comma-separated list of structural attributes."), BeforeValidator(utils.split_csv)
@@ -57,7 +59,7 @@ async def attr_values(
     incremental = ctx.common.incremental
     include_count = count
 
-    await utils.check_authorization(corpus, ctx)
+    await auth.check_authorization(corpus, ctx)
 
     split = split or []
     split_set = set(split)
@@ -68,7 +70,7 @@ async def attr_values(
     if ctx.common.cache:
         all_cache = True
         for c in corpus:
-            cache_prefixes[c] = await utils.cache_prefix(ctx.cache, c)
+            cache_prefixes[c] = await caching.cache_prefix(ctx.cache, c)
             for attribute in attr:
                 checksum = utils.get_hash((c, attribute, split, include_count))
                 data = await ctx.cache.get(f"{cache_prefixes[c]}:attr_values_{checksum}")
@@ -99,7 +101,7 @@ async def attr_values(
                         count_route.count_query_worker_simple,
                         ctx=ctx,
                         corpus=corpus,
-                        cqp=[],
+                        cqp_query=[],
                         group_by=[(s, True) for s in attr.split(">")],
                         use_cache=ctx.common.cache,
                     ),
@@ -181,7 +183,7 @@ async def attr_values(
     if ctx.common.cache and not all_cache:
         for c in corpus:
             if c not in cache_prefixes:
-                cache_prefixes[c] = await utils.cache_prefix(ctx.cache, c)
+                cache_prefixes[c] = await caching.cache_prefix(ctx.cache, c)
             for attribute in attr:
                 if (c, attribute) in from_cache:
                     continue

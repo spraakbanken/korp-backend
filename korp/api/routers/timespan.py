@@ -17,10 +17,12 @@ from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Query
 from sqlalchemy import text
 
-from korp import utils
+from korp import caching, utils
 from korp.api import params
 from korp.api.params import GranularityValues
 from korp.config import settings
+from korp.dependencies import CtxDep
+from korp.handler import api_handler
 from korp.memcached import CacheError
 
 router = APIRouter(tags=["Statistics"])
@@ -93,9 +95,9 @@ def _adjust_date(date_str: str, granularity: GranularityValues, *, subtract: boo
 
 @router.get("/timespan", response_model=None)
 @router.post("/timespan", response_model=None, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def timespan(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpus: params.CorpusParam,
     granularity: params.GranularityParam = GranularityValues.year,
     combined: params.CombinedParam = True,
@@ -149,7 +151,7 @@ async def timespan(
 
 
 async def get_timespan(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpora: list[str],
     granularity: GranularityValues = GranularityValues.year,
     combined: bool = True,
@@ -197,7 +199,7 @@ async def get_timespan(
         combined_checksum = utils.get_hash(
             (granularity, strategy, combined, per_corpus, date_from, date_to, sorted(corpora))
         )
-        cache_prefix = await utils.cache_prefix(ctx.cache)
+        cache_prefix = await caching.cache_prefix(ctx.cache)
         cache_combined_key = f"{cache_prefix}:timespan_{combined_checksum}"
         result = await ctx.cache.get(cache_combined_key)
         if result is not None:
@@ -208,7 +210,7 @@ async def get_timespan(
 
         # Look for per-corpus caches
         corpus_checksum = utils.get_hash((date_from, date_to, granularity, strategy))
-        cache_prefixes = await utils.cache_prefix(ctx.cache, corpora)
+        cache_prefixes = await caching.cache_prefix(ctx.cache, corpora)
         for c in corpora:
             cache_key = f"{cache_prefixes[c]}:timespan_{corpus_checksum}"
             corpus_cached_data = await ctx.cache.get(cache_key)

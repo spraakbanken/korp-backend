@@ -15,10 +15,12 @@ from pydantic import BeforeValidator
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from korp import utils
+from korp import auth, caching, utils
 from korp.api import params
 from korp.api.routers import info
 from korp.config import settings
+from korp.dependencies import AbortDep, AbortSignal, CtxDep
+from korp.handler import api_handler
 from korp.memcached import CacheError
 
 from . import query, timespan
@@ -1257,7 +1259,7 @@ async def _existing_tables(conn: AsyncConnection, pattern: str) -> set[str]:
 
 
 async def _relations_impl(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpora: list[str],
     word: str,
     relation_type: RelationType,
@@ -1272,7 +1274,7 @@ async def _relations_impl(
     include_overall: bool,
     max_scope: MaxScope,
     measures: Container[Measures],
-    abort_signal: utils.AbortSignal | None = None,
+    abort_signal: AbortSignal | None = None,
 ) -> AsyncIterator[dict]:
     """Shared implementation for `/relations` and `/relations_time`.
 
@@ -1298,7 +1300,7 @@ async def _relations_impl(
         Progress updates as dictionaries with keys like "progress_corpora" or "progress_{index}",
         and finally a dictionary containing the results.
     """
-    await utils.check_authorization(corpora, ctx)
+    await auth.check_authorization(corpora, ctx)
 
     if not include_split and not include_overall:
         yield {"ERROR": "Both split and overall results are disabled."}
@@ -1320,7 +1322,7 @@ async def _relations_impl(
 
     if ctx.common.cache:
         cache_checksum = utils.get_hash((word, is_lemgram, min_freq, use_split_data, start_year, end_year))
-        cache_prefixes = await utils.cache_prefix(ctx.cache, corpora)
+        cache_prefixes = await caching.cache_prefix(ctx.cache, corpora)
         for corpus in corpora:
             cache_key = f"{cache_prefixes[corpus]}:relations_{cache_checksum}"
             memcached_keys[cache_key] = corpus
@@ -1558,9 +1560,9 @@ async def _relations_impl(
 
 @router.get("/relations", response_model=None)
 @router.post("/relations", response_model=None, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def relations(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpus: params.CorpusParam,
     word: str,
     relation_type: Annotated[RelationType, Query(alias="type")] = RelationType.word,
@@ -1575,7 +1577,7 @@ async def relations(
     overall: bool = True,
     max_scope: MaxScope = MaxScope.per_period,
     measures: MeasuresParam = tuple(Measures),
-    abort_signal: utils.AbortDep = None,
+    abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
     """Calculate word picture data.
 
@@ -1605,9 +1607,9 @@ async def relations(
 
 @router.get("/relations_time", response_model=None)
 @router.post("/relations_time", response_model=None, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def relations_time(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpus: params.CorpusParam,
     word: str,
     relation_type: Annotated[RelationType, Query(alias="type")] = RelationType.word,
@@ -1621,7 +1623,7 @@ async def relations_time(
     overall: bool = False,
     max_scope: MaxScope = MaxScope.per_period,
     measures: MeasuresParam = tuple(Measures),
-    abort_signal: utils.AbortDep = None,
+    abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
     """Calculate word picture data with time splits.
 
@@ -1661,7 +1663,7 @@ def _parse_source(source: list[str]) -> dict[str, set[int]]:
 
 
 async def _relations_sentences_impl(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     source: list[str],
     start: int,
     end: int,
@@ -1669,10 +1671,10 @@ async def _relations_sentences_impl(
     show_struct: str,
     default_context: str,
     yearly: bool,
-    abort_signal: utils.AbortSignal | None = None,
+    abort_signal: AbortSignal | None = None,
 ) -> dict[str, Any]:
     source_map = _parse_source(source)
-    await utils.check_authorization(source_map.keys(), ctx)
+    await auth.check_authorization(source_map.keys(), ctx)
 
     table_suffix = f"{SPLIT_SUFFIX}_sentences" if yearly else "_sentences"
     shown = show or "word"
@@ -1745,7 +1747,7 @@ async def _relations_sentences_impl(
         query_params = await query.parse_parameters(
             ctx=ctx,
             corpus=[corpus],
-            cqp=[cqp],
+            cqp_query=[cqp],
             start=0,
             end=end - start,
             show=utils.split_csv(shown),
@@ -1785,9 +1787,9 @@ async def _relations_sentences_impl(
 
 @router.get("/relations_sentences", response_model=None)
 @router.post("/relations_sentences", response_model=None, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def relations_sentences(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     source: SourceParam,
     start: int = 0,
     end: int = 9,
@@ -1795,7 +1797,7 @@ async def relations_sentences(
     show_struct: str = "",
     default_context: str = "1 sentence",
     split: bool = False,
-    abort_signal: utils.AbortDep = None,
+    abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
     """Find sentences containing relations from word picture source IDs.
 
@@ -1828,16 +1830,16 @@ async def relations_sentences(
 
 @router.get("/relations_time_sentences", response_model=None)
 @router.post("/relations_time_sentences", response_model=None, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def relations_time_sentences(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     source: SourceParam,
     start: int = 0,
     end: int = 9,
     show: str = "word",
     show_struct: str = "",
     default_context: str = "1 sentence",
-    abort_signal: utils.AbortDep = None,
+    abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
     """Find time-split sentences containing relations from word picture source IDs.
 

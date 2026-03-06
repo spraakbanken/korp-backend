@@ -10,8 +10,10 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 from pydantic import AfterValidator, BeforeValidator
 
-from korp import utils
+from korp import auth, utils
 from korp.api import params
+from korp.dependencies import AbortDep, CtxDep
+from korp.handler import api_handler
 
 from . import count
 
@@ -20,9 +22,9 @@ router = APIRouter(tags=["Statistics"])
 
 @router.get("/loglike", response_model=dict)
 @router.post("/loglike", response_model=dict, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def loglike(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     set1_cqp: Annotated[str, Query(description="CQP query for set 1")],
     set2_cqp: Annotated[str, Query(description="CQP query for set 2")],
     set1_corpus: Annotated[
@@ -51,7 +53,7 @@ async def loglike(
     strip_pointer: count.StripPointerParam = None,
     top: count.TopParam = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
-    abort_signal: utils.AbortDep = None,
+    abort_signal: AbortDep = None,
 ) -> AsyncGenerator[dict]:
     """Do a log-likelihood comparison on two queries.
 
@@ -62,7 +64,7 @@ async def loglike(
     params = await count.parse_parameters(
         ctx=ctx,
         corpus=[],
-        cqp=[],
+        cqp_query=[],
         subcqp=None,
         group_by=group_by,
         group_by_struct=group_by_struct,
@@ -85,7 +87,7 @@ async def loglike(
     set2_corpora = set(set2_corpus)
 
     corpora = set1_corpora.union(set2_corpora)
-    await utils.check_authorization(corpora, ctx)
+    await auth.check_authorization(corpora, ctx)
 
     same_cqp = set1_cqp == set2_cqp
 
@@ -98,10 +100,7 @@ async def loglike(
         Returns:
             A sorted tuple of (attr_name, values_tuple) pairs.
         """
-        return tuple(
-            (k, v if isinstance(v, tuple) else (v,))
-            for k, v in sorted(value.items())
-        )
+        return tuple((k, v if isinstance(v, tuple) else (v,)) for k, v in sorted(value.items()))
 
     def compute_loglike(wf1: int, tot1: int, wf2: int, tot2: int) -> float:
         """Compute log-likelihood for a single pair.
@@ -142,10 +141,7 @@ async def loglike(
             List of tuples (log-likelihood, word), sorted by log-likelihood descending.
         """
         all_words = d1.keys() | ref.keys()
-        result = [
-            (compute_loglike(d1.get(w, 0), tot1, ref.get(w, 0), reftot), w)
-            for w in all_words
-        ]
+        result = [(compute_loglike(d1.get(w, 0), tot1, ref.get(w, 0), reftot), w) for w in all_words]
         result.sort(reverse=True)
         return result
 
@@ -195,7 +191,7 @@ async def loglike(
 
     # If same CQP for both sets, handle as one query for better performance
     if same_cqp:
-        params.cqp = [set1_cqp]
+        params.cqp_query = [set1_cqp]
         params.corpora = list(corpora)
         count_result = await utils.async_generator_to_dict(count.perform_count(params, ctx, abort_signal))
 
@@ -205,8 +201,7 @@ async def loglike(
                 sets[i]["total"] += count_result["corpora"][corpus]["sums"]["absolute"]
                 if len(cset) == 1:
                     sets[i]["freq"] = {
-                        _make_freq_key(x["value"]): x["absolute"]
-                        for x in count_result["corpora"][corpus]["rows"]
+                        _make_freq_key(x["value"]): x["absolute"] for x in count_result["corpora"][corpus]["rows"]
                     }
                 else:
                     for x in count_result["corpora"][corpus]["rows"]:
@@ -215,9 +210,9 @@ async def loglike(
     else:
         params_2 = dataclasses.replace(params)
         params.corpora = list(set1_corpora)
-        params.cqp = [set1_cqp]
+        params.cqp_query = [set1_cqp]
         params_2.corpora = list(set2_corpora)
-        params_2.cqp = [set2_cqp]
+        params_2.cqp_query = [set2_cqp]
         count_result_1, count_result_2 = await asyncio.gather(
             utils.async_generator_to_dict(count.perform_count(params, ctx, abort_signal)),
             utils.async_generator_to_dict(count.perform_count(params_2, ctx, abort_signal)),
@@ -226,10 +221,7 @@ async def loglike(
         sets = [{}, {}]
         for i, res in enumerate((count_result_1, count_result_2)):
             sets[i]["total"] = res["combined"]["sums"]["absolute"]
-            sets[i]["freq"] = {
-                _make_freq_key(row["value"]): row["absolute"]
-                for row in res["combined"]["rows"]
-            }
+            sets[i]["freq"] = {_make_freq_key(row["value"]): row["absolute"] for row in res["combined"]["rows"]}
 
     ll_list = compute_list(sets[0]["freq"], sets[0]["total"], sets[1]["freq"], sets[1]["total"])
     ws, avg = compute_ll_stats(ll_list, max_results, sets)

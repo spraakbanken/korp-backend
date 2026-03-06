@@ -17,15 +17,16 @@ from pathlib import Path
 
 import jwt  # type: ignore
 
-from korp import utils
+from korp import auth, caching, cqp, plugin
+from korp.dependencies import AuthContext
 
-bp = utils.Plugin("auth_jwt", __name__)
+bp = plugin.Plugin("auth_jwt", __name__)
 
 
-class AuthJWT(utils.Authorizer):
+class AuthJWT(auth.Authorizer):
     """Authorizer plugin using JWT token scopes."""
 
-    async def get_protected_corpora(self, auth_ctx: utils.AuthContext) -> list[str]:
+    async def get_protected_corpora(self, auth_ctx: AuthContext) -> list[str]:
         """Get list of corpora with restricted access.
 
         Args:
@@ -36,7 +37,7 @@ class AuthJWT(utils.Authorizer):
         """
         key = None
         if auth_ctx.cache_enabled:
-            key = f"protected:{await utils.cache_prefix(self.cache)}"
+            key = f"protected:{await caching.cache_prefix(self.cache)}"
             result = await self.cache.get(key)
             if result is not None:
                 return result
@@ -63,7 +64,7 @@ class AuthJWT(utils.Authorizer):
         next(lines, None)  # Skip version number
 
         for line in lines:
-            if line == utils.END_OF_LINE:
+            if line == cqp.END_OF_LINE:
                 break
             if ":" in line and not line.endswith(":"):
                 key, value = (part.strip() for part in line.split(":", 1))
@@ -72,7 +73,7 @@ class AuthJWT(utils.Authorizer):
         return False
 
     async def check_authorization(
-        self, corpora: list[str], auth_ctx: utils.AuthContext
+        self, corpora: list[str], auth_ctx: AuthContext
     ) -> tuple[bool, list[str], str | None]:
         """Check if the user has access to the specified corpora based on JWT scopes.
 

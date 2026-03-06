@@ -22,7 +22,9 @@ except ImportError:
 
 from fastapi import APIRouter, Query
 
-from korp import utils
+from korp import caching, utils
+from korp.dependencies import CtxDep
+from korp.handler import api_handler
 
 router = APIRouter(tags=["Corpus Information"])
 
@@ -40,9 +42,9 @@ CorpusParam: TypeAlias = Annotated[
 
 @router.get("/corpus_config", response_model=dict, name="Corpus Configuration")
 @router.post("/corpus_config", response_model=dict, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def corpus_config(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     mode: Annotated[str, Query(description="Mode to get configuration for.")] = "default",
     corpus: CorpusParam = None,
 ) -> AsyncIterator[dict]:
@@ -68,7 +70,7 @@ async def corpus_config(
 
     # Try to fetch complete config from cache
     if ctx.common.cache:
-        result = await cache.get(f"{await utils.cache_prefix(cache, config=True)}:corpus_config_{cache_checksum}")
+        result = await cache.get(f"{await caching.cache_prefix(cache, config=True)}:corpus_config_{cache_checksum}")
         if result:
             if ctx.common.debug:
                 result.setdefault("DEBUG", {})
@@ -85,7 +87,7 @@ async def corpus_config(
     if ctx.common.cache:
         try:
             added = await cache.add(
-                f"{await utils.cache_prefix(cache, config=True)}:corpus_config_{cache_checksum}", result
+                f"{await caching.cache_prefix(cache, config=True)}:corpus_config_{cache_checksum}", result
             )
         except CacheError:
             pass
@@ -311,7 +313,7 @@ async def get_mode(mode_name: str, corpora: list, cache: Memcached | None = None
         corpus_files = list(Path(settings.CORPUS_CONFIG_DIR, "corpora").glob("*.yaml"))
 
     if cache:
-        cache_prefix = await utils.cache_prefix(cache, config=True)
+        cache_prefix = await caching.cache_prefix(cache, config=True)
         cache_keys = {
             f"{cache_prefix}:corpus_config_{Path(corpus_file).name}": corpus_file for corpus_file in corpus_files
         }

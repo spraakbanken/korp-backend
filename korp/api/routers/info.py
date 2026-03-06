@@ -7,8 +7,10 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import Field
 
-from korp import utils
+from korp import auth, caching, cqp, handler, utils
 from korp.api import params, schemas
+from korp.dependencies import CtxDep
+from korp.handler import api_handler
 from korp.memcached import CacheError
 
 router = APIRouter(tags=["Corpus Information"])
@@ -30,13 +32,13 @@ class InfoResponse(schemas.CommonResponse):
     "/info",
     name="General Information",
     response_model=None,
-    responses=utils.docs_response(InfoResponse),
+    responses=handler.docs_response(InfoResponse),
     description="Get information about the Korp backend and available corpora.",
 )
 @router.post("/info", response_model=None, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def info(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
 ) -> AsyncIterator[dict]:
     """Get version information about list of available corpora.
 
@@ -45,7 +47,7 @@ async def info(
     """
     cache = ctx.cache
     if ctx.common.cache:
-        cache_prefix = await utils.cache_prefix(cache)
+        cache_prefix = await caching.cache_prefix(cache)
         result = await cache.get(f"{cache_prefix}:info")
         if result:
             if ctx.common.debug:
@@ -57,7 +59,7 @@ async def info(
     corpora = ctx.cwb.run_cqp("show corpora;")
     version = next(corpora)
 
-    protected = await utils.get_protected_corpora(ctx)
+    protected = await auth.get_protected_corpora(ctx)
 
     result = {
         "version": importlib.metadata.version("korp-backend"),
@@ -80,9 +82,9 @@ async def info(
 
 @router.get("/corpus_info", response_model=dict, name="Corpus Information")
 @router.post("/corpus_info", response_model=dict, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def corpus_info(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     corpus: params.CorpusParam,
 ) -> AsyncIterator[dict]:
     """Get information about a specific corpus or corpora.
@@ -97,7 +99,7 @@ async def corpus_info(
     yield await get_corpus_info(ctx, corpus)
 
 
-async def get_corpus_info(ctx: utils.CtxDep, corpora: list[str], no_combined_cache: bool = False) -> dict:
+async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bool = False) -> dict:
     """Get information about a specific corpus or corpora.
 
     Args:
@@ -113,7 +115,7 @@ async def get_corpus_info(ctx: utils.CtxDep, corpora: list[str], no_combined_cac
     combined_cache_key = ""
 
     if ctx.common.cache:
-        all_prefixes = await utils.cache_prefix(cache, ["multi", *corpora])
+        all_prefixes = await caching.cache_prefix(cache, ["multi", *corpora])
 
         checksum_combined = utils.get_hash((sorted(corpora),))
         combined_cache_key = f"{all_prefixes['multi']}:info_{checksum_combined}"
@@ -174,7 +176,7 @@ async def get_corpus_info(ctx: utils.CtxDep, corpora: list[str], no_combined_cac
         info = {}
 
         for line in lines:
-            if line == utils.END_OF_LINE:
+            if line == cqp.END_OF_LINE:
                 break
             if ":" in line and not line.endswith(":"):
                 infokey, infoval = (x.strip() for x in line.split(":", 1))

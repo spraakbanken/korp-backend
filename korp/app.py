@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from korp import utils
+from korp import auth, caching, handler
 from korp.api.routers import routers
 from korp.config import Settings, settings
 from korp.cwb import CWB
@@ -72,7 +72,7 @@ def _apply_settings_override(config_override: dict[str, Any] | None) -> bool:
     if not settings_overrides:
         return testing
 
-    merged = Settings().model_dump()
+    merged = settings.model_dump()
     merged.update(settings_overrides)
     validated = Settings(**merged)
     for key, value in validated.model_dump().items():
@@ -101,7 +101,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         """Initialize and finalize resources for the app lifespan."""
-        utils.enforce_ctx_dependency(app)
+        handler.enforce_ctx_dependency(app)
         app.state.cwb = CWB(
             executable=settings.CQP_EXECUTABLE,
             scan_executable=settings.CWB_SCAN_EXECUTABLE,
@@ -114,7 +114,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         app.state.cache_enabled = memcached.active and settings.CACHE_DIR and Path(settings.CACHE_DIR).is_dir()
         if app.state.cache_enabled:
             logger.info("Caching is enabled.")
-            await utils.setup_cache(memcached)
+            await caching.setup_cache(memcached)
         else:
             logger.info("Caching is disabled.")
         authorizer_class = getattr(app.state, "authorizer_class", None)
@@ -153,7 +153,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         Returns:
             The response from the next handler.
         """
-        await utils.convert_post_body_to_query_params(request)
+        await handler.convert_post_body_to_query_params(request)
         return await call_next(request)
 
     # Enable CORS, with support for credentials and an Access-Control-Max-Age (for preflight requests)
@@ -170,7 +170,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         app.include_router(router)
 
     # Load plugins
-    authorizer_class: type[utils.Authorizer] | None = None
+    authorizer_class: type[auth.Authorizer] | None = None
     authorizer_plugin: str | None = None
     for plugin in settings.PLUGINS:
         try:
@@ -186,10 +186,10 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
 
         if (plugin_authorizer := getattr(module, "AUTHORIZER_CLASS", None)) is None:
             continue
-        if not inspect.isclass(plugin_authorizer) or not issubclass(plugin_authorizer, utils.Authorizer):
+        if not inspect.isclass(plugin_authorizer) or not issubclass(plugin_authorizer, auth.Authorizer):
             raise TypeError(
                 f"Plugin {plugin} exports AUTHORIZER_CLASS={plugin_authorizer!r}, "
-                "but it is not a subclass of utils.Authorizer."
+                "but it is not a subclass of Authorizer."
             )
         if authorizer_class is not None:
             raise RuntimeError(

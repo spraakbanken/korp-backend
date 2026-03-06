@@ -12,15 +12,17 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from korp import utils
+from korp import auth, caching, plugin
+from korp.dependencies import AuthContext, CtxDep
+from korp.handler import api_handler
 
-router = utils.Plugin("authenticate", __name__)
+router = plugin.Plugin("authenticate", __name__)
 
 
 @router.get("/authenticate", response_model=None)
 @router.post("/authenticate", response_model=None, include_in_schema=False)
-@utils.api_handler(cache_headers=False)
-def authenticate(ctx: utils.CtxDep) -> dict:
+@api_handler(cache_headers=False)
+def authenticate(ctx: CtxDep) -> dict:
     """Authenticate a user against an authentication server.
 
     Args:
@@ -74,11 +76,11 @@ def _authenticate_from_auth_header(auth_header: str | None) -> dict:
             )
             auth_response = json.loads(contents)
         except urllib.error.HTTPError:
-            raise utils.KorpAuthorizationError("Could not contact authentication server.") from None
+            raise auth.KorpAuthorizationError("Could not contact authentication server.") from None
         except ValueError:
-            raise utils.KorpAuthorizationError("Invalid response from authentication server.") from None
+            raise auth.KorpAuthorizationError("Invalid response from authentication server.") from None
         except Exception:
-            raise utils.KorpAuthorizationError("Unexpected error during authentication.") from None
+            raise auth.KorpAuthorizationError("Unexpected error during authentication.") from None
 
         if auth_response["authenticated"]:
             permitted_resources = auth_response["permitted_resources"]
@@ -92,10 +94,10 @@ def _authenticate_from_auth_header(auth_header: str | None) -> dict:
     return {}
 
 
-class Auth(utils.Authorizer):
+class Auth(auth.Authorizer):
     """Authorizer class that checks if the user has access to protected corpora based on the authentication response."""
 
-    async def get_protected_corpora(self, auth_ctx: utils.AuthContext) -> list[str]:
+    async def get_protected_corpora(self, auth_ctx: AuthContext) -> list[str]:
         """Get list of protected corpora.
 
         Args:
@@ -105,7 +107,7 @@ class Auth(utils.Authorizer):
             A list of protected corpora.
         """
         if auth_ctx.cache_enabled:
-            key = f"protected:{await utils.cache_prefix(self.cache)}"
+            key = f"protected:{await caching.cache_prefix(self.cache)}"
             result = await self.cache.get(key)
             if result is not None:
                 return result
@@ -121,7 +123,7 @@ class Auth(utils.Authorizer):
         return protected_corpora
 
     async def check_authorization(
-        self, corpora: list[str], auth_ctx: utils.AuthContext
+        self, corpora: list[str], auth_ctx: AuthContext
     ) -> tuple[bool, list[str], str | None]:
         """Take a list of corpora, and check if the user has access to them.
 

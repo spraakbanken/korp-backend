@@ -8,7 +8,9 @@ from pydantic import AfterValidator, BeforeValidator
 from pydantic.json_schema import SkipJsonSchema
 from sqlalchemy import text
 
-from korp import utils
+from korp import auth, utils
+from korp.dependencies import CtxDep
+from korp.handler import api_handler
 
 router = APIRouter(tags=["Statistics"])
 
@@ -28,9 +30,9 @@ LemgramParam: TypeAlias = Annotated[
 
 @router.get("/lemgram_count", response_model=dict)
 @router.post("/lemgram_count", response_model=dict, include_in_schema=False)
-@utils.api_handler
+@api_handler
 async def lemgram_count(
-    ctx: utils.CtxDep,
+    ctx: CtxDep,
     lemgram: LemgramParam,
     corpus: CorpusParamOptional = None,
 ) -> AsyncGenerator[dict]:
@@ -45,7 +47,7 @@ async def lemgram_count(
         A dictionary with lemgram counts.
     """
     corpora = corpus or []
-    await utils.check_authorization(corpora, ctx)
+    await auth.check_authorization(corpora, ctx)
 
     bind_params: dict[str, str] = {}
     lemgram_placeholders = ", ".join(f":lemgram_{i}" for i in range(len(lemgram)))
