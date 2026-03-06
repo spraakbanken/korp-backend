@@ -8,6 +8,9 @@ The plugin expects the JWT to be provided in the Authorization header as a Beare
 to validate the token. The public key file can be configured using the "pubkey_file" setting in the plugin
 configuration.
 
+To determine which corpora are protected, it checks the CWB info for each corpus. A corpus is considered protected if
+it has the "Protected" key set to "true" in its CWB `.info` file.
+
 To use this plugin, you need to install the `pyjwt[crypto]` package.
 """
 
@@ -58,7 +61,7 @@ class AuthJWT(auth.Authorizer):
             corpus: The name of the corpus to check.
 
         Returns:
-            True if the corpus is protected, False otherwise.
+            `True` if the corpus is protected, `False` otherwise.
         """
         lines = self.cwb.run_cqp([f"{corpus};", "info; .EOL.;", "exit;"])
         next(lines, None)  # Skip version number

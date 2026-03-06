@@ -2,6 +2,9 @@
 
 This plugin implements a simple authentication mechanism using an external authentication server. It checks the user's
 credentials against the authentication server and retrieves the list of corpora the user has access to.
+
+To determine which corpora are protected, it checks the CWB info for each corpus. A corpus is considered protected if
+it has the "Protected" key set to "true" in its CWB `.info` file.
 """
 
 import base64
@@ -10,9 +13,8 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from pathlib import Path
 
-from korp import auth, caching, plugin
+from korp import auth, caching, cqp, plugin
 from korp.dependencies import AuthContext, CtxDep
 from korp.handler import api_handler
 
@@ -106,21 +108,42 @@ class Auth(auth.Authorizer):
         Returns:
             A list of protected corpora.
         """
+        key = None
         if auth_ctx.cache_enabled:
             key = f"protected:{await caching.cache_prefix(self.cache)}"
             result = await self.cache.get(key)
             if result is not None:
                 return result
 
-        if router.config("PROTECTED_FILE"):
-            with Path(router.config("PROTECTED_FILE")).open(encoding="utf-8") as infile:
-                protected_corpora = [x.strip().upper() for x in infile if x.strip()]
-        else:
-            protected_corpora = []
+        corpora_lines = self.cwb.run_cqp("show corpora;")
+        next(corpora_lines, None)  # Skip version number
 
-        if auth_ctx.cache_enabled:
+        protected_corpora = [corpus.upper() for corpus in corpora_lines if self._is_protected(corpus)]
+
+        if auth_ctx.cache_enabled and key:
             await self.cache.add(key, protected_corpora)
         return protected_corpora
+
+    def _is_protected(self, corpus: str) -> bool:
+        """Check whether a corpus is marked as protected in CWB info.
+
+        Args:
+            corpus: The name of the corpus to check.
+
+        Returns:
+            `True` if the corpus is protected, `False` otherwise.
+        """
+        lines = self.cwb.run_cqp([f"{corpus};", "info; .EOL.;", "exit;"])
+        next(lines, None)  # Skip version number
+
+        for line in lines:
+            if line == cqp.END_OF_LINE:
+                break
+            if ":" in line and not line.endswith(":"):
+                key, value = (part.strip() for part in line.split(":", 1))
+                if key == "Protected":
+                    return value.lower() == "true"
+        return False
 
     async def check_authorization(
         self, corpora: list[str], auth_ctx: AuthContext
@@ -137,14 +160,13 @@ class Auth(auth.Authorizer):
                 - A list of unauthorized corpora (if access is denied).
                 - An optional message (not used in this implementation).
         """
-        if router.config("PROTECTED_FILE"):
-            protected = await self.get_protected_corpora(auth_ctx)
-            c = [c for c in corpora if c.upper() in protected]
-            if c:
-                auth = _authenticate_from_auth_header(auth_ctx.request.headers.get("Authorization"))
-                unauthorized = [x for x in c if x.upper() not in auth.get("corpora", [])]
-                if not auth or unauthorized:
-                    return False, unauthorized, None
+        protected = await self.get_protected_corpora(auth_ctx)
+        c = [c for c in corpora if c.upper() in protected]
+        if c:
+            auth = _authenticate_from_auth_header(auth_ctx.request.headers.get("Authorization"))
+            unauthorized = [x for x in c if x.upper() not in auth.get("corpora", [])]
+            if not auth or unauthorized:
+                return False, unauthorized, None
         return True, [], None
 
 

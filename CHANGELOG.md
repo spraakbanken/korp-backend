@@ -19,6 +19,8 @@ and documentation.
 
 - Dropped support for Python versions older than 3.11.
 - Better error message when structural attributes contain tabs.
+- The `auth` plugin now checks for the `Protected` key in CWB info to determine if a corpus is protected, instead of
+  relying on a separate list of protected corpora.
 
 ### Fixed
 
