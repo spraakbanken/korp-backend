@@ -10,25 +10,24 @@ from datetime import datetime
 from functools import partial
 from typing import TYPE_CHECKING, Annotated, Any, TypeAlias, cast
 
-from pydantic import BeforeValidator
-
-from korp.api import params
-
-if TYPE_CHECKING:
-    import anyio.abc
 import anyio
 from anyio import CapacityLimiter
 from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Query
+from pydantic import BeforeValidator
 from pydantic.json_schema import SkipJsonSchema
 
 from korp import auth, caching, cqp, utils
+from korp.api import params
 from korp.config import settings
 from korp.dependencies import AbortDep, AbortSignal, CtxDep
 from korp.handler import api_handler
-from korp.memcached import CacheError, memcached
+from korp.memcached import CacheError, MemcachedSyncClient
 
 from . import info, timespan
+
+if TYPE_CHECKING:
+    import anyio.abc
 
 RELATIVE_MULTIPLIER = 1_000_000  # For relative frequencies per million tokens
 DATEFROM = "text_datefrom"
@@ -1100,6 +1099,7 @@ def _get_count_cache_keys(
     within: str | None,
     ignore_case: Collection[str],
     expand_prequeries: bool,
+    mc: MemcachedSyncClient,
 ) -> _CountCacheKeys:
     """Generate cache keys for count query.
 
@@ -1110,12 +1110,13 @@ def _get_count_cache_keys(
         within: The within context.
         ignore_case: Attributes to ignore case for.
         expand_prequeries: Whether to expand prequeries.
+        mc: The memcached client to use for generating cache prefix.
 
     Returns:
         A _CountCacheKeys instance with data and size cache keys.
     """
     checksum = utils.get_hash((cqp_query, group_by, within, sorted(ignore_case), expand_prequeries))
-    prefix = caching.cache_prefix_sync(memcached.sync, corpus)
+    prefix = caching.cache_prefix_sync(mc, corpus)
     return _CountCacheKeys(
         data_key=f"{prefix}:count_data_{checksum}",
         size_key=f"{prefix}:count_size_{checksum}",
@@ -1125,17 +1126,18 @@ def _get_count_cache_keys(
 def _check_count_cache(
     cache_keys: _CountCacheKeys,
     zero_hit_result: Iterable[str],
+    mc: MemcachedSyncClient,
 ) -> tuple[Iterable[str], int, int] | None:
     """Check cache for count query results.
 
     Args:
         cache_keys: The cache keys to check.
         zero_hit_result: The result to return if cache indicates zero hits.
+        mc: The memcached client to use for checking the cache.
 
     Returns:
         Cached result tuple (lines, hits, size) if found, None otherwise.
     """
-    mc = memcached.sync
     cached_size = mc.get(cache_keys.size_key)
     if cached_size is None:
         return None
@@ -1157,6 +1159,7 @@ def _save_count_cache(
     nr_hits: int,
     corpus_size: int,
     cache_max: int,
+    mc: MemcachedSyncClient
 ) -> tuple[str, ...]:
     """Save count query results to cache.
 
@@ -1166,12 +1169,12 @@ def _save_count_cache(
         nr_hits: Number of hits.
         corpus_size: Size of the corpus.
         cache_max: Maximum number of lines to cache.
+        mc: The memcached client to use for saving the cache.
 
     Returns:
         The lines as a tuple (for consistent return type).
     """
     lines_list = list(lines) if not isinstance(lines, list) else lines
-    mc = memcached.sync
     mc.add(cache_keys.size_key, (nr_hits, corpus_size))
 
     # Only save actual data if number of lines doesn't exceed the limit
@@ -1226,9 +1229,11 @@ def count_query_worker(
 
     cache_keys: _CountCacheKeys | None = None
     if use_cache and ctx.cache:
-        cache_keys = _get_count_cache_keys(corpus, cqp_query, group_by, within, ignore_case, expand_prequeries)
+        cache_keys = _get_count_cache_keys(
+            corpus, cqp_query, group_by, within, ignore_case, expand_prequeries, ctx.cache.sync
+        )
         zero_hit_result = [cqp.END_OF_LINE] * len(subcqp) if subcqp else []
-        cached = _check_count_cache(cache_keys, zero_hit_result)
+        cached = _check_count_cache(cache_keys, zero_hit_result, ctx.cache.sync)
         if cached is not None:
             return cached
 
@@ -1303,7 +1308,7 @@ def count_query_worker(
             break
 
     if cache_keys is not None:
-        lines = _save_count_cache(cache_keys, lines, nr_hits, corpus_size, cache_max)
+        lines = _save_count_cache(cache_keys, lines, nr_hits, corpus_size, cache_max, ctx.cache.sync)
 
     return lines, nr_hits, corpus_size
 
@@ -1345,8 +1350,10 @@ def count_query_worker_simple(
     """
     cache_keys: _CountCacheKeys | None = None
     if use_cache and ctx.cache:
-        cache_keys = _get_count_cache_keys(corpus, cqp_query, group_by, within, ignore_case, expand_prequeries)
-        cached = _check_count_cache(cache_keys, [])
+        cache_keys = _get_count_cache_keys(
+            corpus, cqp_query, group_by, within, ignore_case, expand_prequeries, ctx.cache.sync
+        )
+        cached = _check_count_cache(cache_keys, [], ctx.cache.sync)
         if cached is not None:
             return cached
 
@@ -1376,7 +1383,7 @@ def count_query_worker_simple(
             lines.append(f"{c} {v}")
 
     if cache_keys is not None:
-        lines = _save_count_cache(cache_keys, lines, nr_hits, nr_hits, cache_max)
+        lines = _save_count_cache(cache_keys, lines, nr_hits, nr_hits, cache_max, ctx.cache.sync)
 
     # Corpus size equals number of hits since we count all tokens
     return lines, nr_hits, nr_hits

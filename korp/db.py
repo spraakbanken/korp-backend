@@ -147,7 +147,7 @@ class MySQL:
 
     def _require_async_engine(self) -> AsyncEngine:
         if self._async_engine is None:
-            raise RuntimeError("MySQL not initialized. Call mysql.init_app(settings) first.")
+            raise RuntimeError("MySQL not initialized. Call init_app(settings) first.")
         return self._async_engine
 
     @asynccontextmanager
@@ -170,9 +170,6 @@ class MySQL:
         self._async_engine = None
         if engine is not None:
             await engine.dispose()
-
-
-mysql = MySQL()
 
 
 def escape_string(value: str) -> str:

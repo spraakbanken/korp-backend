@@ -18,8 +18,8 @@ from korp import auth, caching, handler
 from korp.api.routers import routers
 from korp.config import Settings, settings
 from korp.cwb import CWB
-from korp.db import mysql
-from korp.memcached import memcached
+from korp.db import MySQL
+from korp.memcached import Memcached
 
 logger = getLogger(__name__)
 
@@ -96,38 +96,41 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         RuntimeError: If more than one plugin exports an authorizer class.
     """
     testing = _apply_settings_override(config_override)
-    mysql.init_app(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         """Initialize and finalize resources for the app lifespan."""
-        handler.enforce_ctx_dependency(app)
-        app.state.cwb = CWB(
-            executable=settings.CQP_EXECUTABLE,
-            scan_executable=settings.CWB_SCAN_EXECUTABLE,
-            registry=settings.CWB_REGISTRY,
-            locale=settings.LC_COLLATE,
-            encoding=settings.CQP_ENCODING,
-        )
-        await memcached.init(settings.MEMCACHED_SERVER)
-        app.state.memcached = memcached
-        app.state.cache_enabled = memcached.active and settings.CACHE_DIR and Path(settings.CACHE_DIR).is_dir()
-        if app.state.cache_enabled:
-            logger.info("Caching is enabled.")
-            await caching.setup_cache(memcached)
-        else:
-            logger.info("Caching is disabled.")
-        authorizer_class = getattr(app.state, "authorizer_class", None)
-        if authorizer_class:
-            app.state.authorizer = authorizer_class(app.state.cwb, app.state.memcached)
-        else:
-            app.state.authorizer = None
-        yield
+        try:
+            handler.enforce_ctx_dependency(app)
+            app.state.cwb = CWB(
+                executable=settings.CQP_EXECUTABLE,
+                scan_executable=settings.CWB_SCAN_EXECUTABLE,
+                registry=settings.CWB_REGISTRY,
+                locale=settings.LC_COLLATE,
+                encoding=settings.CQP_ENCODING,
+            )
+            app.state.db.init_app(settings)
 
-        # Cleanup on shutdown
-        app.state.authorizer = None
-        await memcached.close()
-        await mysql.dispose_async()
+            await app.state.memcached.init(settings.MEMCACHED_SERVER)
+            app.state.cache_enabled = (
+                app.state.memcached.active and settings.CACHE_DIR and Path(settings.CACHE_DIR).is_dir()
+            )
+            if app.state.cache_enabled:
+                logger.info("Caching is enabled.")
+                await caching.setup_cache(app.state.memcached)
+            else:
+                logger.info("Caching is disabled.")
+            authorizer_class = getattr(app.state, "authorizer_class", None)
+            if authorizer_class:
+                app.state.authorizer = authorizer_class(app.state.cwb, app.state.memcached)
+            else:
+                app.state.authorizer = None
+            yield
+        finally:
+            # Clean up resources on shutdown or if initialization fails
+            app.state.authorizer = None
+            await app.state.memcached.close()
+            await app.state.db.dispose_async()
 
     app = FastAPI(
         title="Korp Backend",
@@ -136,8 +139,9 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         openapi_tags=_TAGS,
     )
 
+    app.state.db = MySQL()
+    app.state.memcached = Memcached()
     app.state.testing = testing
-    app.state.db = mysql
 
     @app.middleware("http")
     async def support_post_params(request: Request, call_next: Any) -> Any:

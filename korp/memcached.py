@@ -268,6 +268,3 @@ class Memcached:
     def sync(self) -> MemcachedSyncClient:
         """Get a synchronous Memcached client wrapper."""
         return MemcachedSyncClient(self)
-
-
-memcached = Memcached()

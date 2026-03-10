@@ -21,17 +21,16 @@ from fastapi import APIRouter, Query
 from pydantic import BeforeValidator
 from pydantic.json_schema import SkipJsonSchema
 
-from korp.api import params
-
-if TYPE_CHECKING:
-    import anyio.abc
-
 from korp import auth, caching, cqp, utils
+from korp.api import params
 from korp.config import settings
 from korp.cwb import CWB
 from korp.dependencies import AbortDep, AbortSignal, CtxDep
 from korp.handler import api_handler
-from korp.memcached import memcached
+from korp.memcached import MemcachedSyncClient
+
+if TYPE_CHECKING:
+    import anyio.abc
 
 router = APIRouter(tags=["Concordance"])
 
@@ -353,6 +352,7 @@ async def perform_query(
                                 start=corpora_hits[corpus][0],
                                 end=corpora_hits[corpus][1],
                                 cwb=ctx.cwb,
+                                mc=ctx.cache.sync,
                                 use_cache=use_cache,
                                 abort_signal=abort_signal,
                             ),
@@ -419,6 +419,7 @@ async def perform_query(
                         start=start_local,
                         end=end_local,
                         cwb=ctx.cwb,
+                        mc=ctx.cache.sync,
                         use_cache=use_cache,
                         abort_signal=abort_signal,
                     )
@@ -465,6 +466,7 @@ async def perform_query(
                                 start=0,
                                 end=0,
                                 cwb=ctx.cwb,
+                                mc=ctx.cache.sync,
                                 no_results=True,
                                 use_cache=use_cache,
                                 abort_signal=abort_signal,
@@ -638,6 +640,7 @@ def query_corpus(
     start: int,
     end: int,
     cwb: CWB,
+    mc: MemcachedSyncClient,
     no_results: bool = False,
     use_cache: bool = False,
     abort_signal: AbortSignal | None = None,
@@ -652,6 +655,7 @@ def query_corpus(
         cwb: CWB instance to use for querying.
         no_results: If True, do not return any KWIC rows, only the number of hits.
         use_cache: Whether to use caching for this query.
+        mc: Memcached client to use for caching, if use_cache is True.
         abort_signal: Optional abort handle that can be used to cancel a running query.
 
     Returns:
@@ -691,7 +695,6 @@ def query_corpus(
         cache_filename = Path(cache_dir) / f"{corpus_base}:query_data_{checksum}"
         cache_filename_temp = cache_filename.with_name(cache_filename.name + "_" + unique_id)
 
-        mc = memcached.sync
         cache_size_key = f"{caching.cache_prefix_sync(mc, corpus_base)}:query_size_{checksum}"
         cache_hits = mc.get(cache_size_key)
         is_cached = cache_hits is not None and cache_filename.is_file()
@@ -849,7 +852,7 @@ def query_corpus(
 
     if use_cache and not is_cached and not cached_no_hits:
         # Save number of hits
-        memcached.sync.add(cache_size_key, nr_hits)
+        mc.add(cache_size_key, nr_hits)
 
         try:
             cache_filename_temp.rename(cache_filename)
@@ -1118,6 +1121,7 @@ def query_and_parse(
     start: int,
     end: int,
     cwb: CWB,
+    mc: MemcachedSyncClient,
     no_results: bool = False,
     use_cache: bool = False,
     abort_signal: AbortSignal | None = None,
@@ -1130,6 +1134,7 @@ def query_and_parse(
         start: Start index of results to return.
         end: End index of results to return.
         cwb: CWB instance to use for querying.
+        mc: Memcached client to use for caching, if use_cache is True.
         no_results: If True, do not return any KWIC rows, only the number of hits.
         use_cache: Whether to use caching for this query.
         abort_signal: Optional abort handle that can be used to cancel a running query.
@@ -1145,6 +1150,7 @@ def query_and_parse(
         start=start,
         end=end,
         cwb=cwb,
+        mc=mc,
         no_results=no_results,
         use_cache=use_cache,
         abort_signal=abort_signal,
