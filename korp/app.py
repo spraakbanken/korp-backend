@@ -109,7 +109,8 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
                 locale=settings.LC_COLLATE,
                 encoding=settings.CQP_ENCODING,
             )
-            app.state.db.init_app(settings)
+
+            app.state.db.init(settings)
 
             await app.state.memcached.init(settings.MEMCACHED_SERVER)
             app.state.cache_enabled = (
@@ -130,7 +131,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
             # Clean up resources on shutdown or if initialization fails
             app.state.authorizer = None
             await app.state.memcached.close()
-            await app.state.db.dispose_async()
+            await app.state.db.close()
 
     app = FastAPI(
         title="Korp Backend",

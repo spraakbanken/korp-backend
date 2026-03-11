@@ -59,7 +59,7 @@ class MySQL:
         """Initialize MySQL helper."""
         self._async_engine: AsyncEngine | None = None
 
-    def init_app(self, settings: Settings) -> None:
+    def init(self, settings: Settings) -> None:
         """Initialize async engine from settings."""
         async_url = URL.create(
             "mysql+asyncmy",
@@ -163,7 +163,7 @@ class MySQL:
                     await asyncio.shield(conn.invalidate())
                 raise
 
-    async def dispose_async(self) -> None:
+    async def close(self) -> None:
         """Dispose of the async engine and its connection pool."""
         # Avoid race conditions by setting the engine to None before disposing
         engine = self._async_engine
