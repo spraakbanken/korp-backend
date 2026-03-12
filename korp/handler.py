@@ -11,7 +11,7 @@ import threading
 import time
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable
-from functools import wraps
+from functools import update_wrapper
 from logging import getLogger
 from typing import Any
 from urllib.parse import parse_qsl, urlencode
@@ -261,7 +261,6 @@ def api_handler(
     """
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Awaitable[Response]]:
-        @wraps(fn)
         async def wrapper(*args: Any, **kwargs: Any) -> Response:
             ctx: Ctx = kwargs.get("ctx") or kwargs["_ctx"]  # Support both "ctx" and "_ctx"
             request = ctx.request
@@ -504,6 +503,16 @@ def api_handler(
                     _set_cache_headers(resp, max_age_seconds=max_age)
 
             return resp
+
+        # FastAPI 0.134+ unwraps decorated callables to detect generator endpoints. Our wrapper is always an async
+        # coroutine, even when `fn` is an async generator. Exposing `__wrapped__` makes FastAPI classify this as an
+        # async-generator route, which then crashes when it tries to `async for` over a coroutine. We can work around
+        # this by deleting `__wrapped__` after updating the wrapper to look like `fn`, instead of using
+        # `functools.wraps`.
+        update_wrapper(wrapper, fn)
+        wrapper.__signature__ = inspect.signature(fn)
+        with contextlib.suppress(AttributeError):
+            del wrapper.__wrapped__
 
         return wrapper
 
