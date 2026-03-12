@@ -235,7 +235,7 @@ wheels = [
 
 [[package]]
 name = "fastapi"
-version = "0.128.5"
+version = "0.135.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-doc" },
@@ -244,9 +244,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/02/d4/811e7283aaaa84f1e7bd55fb642b58f8c01895e4884a9b7628cb55e00d63/fastapi-0.128.5.tar.gz", hash = "sha256:a7173579fc162d6471e3c6fbd9a4b7610c7a3b367bcacf6c4f90d5d022cab711", size = 374636, upload-time = "2026-02-08T10:22:30.493Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e7/7b/f8e0211e9380f7195ba3f3d40c292594fd81ba8ec4629e3854c353aaca45/fastapi-0.135.1.tar.gz", hash = "sha256:d04115b508d936d254cea545b7312ecaa58a7b3a0f84952535b4c9afae7668cd", size = 394962, upload-time = "2026-03-01T18:18:29.369Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e4/e0/511972dba23ee76c0e9d09d1ae95e916fc8ebce5322b2b8b65a481428b10/fastapi-0.128.5-py3-none-any.whl", hash = "sha256:bceec0de8aa6564599c5bcc0593b0d287703562c848271fca8546fd2c87bf4dd", size = 103677, upload-time = "2026-02-08T10:22:28.919Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/72/42e900510195b23a56bde950d26a51f8b723846bfcaa0286e90287f0422b/fastapi-0.135.1-py3-none-any.whl", hash = "sha256:46e2fc5745924b7c840f71ddd277382af29ce1cdb7d5eab5bf697e3fb9999c9e", size = 116999, upload-time = "2026-03-01T18:18:30.831Z" },
 ]
 
 [[package]]
@@ -428,23 +428,23 @@ dependencies = [
     { name = "sqlalchemy" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "fastapi-cli", extra = ["standard-no-fastapi-cloud-cli"] },
-    { name = "gunicorn" },
-    { name = "httpx" },
-    { name = "pymysql" },
-    { name = "pytest" },
-    { name = "pytest-sugar" },
-    { name = "ruff" },
-    { name = "uvloop" },
-]
+[package.optional-dependencies]
 jwt = [
     { name = "pyjwt", extra = ["crypto"] },
 ]
 server = [
     { name = "gunicorn" },
     { name = "uvloop" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "fastapi-cli", extra = ["standard-no-fastapi-cloud-cli"] },
+    { name = "httpx" },
+    { name = "pymysql" },
+    { name = "pytest" },
+    { name = "pytest-sugar" },
+    { name = "ruff" },
 ]
 test = [
     { name = "httpx" },
@@ -457,35 +457,32 @@ test = [
 requires-dist = [
     { name = "aiomcache", specifier = "~=0.8.2" },
     { name = "asyncmy", specifier = "~=0.2.11" },
-    { name = "fastapi", specifier = "~=0.128.0" },
-    { name = "psutil", specifier = "~=7.2.2" },
-    { name = "pydantic-settings", specifier = "~=2.12.0" },
-    { name = "python-dateutil", specifier = "~=2.9.0" },
+    { name = "fastapi", specifier = "==0.135.1" },
+    { name = "gunicorn", marker = "extra == 'server'", specifier = ">=25.1" },
+    { name = "psutil", specifier = "~=7.2" },
+    { name = "pydantic-settings", specifier = "~=2.13" },
+    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'jwt'" },
+    { name = "python-dateutil", specifier = "~=2.9" },
     { name = "pyyaml", specifier = "~=6.0" },
-    { name = "sqlalchemy", specifier = "~=2.0.0" },
+    { name = "sqlalchemy", specifier = "~=2.0" },
+    { name = "uvloop", marker = "extra == 'server'" },
 ]
+provides-extras = ["server", "jwt"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "fastapi-cli", extras = ["standard-no-fastapi-cloud-cli"] },
-    { name = "gunicorn", specifier = ">=25.1.0" },
     { name = "httpx", specifier = "~=0.28.0" },
-    { name = "pymysql", specifier = "~=1.1.2" },
-    { name = "pytest", specifier = "~=9.0.0" },
-    { name = "pytest-sugar", specifier = ">=1.1.1" },
+    { name = "pymysql", specifier = "~=1.1" },
+    { name = "pytest", specifier = "~=9.0" },
+    { name = "pytest-sugar" },
     { name = "ruff", specifier = "~=0.15.0" },
-    { name = "uvloop" },
-]
-jwt = [{ name = "pyjwt", extras = ["crypto"] }]
-server = [
-    { name = "gunicorn", specifier = ">=25.1.0" },
-    { name = "uvloop" },
 ]
 test = [
     { name = "httpx", specifier = "~=0.28.0" },
-    { name = "pymysql", specifier = "~=1.1.2" },
-    { name = "pytest", specifier = "~=9.0.0" },
-    { name = "pytest-sugar", specifier = ">=1.1.1" },
+    { name = "pymysql", specifier = "~=1.1" },
+    { name = "pytest", specifier = "~=9.0" },
+    { name = "pytest-sugar" },
 ]
 
 [[package]]
@@ -678,16 +675,16 @@ wheels = [
 
 [[package]]
 name = "pydantic-settings"
-version = "2.12.0"
+version = "2.13.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/43/4b/ac7e0aae12027748076d72a8764ff1c9d82ca75a7a52622e67ed3f765c54/pydantic_settings-2.12.0.tar.gz", hash = "sha256:005538ef951e3c2a68e1c08b292b5f2e71490def8589d4221b95dab00dafcfd0", size = 194184, upload-time = "2025-11-10T14:25:47.013Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/6d/fffca34caecc4a3f97bda81b2098da5e8ab7efc9a66e819074a11955d87e/pydantic_settings-2.13.1.tar.gz", hash = "sha256:b4c11847b15237fb0171e1462bf540e294affb9b86db4d9aa5c01730bdbe4025", size = 223826, upload-time = "2026-02-19T13:45:08.055Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c1/60/5d4751ba3f4a40a6891f24eec885f51afd78d208498268c734e256fb13c4/pydantic_settings-2.12.0-py3-none-any.whl", hash = "sha256:fddb9fd99a5b18da837b29710391e945b1e30c135477f484084ee513adb93809", size = 51880, upload-time = "2025-11-10T14:25:45.546Z" },
+    { url = "https://files.pythonhosted.org/packages/00/4b/ccc026168948fec4f7555b9164c724cf4125eac006e176541483d2c959be/pydantic_settings-2.13.1-py3-none-any.whl", hash = "sha256:d56fd801823dbeae7f0975e1f8c8e25c258eb75d278ea7abb5d9cebb01b56237", size = 58929, upload-time = "2026-02-19T13:45:06.034Z" },
 ]
 
 [[package]]
