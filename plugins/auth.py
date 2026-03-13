@@ -14,9 +14,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from korp import auth, caching, cqp, plugin
+from korp import auth, plugin
 from korp.dependencies import AuthContext, CtxDep
 from korp.handler import api_handler
+from plugins import protection_cwb
 
 router = plugin.Plugin("authenticate", __name__)
 
@@ -99,51 +100,25 @@ def _authenticate_from_auth_header(auth_header: str | None) -> dict:
 class Auth(auth.Authorizer):
     """Authorizer class that checks if the user has access to protected corpora based on the authentication response."""
 
+    async def _fetch_protection_info(
+        self, corpora: list[str], auth_ctx: AuthContext
+    ) -> dict[str, auth.ProtectionInfo]:
+        """Fetch per-corpus protection metadata from CWB.
+
+        Returns:
+            Protection metadata keyed by corpus.
+        """
+        return await protection_cwb.fetch_protection_info(self.cwb, corpora, self.cache, auth_ctx)
+
     async def get_protected_corpora(self, auth_ctx: AuthContext) -> list[str]:
         """Get list of protected corpora.
 
-        Args:
-            auth_ctx: The authentication context.
-
         Returns:
-            A list of protected corpora.
+            Uppercased corpus ids marked as protected.
         """
-        key = None
-        if auth_ctx.cache_enabled:
-            key = f"protected:{await caching.cache_prefix(self.cache)}"
-            result = await self.cache.get(key)
-            if result is not None:
-                return result
-
-        corpora_lines = self.cwb.run_cqp("show corpora;")
-        next(corpora_lines, None)  # Skip version number
-
-        protected_corpora = [corpus.upper() for corpus in corpora_lines if self._is_protected(corpus)]
-
-        if auth_ctx.cache_enabled and key:
-            await self.cache.add(key, protected_corpora)
-        return protected_corpora
-
-    def _is_protected(self, corpus: str) -> bool:
-        """Check whether a corpus is marked as protected in CWB info.
-
-        Args:
-            corpus: The name of the corpus to check.
-
-        Returns:
-            `True` if the corpus is protected, `False` otherwise.
-        """
-        lines = self.cwb.run_cqp([f"{corpus};", "info; .EOL.;", "exit;"])
-        next(lines, None)  # Skip version number
-
-        for line in lines:
-            if line == cqp.END_OF_LINE:
-                break
-            if ":" in line and not line.endswith(":"):
-                key, value = (part.strip() for part in line.split(":", 1))
-                if key == "Protected":
-                    return value.lower() == "true"
-        return False
+        corpora = protection_cwb.list_corpora(self.cwb)
+        protection_info = await self._get_protection_info(corpora, auth_ctx)
+        return [corpus.upper() for corpus in corpora if protection_info[corpus].protected]
 
     async def check_authorization(
         self, corpora: list[str], auth_ctx: AuthContext
@@ -160,11 +135,12 @@ class Auth(auth.Authorizer):
                 - A list of unauthorized corpora (if access is denied).
                 - An optional message (not used in this implementation).
         """
-        protected = await self.get_protected_corpora(auth_ctx)
-        c = [c for c in corpora if c.upper() in protected]
-        if c:
+        corpora_upper = [corpus.upper() for corpus in corpora]
+        protection_info = await self._get_protection_info(corpora_upper, auth_ctx)
+        protected_requested = [corpus for corpus in corpora_upper if protection_info[corpus].protected]
+        if protected_requested:
             auth = _authenticate_from_auth_header(auth_ctx.request.headers.get("Authorization"))
-            unauthorized = [x for x in c if x.upper() not in auth.get("corpora", [])]
+            unauthorized = [corpus for corpus in protected_requested if corpus not in auth.get("corpora", [])]
             if not auth or unauthorized:
                 return False, unauthorized, None
         return True, [], None
