@@ -81,6 +81,34 @@ def _apply_settings_override(config_override: dict[str, Any] | None) -> bool:
     return testing
 
 
+def _get_required_cwb_settings() -> tuple[Path, Path, Path]:
+    """Get required CWB settings and raise an error if any are missing.
+
+    Returns:
+        A tuple with CQP executable path, cwb-scan-corpus executable path, and CWB registry path.
+
+    Raises:
+        RuntimeError: If any required CWB settings are missing.
+    """
+    executable = settings.CQP_EXECUTABLE
+    scan_executable = settings.CWB_SCAN_EXECUTABLE
+    registry = settings.CWB_REGISTRY
+
+    if executable is None or scan_executable is None or registry is None:
+        missing = [
+            name
+            for name, val in [
+                ("CQP_EXECUTABLE", executable),
+                ("CWB_SCAN_EXECUTABLE", scan_executable),
+                ("CWB_REGISTRY", registry),
+            ]
+            if val is None
+        ]
+        raise RuntimeError(f"Missing required settings: {', '.join(missing)}")
+
+    return executable, scan_executable, registry
+
+
 def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
     """Create and configure a FastAPI app instance.
 
@@ -96,6 +124,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         RuntimeError: If more than one plugin exports an authorizer class.
     """
     testing = _apply_settings_override(config_override)
+    cqp_executable, cwb_scan_executable, cwb_registry = _get_required_cwb_settings()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -103,9 +132,9 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         try:
             handler.enforce_ctx_dependency(app)
             app.state.cwb = CWB(
-                executable=settings.CQP_EXECUTABLE,
-                scan_executable=settings.CWB_SCAN_EXECUTABLE,
-                registry=settings.CWB_REGISTRY,
+                executable=cqp_executable,
+                scan_executable=cwb_scan_executable,
+                registry=cwb_registry,
                 locale=settings.LC_COLLATE,
                 encoding=settings.CQP_ENCODING,
             )
