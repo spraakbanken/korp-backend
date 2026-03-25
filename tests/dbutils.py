@@ -49,10 +49,8 @@ class KorpDatabase:
         "user": "Use user {} for the Korp MySQL test database",
         "password": "Use password {} for the Korp MySQL test database",
         "collate": (
-            "Use {} as the Korp MySQL test database collation."
-            " If not specified, use the collation of the Korp MySQL database,"
-            " or if that cannot be accessed, the default collation for the"
-            " Korp MySQL database character set."
+            "Use {} as the Korp MySQL test database collation. If not specified, use the default collation for the"
+            " database character set."
         ),
     }
     # The custom pytest command-line options
@@ -313,43 +311,6 @@ class KorpDatabase:
         self._use_existing_table = False
         return db_name
 
-    def _get_collation(self, korp_conf: dict[str, Any]) -> str:
-        """Get the collation for the Korp test database.
-
-        Args:
-            korp_conf: The Korp configuration dict.
-
-        Returns:
-            The collation to use for the Korp test database, or an empty string if it cannot be determined.
-        """
-        collate = self._db_options["collate"] or ""
-        if collate:
-            return collate
-
-        engine = None
-        try:
-            engine = self._make_engine(
-                host=korp_conf["DB_HOST"],
-                port=int(korp_conf["DB_PORT"]),
-                user=korp_conf["DB_USER"],
-                password=korp_conf["DB_PASSWORD"],
-                charset=korp_conf["DB_CHARSET"],
-                database=korp_conf.get("DB_NAME") or None,
-                local_infile=False,
-            )
-            with engine.connect() as conn:
-                result = conn.exec_driver_sql("SELECT @@collation_database;")
-                row = result.first()
-                if row:
-                    return row[0]
-        except Exception:
-            return ""
-        finally:
-            if engine is not None:
-                engine.dispose()
-
-        return ""
-
     def create(self) -> None:
         """Create a Korp MySQL database.
 
@@ -370,7 +331,7 @@ class KorpDatabase:
             with self._connection(include_database=False) as conn:
                 dbname = self._make_db_name(conn)
                 charset = korp_conf["DB_CHARSET"]
-                collate = self._get_collation(korp_conf)
+                collate = self._db_options["collate"] or ""
                 collate_sql = f" COLLATE {collate}" if collate else ""
                 sql = f"CREATE DATABASE {dbname} CHARACTER SET {charset}{collate_sql};"
                 conn.exec_driver_sql(sql)
