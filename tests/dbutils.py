@@ -46,10 +46,8 @@ class KorpDatabase:
             "help": "Use port {} for the Korp MySQL test database",
         },
         "name": "Use database name {} for the Korp MySQL test database",
-        "user": "Use user {} to access the Korp MySQL test database",
-        "password": "Use password {} to access the Korp MySQL test database",
-        "create-user": "Use user {} to create the Korp MySQL test database",
-        "create-password": "Use password {} to create the Korp MySQL test database",
+        "user": "Use user {} for the Korp MySQL test database",
+        "password": "Use password {} for the Korp MySQL test database",
         "collate": (
             "Use {} as the Korp MySQL test database collation."
             " If not specified, use the collation of the Korp MySQL database,"
@@ -222,24 +220,16 @@ class KorpDatabase:
         database.
 
         Take Korp configuration option values (`DB_*`) as the basis and override them with possible values specified as
-        custom pytest command-line options (in `pytest_db_opts`) `--db-*`. If `--db-create-user` or
-        `--db-create-password` have not been specified, use the values of `--db-user` (`DB_USER`) and `--db-password`
-        (`DB_PASSWORD`), respectively.
+        custom pytest command-line options (in `pytest_db_opts`) `--db-*`.
 
-        For connection options, user and password primarily those in create-user and create-password, and charset is
-        taken from `DB_CHARSET` in Korp configuration.
+        For connection options, charset is taken from `DB_CHARSET` in the Korp configuration.
         """
         db_opts = pytest_db_opts.copy()
         korp_conf = get_korp_config()
         for key, val in db_opts.items():
-            if val is None:
-                if "create" in key:
-                    db_opts[key] = db_opts.get(key.replace("create-", ""))
-                elif key != "name":
-                    db_opts[key] = korp_conf.get(f"DB_{key.upper()}", "")
-        self._conn_params = {
-            key.rsplit("-")[-1]: db_opts[key] for key in ["host", "port", "create-user", "create-password"]
-        }
+            if val is None and key != "name":
+                db_opts[key] = korp_conf.get(f"DB_{key.upper()}", "")
+        self._conn_params = {key: db_opts[key] for key in ["host", "port", "user", "password"]}
         self._conn_params["charset"] = korp_conf["DB_CHARSET"]
         self._db_options = db_opts
 
@@ -361,11 +351,13 @@ class KorpDatabase:
         return ""
 
     def create(self) -> None:
-        """Create a Korp MySQL database and grant privileges.
+        """Create a Korp MySQL database.
 
         Create a Korp MySQL database using the pre-defined connection parameters, unless one has already been created
-        (and not dropped) for self. Database name is generated in `_make_db_name`, user is taken from _db_options and
-        host from `_conn_params`.
+        (and not dropped) for self. Database name is generated in `_make_db_name`.
+
+        The database user must have the CREATE privilege. As the creator, they automatically have full access to the new
+        database.
         """
         if self.dbname is not None:
             # If a database has already been created, do not create
@@ -380,14 +372,8 @@ class KorpDatabase:
                 charset = korp_conf["DB_CHARSET"]
                 collate = self._get_collation(korp_conf)
                 collate_sql = f" COLLATE {collate}" if collate else ""
-                user = self._db_options["user"]
-                host = self._conn_params["host"]
-                sqls = [
-                    f"CREATE DATABASE {dbname} CHARACTER SET {charset}{collate_sql};",
-                    f"GRANT ALL ON {dbname}.* TO '{user}'@'{host}';",
-                ]
-                for sql in sqls:
-                    conn.exec_driver_sql(sql)
+                sql = f"CREATE DATABASE {dbname} CHARACTER SET {charset}{collate_sql};"
+                conn.exec_driver_sql(sql)
                 conn.commit()
         except Exception as exc:
             self.create_error = {

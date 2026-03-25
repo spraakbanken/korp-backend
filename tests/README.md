@@ -15,8 +15,7 @@ python3 -m pip install -e ".[dev]"
 In addition, you need to have the Corpus Workbench (CWB), in particular `cwb-encode` and `cwb-makeall`, installed and on
 `PATH` (see the [main README file](../README.md#corpus-workbench)).
 
-For database tests, you also need to have a MySQL/MariaDB server with a user with the privileges to create a database
-and grant access to it.
+For database tests, you also need to have a MySQL/MariaDB server with a user with the privilege to create databases.
 
 ## Running tests
 
@@ -34,10 +33,8 @@ To run successfully tests that require Korp MySQL database data, you may need to
 - `--db-host=`_HOST_: Use host _HOST_ for the Korp MySQL test database
 - `--db-port=`_PORT_: Use port _PORT_ for the Korp MySQL test database
 - `--db-name=`_NAME_: Use database name _NAME_ for the Korp MySQL test database
-- `--db-user=`_USER_: Use user _USER_ to access the Korp MySQL test database
-- `--db-password=`_PASSWORD_: Use password _PASSWORD_ to access the Korp MySQL test database
-- `--db-create-user=`_USER_: Use user _USER_ to create the Korp MySQL test database
-- `--db-create-password=`_PASSWORD_: Use password _PASSWORD_ to create the Korp MySQL test database
+- `--db-user=`_USER_: Use user _USER_ for the Korp MySQL test database
+- `--db-password=`_PASSWORD_: Use password _PASSWORD_ for the Korp MySQL test database
 
 If these are not specified explicitly, tests try to use the values specified in the Korp configuration for `DB_HOST`,
 `DB_PORT`, `DB_USER` and `DB_PASSWORD`. That fails unless the user specified there has the privilege to create a
