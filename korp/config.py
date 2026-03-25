@@ -5,7 +5,8 @@ the server.
 """
 
 from pathlib import Path
-from typing import Any
+from types import UnionType
+from typing import Any, get_args, get_origin
 
 import yaml
 from pydantic import model_validator
@@ -19,12 +20,12 @@ class Settings(BaseSettings):
     WSGI_HOST: str = "0.0.0.0"
     WSGI_PORT: int = 8000
 
-    # The absolute path to the CQP binaries
-    CQP_EXECUTABLE: str = ""
-    CWB_SCAN_EXECUTABLE: str = ""
+    # The absolute path to the CQP binaries (required)
+    CQP_EXECUTABLE: Path | None = None
+    CWB_SCAN_EXECUTABLE: Path | None = None
 
-    # The absolute path to the CWB registry files
-    CWB_REGISTRY: str = ""
+    # The absolute path to the CWB registry files (required)
+    CWB_REGISTRY: Path | None = None
 
     # The default encoding for the cqp binary
     CQP_ENCODING: str = "UTF-8"
@@ -89,7 +90,7 @@ class Settings(BaseSettings):
     TIMESPAN_PHASE_LOG_SECONDS: float = 0.0
 
     # Cache path (optional). Script must have read and write access.
-    CACHE_DIR: str | Path = ""
+    CACHE_DIR: Path | None = None
 
     # Disk cache lifespan in minutes
     CACHE_LIFESPAN: int = 20
@@ -104,7 +105,7 @@ class Settings(BaseSettings):
     CACHE_MAX_QUERY_DATA: int = 0
 
     # Corpus configuration directory
-    CORPUS_CONFIG_DIR: str | Path = ""
+    CORPUS_CONFIG_DIR: Path | None = None
 
     # Set to True to enable "lab mode", potentially enabling experimental features and access to lab-only corpora
     LAB_MODE: bool = False
@@ -113,7 +114,7 @@ class Settings(BaseSettings):
     PLUGINS: list = []
 
     # Plugin configuration file
-    PLUGINS_CONFIG_FILE: str | Path = "plugins.yaml"
+    PLUGINS_CONFIG_FILE: Path = Path("plugins.yaml")
 
     # Optional inline plugin configuration overrides
     PLUGINS_CONFIG: dict = {}
@@ -125,8 +126,25 @@ class Settings(BaseSettings):
     # Override default settings with settings from .env file
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", env_nested_delimiter="__")
 
+    @model_validator(mode="after")
+    def _expand_paths(self) -> "Settings":
+        """Expand `~` in all Path fields.
+
+        Returns:
+            The settings instance with expanded paths.
+        """
+        for name, field_info in type(self).model_fields.items():
+            annotation = field_info.annotation
+            # Match both `Path` and `Path | None`
+            types = get_args(annotation) if get_origin(annotation) is UnionType else (annotation,)
+            if Path in types:
+                value = getattr(self, name)
+                if isinstance(value, Path):
+                    setattr(self, name, value.expanduser())
+        return self
+
     @staticmethod
-    def _load_plugins_config_file(file_path: str | Path) -> dict[str, Any]:
+    def _load_plugins_config_file(file_path: Path) -> dict[str, Any]:
         """Load plugin configuration from YAML file.
 
         Args:
@@ -138,7 +156,7 @@ class Settings(BaseSettings):
         Raises:
             ValueError: If the YAML root is not a mapping.
         """
-        path = Path(file_path).expanduser()
+        path = file_path.expanduser()
         if not path.is_file():
             return {}
 
