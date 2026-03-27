@@ -254,9 +254,13 @@ def optimize_query(
     leading_wildcards = False
 
     if free_search:
-        # Don't allow wildcards in free searches
+        # Don't allow wildcards in free order queries
         if any(token.startswith("[]") for token in tokens):
-            raise CQPError("Wildcards not allowed in free order query.")
+            raise CQPError("Wildcards not allowed in free order queries.")
+
+        # Don't allow distance-based within values in free order queries (e.g. "5 sentence")
+        if within and re.match(r"^\d+ ", within):
+            raise CQPError("Distance-based 'within' values not allowed in free order queries.")
     else:
         # Strip leading and trailing wildcards since they only slow things down
         start = 0
