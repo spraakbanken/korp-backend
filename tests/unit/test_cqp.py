@@ -134,7 +134,7 @@ class TestQueryOptimize:
     @staticmethod
     def test_optimize_query_rejects_wildcards_in_free_search() -> None:
         """Raise error when free-order search contains wildcard tokens."""
-        with pytest.raises(cqp.CQPError, match="Wildcards not allowed in free order query"):
+        with pytest.raises(cqp.CQPError, match="Wildcards not allowed in free order queries"):
             cqp.optimize_query('[] [word="a"] [word="b"]', {"within": "sentence"}, free_search=True)
 
     @staticmethod
