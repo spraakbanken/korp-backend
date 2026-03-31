@@ -209,6 +209,7 @@ def api_handler(
     *,
     cache_headers: bool = True,
     keepalive_seconds: float = 60.0,
+    rate_limit: bool = False,
 ) -> Callable:
     """Main decorator for API routes.
 
@@ -250,11 +251,15 @@ def api_handler(
     The decorator can be used with or without parentheses:
         @api_handler
         @api_handler(cache_headers=False)
+        @api_handler(rate_limit=True)
 
     Args:
         _callable: The route function to decorate.
         cache_headers: Whether to set HTTP cache headers on the response.
         keepalive_seconds: Interval in seconds for sending keepalive whitespace.
+        rate_limit: Mark this route as a rate-limit candidate. The actual limit values are read from configuration
+            (`RATE_LIMIT_DEFAULT` and `RATE_LIMITS`). Has no effect unless the global rate-limiter is enabled
+            and at least one limit is configured.
 
     Returns:
         The decorated route function.
@@ -270,6 +275,21 @@ def api_handler(
 
             # Check for unexpected query parameters
             forbid_extra_query_params(request)
+
+            rate_limit_headers: dict[str, str] = {}
+            if rate_limit and (app_rate_limiter := getattr(request.app.state, "rate_limiter", None)):
+                from korp.rate_limit import resolve_rate_limit  # noqa: PLC0415
+
+                effective_limit = resolve_rate_limit(route, settings=settings)
+                if effective_limit is not None:
+                    check = await app_rate_limiter.check_request(request, limit=effective_limit)
+                    rate_limit_headers = check.headers
+                    if not check.allowed:
+                        raise HTTPException(
+                            status_code=429,
+                            detail="Rate limit exceeded.",
+                            headers=rate_limit_headers or None,
+                        )
 
             abort = AbortSignal(threading.Event(), asyncio.Event(), asyncio.get_running_loop())
 
@@ -325,6 +345,8 @@ def api_handler(
                     max_age = settings.HTTP_CACHE_MAXAGE * 3600
                     if max_age > 0:
                         _set_cache_headers(result, max_age_seconds=max_age)
+                for header_name, header_value in rate_limit_headers.items():
+                    result.headers[header_name] = header_value
                 return result
 
             fragments = result  # dict OR iterator/generator OR other value
@@ -501,6 +523,8 @@ def api_handler(
                 max_age = settings.HTTP_CACHE_MAXAGE * 3600
                 if max_age > 0:
                     _set_cache_headers(resp, max_age_seconds=max_age)
+            for header_name, header_value in rate_limit_headers.items():
+                resp.headers[header_name] = header_value
 
             return resp
 

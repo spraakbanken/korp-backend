@@ -20,6 +20,7 @@ from korp.config import Settings, settings
 from korp.cwb import CWB
 from korp.db import MySQL
 from korp.memcached import Memcached
+from korp.rate_limit import RequestRateLimiter, resolve_rate_limit_storage_uri
 
 logger = getLogger(__name__)
 
@@ -150,6 +151,31 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
                 await caching.setup_cache(app.state.memcached)
             else:
                 logger.info("Caching is disabled.")
+
+            app.state.rate_limiter = None
+            if settings.RATE_LIMIT_ENABLED:
+                storage_uri = resolve_rate_limit_storage_uri(settings)
+                if storage_uri:
+                    try:
+                        app.state.rate_limiter = await RequestRateLimiter.create(
+                            storage_uri,
+                            headers_mode=settings.RATE_LIMIT_HEADERS,
+                        )
+                        logger.info("Rate limiting is enabled.")
+                    except Exception:
+                        logger.warning(
+                            "Rate limiting is enabled but the storage backend is unavailable. "
+                            "Rate limiting will be disabled.",
+                            exc_info=True,
+                        )
+                else:
+                    logger.warning(
+                        "Rate limiting is enabled but no storage is configured "
+                        "(set RATE_LIMIT_STORAGE_URI or MEMCACHED_SERVER). Rate limiting will be disabled."
+                    )
+            else:
+                logger.info("Rate limiting is disabled.")
+
             authorizer_class = getattr(app.state, "authorizer_class", None)
             if authorizer_class:
                 app.state.authorizer = authorizer_class(app.state.cwb, app.state.memcached)
@@ -159,6 +185,9 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         finally:
             # Clean up resources on shutdown or if initialization fails
             app.state.authorizer = None
+            if app.state.rate_limiter is not None:
+                await app.state.rate_limiter.close()
+                app.state.rate_limiter = None
             await app.state.memcached.close()
             await app.state.db.close()
 
@@ -172,6 +201,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
     app.state.db = MySQL()
     app.state.memcached = Memcached()
     app.state.testing = testing
+    app.state.rate_limiter = None
 
     @app.middleware("http")
     async def support_post_params(request: Request, call_next: Any) -> Any:

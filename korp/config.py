@@ -6,7 +6,7 @@ the server.
 
 from pathlib import Path
 from types import UnionType
-from typing import Any, get_args, get_origin
+from typing import Any, Literal, get_args, get_origin
 
 import yaml
 from pydantic import model_validator
@@ -97,6 +97,24 @@ class Settings(BaseSettings):
 
     # Memcached server IP address and port. Sockets are not supported.
     MEMCACHED_SERVER: str | None = None
+
+    # Enable route-specific rate limiting
+    RATE_LIMIT_ENABLED: bool = False
+
+    # Optional explicit storage URI for rate limiting. If unset and rate limiting is enabled, MEMCACHED_SERVER is used.
+    RATE_LIMIT_STORAGE_URI: str | None = None
+
+    # When to include rate limit headers in responses (`none`, `on_reject`, `always`)
+    RATE_LIMIT_HEADERS: Literal["none", "on_reject", "always"] = "on_reject"
+
+    # Default rate limit applied to all rate-limited routes (marked with `@api_handler(rate_limit=True)`). Uses `limits`
+    # syntax, e.g. "10/minute" or "1/second;60/minute". Empty string means no limit.
+    RATE_LIMIT_DEFAULT: str = ""
+
+    # Per-route rate limit overrides, keyed by route path (e.g. {"query": "30/minute"}). Overrides
+    # RATE_LIMIT_DEFAULT for matched routes. Empty value disables the rate limit for that route. Paths are matched
+    # with or without leading slash.
+    RATE_LIMITS: dict[str, str] = {}
 
     # Max number of rows from count command to cache
     CACHE_MAX_STATS: int = 50

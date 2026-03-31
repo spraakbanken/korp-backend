@@ -25,6 +25,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+rate-limiting = [
+    "limits[async-memcached]~=5.8"
+]
 server = [
     "gunicorn>=25.1",
     "uvloop"  # Used by Gunicorn's ASGI worker for improved performance

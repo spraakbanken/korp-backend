@@ -93,6 +93,18 @@ For caching to work you need to specify both a cache directory and a Memcached s
 - `CACHE_DIR`
 - `MEMCACHED_SERVER`
 
+Optional route-level rate limiting can be enabled with:
+
+- `RATE_LIMIT_ENABLED=true`
+- `RATE_LIMIT_STORAGE_URI` (optional, defaults to `async+memcached://<MEMCACHED_SERVER>`)
+- `RATE_LIMIT_HEADERS` (`none`, `on_reject`, or `always`; defaults to `on_reject`)
+- `RATE_LIMIT_DEFAULT` (e.g. `10/minute` or `1/second;60/minute`; empty string means no limit)
+- `RATE_LIMITS` (JSON dict of per-route overrides, e.g. `{"query": "30/minute"}`; empty value disables the limit for
+  that route)
+
+Rate limiting requires Korp to be installed with the `rate-limiting` extra dependencies, i.e. `pip install
+.[rate-limiting]` or `uv sync --extra rate-limiting`.
+
 Plugin-specific settings can be stored in a YAML file referenced by `PLUGINS_CONFIG_FILE`:
 
 ```dotenv
