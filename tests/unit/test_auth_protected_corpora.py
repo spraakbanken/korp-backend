@@ -17,10 +17,16 @@ from plugins.auth_jwt import AuthJWT
 class FakeCWB:
     """Minimal CWB stub for testing batched protected-corpora reads."""
 
-    def __init__(self, corpora: list[str], protected: dict[str, bool]) -> None:
+    def __init__(
+        self,
+        corpora: list[str],
+        protected: dict[str, bool],
+        details: dict[str, dict[str, str]] | None = None,
+    ) -> None:
         """Initialize fake corpora and protected flags."""
         self.corpora = corpora
         self.protected = protected
+        self.details = details or {}
         self.calls: list[str | list[str]] = []
 
     def run_cqp(
@@ -45,6 +51,8 @@ class FakeCWB:
             if corpus in self.protected:
                 value = "true" if self.protected[corpus] else "false"
                 lines += [f"Protected: {value}"]
+            for key, value in self.details.get(corpus, {}).items():
+                lines += [f"{key}: {value}"]
             lines += [cqp.END_OF_LINE]
         return iter(lines)
 

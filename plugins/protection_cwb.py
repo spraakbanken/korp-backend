@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from korp import auth, caching, cqp
@@ -19,7 +20,40 @@ def list_corpora(cwb: CWB) -> list[str]:
     return list(corpora_lines)
 
 
-def _parse_protection_info_from_cached_corpus_info(cached_corpus_info: Any) -> auth.ProtectionInfo | None:
+def _normalize_detail_keys(detail_keys: Iterable[str] | None) -> set[str]:
+    """Normalize optional detail keys to a lowercase set.
+
+    Returns:
+        Lowercase allowlist of detail keys, excluding `Protected`.
+    """
+    if detail_keys is None:
+        return set()
+    return {
+        key.casefold()
+        for key in detail_keys
+        if isinstance(key, str) and key.strip() and key.casefold() != "protected"
+    }
+
+
+def _extract_details(info: dict[str, Any], normalized_detail_keys: set[str]) -> dict[str, Any]:
+    """Extract whitelisted detail keys from a CWB info mapping.
+
+    Returns:
+        Mapping containing only whitelisted detail keys.
+    """
+    if not normalized_detail_keys:
+        return {}
+    return {
+        key: value
+        for key, value in info.items()
+        if isinstance(key, str) and key.casefold() in normalized_detail_keys
+    }
+
+
+def _parse_protection_info_from_cached_corpus_info(
+    cached_corpus_info: Any,
+    normalized_detail_keys: set[str],
+) -> auth.ProtectionInfo | None:
     """Parse protection metadata from `get_corpus_info` cache shape.
 
     Returns:
@@ -30,10 +64,13 @@ def _parse_protection_info_from_cached_corpus_info(cached_corpus_info: Any) -> a
     info = cached_corpus_info.get("info")
     if not isinstance(info, dict):
         return None
-    protected = info.get("Protected")
-    if protected is None:
-        return auth.ProtectionInfo(protected=False)
-    return auth.ProtectionInfo(protected=str(protected).lower() == "true")
+    protected = False
+    for key, value in info.items():
+        if isinstance(key, str) and key.casefold() == "protected":
+            protected = str(value).lower() == "true"
+            break
+    details = _extract_details(info, normalized_detail_keys)
+    return auth.ProtectionInfo(protected=protected, details=details)
 
 
 async def fetch_protection_info(
@@ -41,8 +78,16 @@ async def fetch_protection_info(
     corpora: list[str],
     cache: Memcached,
     auth_ctx: AuthContext,
+    detail_keys: Iterable[str] | None = None,
 ) -> dict[str, auth.ProtectionInfo]:
     """Fetch protection metadata from CWB, reusing cached corpus info when available.
+
+    Args:
+        cwb: CWB interface.
+        corpora: Corpora to resolve protection metadata for.
+        cache: Memcached client.
+        auth_ctx: Authentication context.
+        detail_keys: Optional list of CWB info keys to include in `ProtectionInfo.details`.
 
     Returns:
         Protection metadata keyed by corpus.
@@ -52,6 +97,7 @@ async def fetch_protection_info(
 
     result: dict[str, auth.ProtectionInfo] = {}
     missing = corpora
+    normalized_detail_keys = _normalize_detail_keys(detail_keys)
 
     if auth_ctx.cache_enabled:
         prefixes = await caching.cache_prefix(cache, corpora)
@@ -60,7 +106,10 @@ async def fetch_protection_info(
 
         missing = []
         for info_cache_key, corpus in info_cache_keys.items():
-            protection = _parse_protection_info_from_cached_corpus_info(cached_corpora.get(info_cache_key))
+            protection = _parse_protection_info_from_cached_corpus_info(
+                cached_corpora.get(info_cache_key),
+                normalized_detail_keys,
+            )
             if protection is None:
                 missing.append(corpus)
             else:
@@ -77,13 +126,16 @@ async def fetch_protection_info(
 
         for corpus in missing:
             is_protected = False
+            details: dict[str, Any] = {}
             for line in lines:
                 if line == cqp.END_OF_LINE:
                     break
                 if ":" in line and not line.endswith(":"):
                     key, value = (part.strip() for part in line.split(":", 1))
-                    if key == "Protected":
+                    if key.casefold() == "protected":
                         is_protected = value.lower() == "true"
-            result[corpus] = auth.ProtectionInfo(protected=is_protected)
+                    elif key.casefold() in normalized_detail_keys:
+                        details[key] = value
+            result[corpus] = auth.ProtectionInfo(protected=is_protected, details=details)
 
     return result
