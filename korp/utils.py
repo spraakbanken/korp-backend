@@ -228,9 +228,29 @@ class CustomTracebackException(Exception):
 
 
 def get_corpus_timestamps():
-    """Get modification time of corpus registry files."""
-    corpora = dict((os.path.basename(f).upper(), os.path.getmtime(f)) for f in
-                   glob.glob(os.path.join(app.config["CWB_REGISTRY"], "*")))
+    """Get modification time of corpus registry files and associated .info files.
+
+    Returns the latest modification time between the registry file and its .info file.
+    Info files are located at registry_dir/../data/corpus_name/.info
+    """
+    registry_dir = app.config["CWB_REGISTRY"]
+    data_dir = os.path.join(os.path.dirname(registry_dir), "data")
+
+    corpora = {}
+    for registry_file in glob.glob(os.path.join(registry_dir, "*")):
+        corpus_name = os.path.basename(registry_file).upper()
+        registry_mtime = os.path.getmtime(registry_file)
+
+        # Check if there's a corresponding .info file
+        info_file = os.path.join(data_dir, os.path.basename(registry_file), ".info")
+        if os.path.isfile(info_file):
+            info_mtime = os.path.getmtime(info_file)
+            # Use the latest modification time
+            corpora[corpus_name] = max(registry_mtime, info_mtime)
+        else:
+            # No .info file, just use registry file timestamp
+            corpora[corpus_name] = registry_mtime
+
     return corpora
 
 
