@@ -50,13 +50,15 @@ async def setup_cache(cache: Memcached) -> bool:
 
     Returns:
         True if any action was needed (cache dir created or Memcached initialized), False otherwise.
+
+    Raises:
+        ValueError: If cache directory is set to the current working directory.
     """
     action_needed = False
 
-    # Create cache dir if needed
-    if settings.CACHE_DIR and not Path(settings.CACHE_DIR).exists():
-        Path(settings.CACHE_DIR).mkdir(parents=True)
-        action_needed = True
+    # Make sure that the cache dir is not the current working directory
+    if settings.CACHE_DIR and Path.cwd() == settings.CACHE_DIR:
+        raise ValueError("Cache directory cannot be the current working directory.")
 
     # Set up Memcached if needed
     if settings.MEMCACHED_SERVER and not await cache.get("multi:version"):
