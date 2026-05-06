@@ -39,6 +39,7 @@ jwt = [
 [dependency-groups]
 dev = [
     "fastapi-cli[standard-no-fastapi-cloud-cli]",
+    "pyright~=1.1",
     "ruff~=0.15.0",
     {include-group = "test"}
 ]
@@ -111,3 +112,7 @@ preview = true
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.pyright]
+typeCheckingMode = "standard"
+include = ["korp", "tests", "plugins"]

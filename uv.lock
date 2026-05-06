@@ -2,6 +2,10 @@ version = 1
 revision = 3
 requires-python = ">=3.11"
 
+[options]
+exclude-newer = "2026-04-12T13:35:31.706665826Z"
+exclude-newer-span = "P7D"
+
 [[package]]
 name = "aiomcache"
 version = "0.8.2"
@@ -457,6 +461,7 @@ dev = [
     { name = "fastapi-cli", extra = ["standard-no-fastapi-cloud-cli"] },
     { name = "httpx" },
     { name = "pymysql" },
+    { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-sugar" },
     { name = "ruff" },
@@ -490,6 +495,7 @@ dev = [
     { name = "fastapi-cli", extras = ["standard-no-fastapi-cloud-cli"] },
     { name = "httpx", specifier = "~=0.28.0" },
     { name = "pymysql", specifier = "~=1.1" },
+    { name = "pyright", specifier = "~=1.1" },
     { name = "pytest", specifier = "~=9.0" },
     { name = "pytest-sugar" },
     { name = "ruff", specifier = "~=0.15.0" },
@@ -548,6 +554,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/61/34/0e8d7a9956f10bb64102b4bc3a9e315724a915c159266c66c7d067d876f8/memcachio-0.5.1.tar.gz", hash = "sha256:e07a19938d2b8907cb83184dde3aa64a308eef7e6d5cf5eb5cbf557f4208483e", size = 125606, upload-time = "2025-09-29T14:57:07.634Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/55/24/192ac12e23e6b9ae542f1cee6592dc10104333cfd79c4b22f0e40290b7e5/memcachio-0.5.1-py3-none-any.whl", hash = "sha256:d358315c87f44c839ee2725ba8f35ad34acead4319a06a495bd839086698ec20", size = 28468, upload-time = "2025-09-29T14:57:06.357Z" },
+]
+
+[[package]]
+name = "nodeenv"
+version = "1.10.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/24/bf/d1bda4f6168e0b2e9e5958945e01910052158313224ada5ce1fb2e1113b8/nodeenv-1.10.0.tar.gz", hash = "sha256:996c191ad80897d076bdfba80a41994c2b47c68e224c542b48feba42ba00f8bb", size = 55611, upload-time = "2025-12-20T14:08:54.006Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/b2/d0896bdcdc8d28a7fc5717c305f1a861c26e18c05047949fb371034d98bd/nodeenv-1.10.0-py2.py3-none-any.whl", hash = "sha256:5bb13e3eed2923615535339b3c620e76779af4cb4c6a90deccc9e36b274d3827", size = 23438, upload-time = "2025-12-20T14:08:52.782Z" },
 ]
 
 [[package]]
@@ -761,6 +776,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f5/ae/1fe3fcd9f959efa0ebe200b8de88b5a5ce3e767e38c7ac32fb179f16a388/pymysql-1.1.2.tar.gz", hash = "sha256:4961d3e165614ae65014e361811a724e2044ad3ea3739de9903ae7c21f539f03", size = 48258, upload-time = "2025-08-24T12:55:55.146Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7c/4c/ad33b92b9864cbde84f259d5df035a6447f91891f5be77788e2a3892bce3/pymysql-1.1.2-py3-none-any.whl", hash = "sha256:e6b1d89711dd51f8f74b1631fe08f039e7d76cf67a42a323d3178f0f25762ed9", size = 45300, upload-time = "2025-08-24T12:55:53.394Z" },
+]
+
+[[package]]
+name = "pyright"
+version = "1.1.408"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "nodeenv" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/74/b2/5db700e52554b8f025faa9c3c624c59f1f6c8841ba81ab97641b54322f16/pyright-1.1.408.tar.gz", hash = "sha256:f28f2321f96852fa50b5829ea492f6adb0e6954568d1caa3f3af3a5f555eb684", size = 4400578, upload-time = "2026-01-08T08:07:38.795Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/82/a2c93e32800940d9573fb28c346772a14778b84ba7524e691b324620ab89/pyright-1.1.408-py3-none-any.whl", hash = "sha256:090b32865f4fdb1e0e6cd82bf5618480d48eecd2eb2e70f960982a3d9a4c17c1", size = 6399144, upload-time = "2026-01-08T08:07:37.082Z" },
 ]
 
 [[package]]
