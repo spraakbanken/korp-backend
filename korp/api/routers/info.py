@@ -46,6 +46,7 @@ async def info(
         Info about the Korp backend and available corpora.
     """
     cache = ctx.cache
+    cache_prefix = ""
     if ctx.common.cache:
         cache_prefix = await caching.cache_prefix(cache)
         result = await cache.get(f"{cache_prefix}:info")
@@ -112,6 +113,7 @@ async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bo
     """
     cache = ctx.cache
     save_cache: list[str] = []
+    all_prefixes: dict[str, str] = {}
     combined_cache_key = ""
 
     if ctx.common.cache:
@@ -132,8 +134,6 @@ async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bo
     total_size = 0
     total_sentences = 0
 
-    cmd = []
-
     if ctx.common.cache:
         memcached_keys = {f"{all_prefixes[c]}:info": c for c in corpora}
         cached_corpora = await cache.get_many(memcached_keys.keys())
@@ -144,13 +144,16 @@ async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bo
             else:
                 save_cache.append(c)
 
-    for c in corpora:
-        if c not in result["corpora"]:
+    uncached_corpora = [c for c in corpora if c not in result["corpora"]]
+    memcached_data = {}
+
+    if uncached_corpora:
+        cmd: list[str] = []
+        for c in uncached_corpora:
             cmd += [f"{c};"]
             cmd += ctx.cwb.show_attributes()
             cmd += ["info; .EOL.;"]
 
-    if cmd:
         cmd += ["exit;"]
 
         # Call the CQP binary
@@ -159,36 +162,30 @@ async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bo
         # Skip CQP version
         next(lines)
 
-    memcached_data = {}
+        for c in uncached_corpora:
+            # Read attributes
+            attrs = ctx.cwb.read_attributes(lines)
+
+            # Corpus information
+            info = {}
+
+            for line in lines:
+                if line == cqp.END_OF_LINE:
+                    break
+                if ":" in line and not line.endswith(":"):
+                    infokey, infoval = (x.strip() for x in line.split(":", 1))
+                    info[infokey] = infoval
+
+            result["corpora"][c] = {"attrs": attrs, "info": info}
+            if c in save_cache:
+                memcached_data[f"{all_prefixes[c]}:info"] = result["corpora"][c]
 
     for c in corpora:
-        if c in result["corpora"]:
-            total_size += int(result["corpora"][c]["info"]["Size"])
-            sentences = result["corpora"][c]["info"].get("Sentences", "")
-            if sentences.isdigit():
-                total_sentences += int(sentences)
-            continue
-
-        # Read attributes
-        attrs = ctx.cwb.read_attributes(lines)
-
-        # Corpus information
-        info = {}
-
-        for line in lines:
-            if line == cqp.END_OF_LINE:
-                break
-            if ":" in line and not line.endswith(":"):
-                infokey, infoval = (x.strip() for x in line.split(":", 1))
-                info[infokey] = infoval
-                if infokey == "Size":
-                    total_size += int(infoval)
-                elif infokey == "Sentences" and infoval.isdigit():
-                    total_sentences += int(infoval)
-
-        result["corpora"][c] = {"attrs": attrs, "info": info}
-        if c in save_cache:
-            memcached_data[f"{all_prefixes[c]}:info"] = result["corpora"][c]
+        info = result["corpora"][c]["info"]
+        total_size += int(info["Size"])
+        sentences = info.get("Sentences", "")
+        if sentences.isdigit():
+            total_sentences += int(sentences)
 
     if memcached_data:
         await cache.set_many(memcached_data)

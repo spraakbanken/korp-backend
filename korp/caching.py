@@ -17,6 +17,7 @@ def get_corpus_timestamps() -> dict[str, float]:
     Returns:
         A dictionary mapping corpus names to their modification timestamps.
     """
+    assert settings.CWB_REGISTRY is not None  # Should be guaranteed by settings validation
     return {f.name.upper(): f.stat().st_mtime for f in Path(settings.CWB_REGISTRY).glob("*")}
 
 
@@ -29,6 +30,8 @@ def get_corpus_config_timestamps() -> tuple[dict[str, float], float, float]:
         - The latest modification timestamp among mode config files.
         - The latest modification timestamp among preset config files.
     """
+    if not settings.CORPUS_CONFIG_DIR:
+        return {}, 0, 0
     corpora = {
         f.name[:-5].upper(): f.stat().st_mtime for f in Path(settings.CORPUS_CONFIG_DIR, "corpora").glob("*.yaml")
     }

@@ -26,6 +26,7 @@ async def cache_handler(ctx: CtxDep) -> dict:
         return {}
 
     cache = ctx.cache
+    assert settings.CACHE_DIR
 
     # Set up caching if needed
     if await caching.setup_cache(cache):

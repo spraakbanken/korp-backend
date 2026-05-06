@@ -404,6 +404,8 @@ async def perform_query(
                 rest_corpora = corpora[i:]
                 break
             skip_corpus = False
+            nr_hits = 0
+            kwic = []
             if corpus in cached_corpus_hit_stats:
                 nr_hits = cached_corpus_hit_stats[corpus]
                 if nr_hits - 1 < start_local:
@@ -681,7 +683,21 @@ def query_corpus(
     cache_dir = settings.CACHE_DIR
     cache_max_query_data = settings.CACHE_MAX_QUERY_DATA
 
-    if use_cache and cache_dir:
+    @dataclass
+    class QueryCache:
+        query: str
+        query_temp: str
+        filename: Path
+        filename_temp: Path
+        size_key: str
+        is_cached: bool
+        cached_no_hits: bool
+
+    cache = None
+
+    if use_cache:
+        assert cache_dir is not None
+
         # Calculate checksum (needs to contain all arguments that may influence the results)
         checksum_data = (cqp_query, within, cut, expand_prequeries, free_search)
 
@@ -692,15 +708,21 @@ def query_corpus(
         cache_query_temp = cache_query + "_" + unique_id
 
         corpus_base = corpus.split("|", 1)[0]
-        cache_filename = Path(cache_dir) / f"{corpus_base}:query_data_{checksum}"
+        cache_filename = cache_dir / f"{corpus_base}:query_data_{checksum}"
         cache_filename_temp = cache_filename.with_name(cache_filename.name + "_" + unique_id)
 
         cache_size_key = f"{caching.cache_prefix_sync(mc, corpus_base)}:query_size_{checksum}"
         cache_hits = mc.get(cache_size_key)
         is_cached = cache_hits is not None and cache_filename.is_file()
-        cached_no_hits = cache_hits == 0
-    else:
-        is_cached = False
+        cache = QueryCache(
+            query=cache_query,
+            query_temp=cache_query_temp,
+            filename=cache_filename,
+            filename_temp=cache_filename_temp,
+            size_key=cache_size_key,
+            is_cached=is_cached,
+            cached_no_hits=cache_hits == 0,
+        )
 
     # CQP optimization is currently always enabled
     optimize = True
@@ -754,7 +776,7 @@ def query_corpus(
     # Build the CQP query
     cmd = []
 
-    if use_cache:
+    if cache:
         cmd.append(f'set DataDirectory "{cache_dir}";')
 
     cmd.append(f"{corpus};")
@@ -764,12 +786,12 @@ def query_corpus(
 
     retcode = cqp.QueryOptimizeResult.SUCCESS
 
-    if is_cached:
+    if cache and cache.is_cached:
         # This exact query has been done before. Read corpus positions from cache.
-        if not cached_no_hits:
-            cmd.append(f"Last = {cache_query};")
+        if not cache.cached_no_hits:
+            cmd.append(f"Last = {cache.query};")
             # Touch cache file to delay its removal
-            os.utime(cache_filename)
+            os.utime(cache.filename)
     else:
         for i, c in enumerate(cqp_query):
             cqpparams_temp = cqpparams.copy()
@@ -792,17 +814,17 @@ def query_corpus(
             if pre_query:
                 cmd.append("Last;")
 
-    if use_cache and cached_no_hits:
+    if cache and cache.cached_no_hits:
         # Print EOL if no hits
         cmd.append(".EOL.;")
     else:
         # This prints the size of the query (i.e., the number of results):
         cmd.append("size Last;")
 
-    if use_cache and not is_cached:
-        cmd.append(f"{cache_query_temp} = Last; save {cache_query_temp};")
+    if cache and not cache.is_cached:
+        cmd.append(f"{cache.query_temp} = Last; save {cache.query_temp};")
 
-    if not no_results and not (use_cache and cached_no_hits):
+    if not no_results and not (cache and cache.cached_no_hits):
         if free_search and retcode == cqp.QueryOptimizeResult.SUCCESS:
             tokens, _ = cqp.parse_cqp(cqp_query[-1])
             cmd.append("Last;")
@@ -835,8 +857,9 @@ def query_corpus(
     next(lines)
 
     # Remove cache file if it exceeds max cache file size
-    if use_cache and not is_cached and cache_max_query_data:
-        cache_file = Path(cache_dir) / f"{corpus}:{cache_query_temp}"
+    if cache and not cache.is_cached and cache_max_query_data:
+        assert cache_dir is not None
+        cache_file = cache_dir / f"{corpus}:{cache.query_temp}"
         try:
             if cache_file.is_file() and cache_file.stat().st_size > cache_max_query_data:
                 cache_file.unlink()
@@ -850,12 +873,12 @@ def query_corpus(
     nr_hits = next(lines)
     nr_hits = 0 if nr_hits == cqp.END_OF_LINE else int(nr_hits)
 
-    if use_cache and not is_cached and not cached_no_hits:
+    if cache and not cache.is_cached and not cache.cached_no_hits:
         # Save number of hits
-        mc.add(cache_size_key, nr_hits)
+        mc.add(cache.size_key, nr_hits)
 
         try:
-            cache_filename_temp.rename(cache_filename)
+            cache.filename_temp.rename(cache.filename)
         except FileNotFoundError:
             pass
 

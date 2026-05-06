@@ -534,9 +534,8 @@ def api_handler(
         # this by deleting `__wrapped__` after updating the wrapper to look like `fn`, instead of using
         # `functools.wraps`.
         update_wrapper(wrapper, fn)
-        wrapper.__signature__ = inspect.signature(fn)
-        with contextlib.suppress(AttributeError):
-            del wrapper.__wrapped__
+        vars(wrapper)["__signature__"] = inspect.signature(fn)
+        vars(wrapper).pop("__wrapped__", None)
 
         return wrapper
 

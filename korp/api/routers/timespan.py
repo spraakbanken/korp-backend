@@ -193,7 +193,15 @@ async def get_timespan(
     cached_data = []
     corpora_rest = corpora.copy()
 
+    @dataclass
+    class TimespanCache:
+        prefixes: dict[str, str]
+        corpus_checksum: str
+        combined_key: str
+
+    cache = None
     cache_enabled = ctx.common.cache
+
     if cache_enabled:
         # Check if whole query is cached
         combined_checksum = utils.get_hash(
@@ -217,6 +225,8 @@ async def get_timespan(
             if corpus_cached_data is not None:
                 cached_data.extend(corpus_cached_data)
                 corpora_rest.remove(c)
+
+        cache = TimespanCache(prefixes=cache_prefixes, corpus_checksum=corpus_checksum, combined_key=cache_combined_key)
 
     if corpora_rest:
         bind_params: dict[str, Any] = {}
@@ -297,11 +307,11 @@ async def get_timespan(
             max_cache_rows,
         )
 
-    if cache_enabled:
+    if cache_enabled and cache:
         cache_write_start = perf_counter()
 
         async def save_cache(corpus: str, data: list[Mapping[str, Any]]) -> None:
-            cache_key = f"{cache_prefixes[corpus]}:timespan_{corpus_checksum}"
+            cache_key = f"{cache.prefixes[corpus]}:timespan_{cache.corpus_checksum}"
             try:
                 await ctx.cache.add(cache_key, data)
             except CacheError:
@@ -325,10 +335,10 @@ async def get_timespan(
     )
     calc_duration = perf_counter() - calc_start
 
-    if cache_enabled and not no_combined_cache:
+    if cache_enabled and cache and not no_combined_cache:
         # Save cache for whole query
         try:
-            await ctx.cache.add(cache_combined_key, result)
+            await ctx.cache.add(cache.combined_key, result)
         except CacheError:
             pass
     phase_log_seconds = max(0.0, settings.TIMESPAN_PHASE_LOG_SECONDS)

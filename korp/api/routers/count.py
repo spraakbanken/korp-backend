@@ -464,6 +464,7 @@ async def perform_count(
     ]
 
     # If relative_to_struct is used, perform a separate count to get frequencies for calculating relative numbers
+    relative_to_freqs = {}
     if relative_to_struct:
         relative_parameters = CountParameters(
             cqp_query=["[]"],
@@ -1241,6 +1242,7 @@ def count_query_worker(
     cqpparams = {"within": within}
 
     cmd = [f"{corpus};"]
+    cqpparams_temp = {}
     for i, c in enumerate(base_cqp):
         cqpparams_temp = cqpparams.copy()
         pre_query = i + 1 < len(base_cqp)
@@ -1300,6 +1302,7 @@ def count_query_worker(
     nr_hits = int(next(lines))
 
     # Get corpus size
+    corpus_size = 0
     for line in lines:
         if line.startswith("Size:"):
             _, corpus_size = line.split(":")

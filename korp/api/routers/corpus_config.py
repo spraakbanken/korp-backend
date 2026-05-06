@@ -63,6 +63,7 @@ async def corpus_config(
 
     Raises:
         NameError: If the specified mode does not exist.
+        RuntimeError: If corpus configuration directory is not set in settings.
     """
     corpora = corpus or []
     cache_checksum = utils.get_hash((mode, sorted(corpora), settings.LAB_MODE))
@@ -77,6 +78,9 @@ async def corpus_config(
                 result["DEBUG"]["cache_read"] = True
             yield result
             return
+
+    if not settings.CORPUS_CONFIG_DIR:
+        raise RuntimeError("Corpus config directory is not set in settings, cannot fetch corpus configuration.")
 
     result = await get_mode(mode, corpora, cache if ctx.common.cache else None)
     if result is None:
@@ -112,6 +116,7 @@ def get_modes(current_mode: str | None = None) -> list[dict]:
     Returns:
         List of modes with their basic information.
     """
+    assert settings.CORPUS_CONFIG_DIR
     modes = []
     for mode_file in (Path(settings.CORPUS_CONFIG_DIR) / "modes").glob("*.yaml"):
         with mode_file.open("r", encoding="utf-8") as f:
@@ -147,6 +152,7 @@ def _get_mode_sync(
     Returns:
         Dictionary of corpus configurations to be saved to cache.
     """
+    assert settings.CORPUS_CONFIG_DIR
     attr_types = {"positional": "pos_attributes", "structural": "struct_attributes", "custom": "custom_attributes"}
 
     mode["corpora"] = {}  # All corpora in mode
@@ -294,6 +300,7 @@ async def get_mode(mode_name: str, corpora: list, cache: Memcached | None = None
     Returns:
         Mode configuration structure, or None if mode does not exist.
     """
+    assert settings.CORPUS_CONFIG_DIR
     warnings = set()
     try:
         with Path(settings.CORPUS_CONFIG_DIR, "modes", mode_name + ".yaml").open("r", encoding="utf-8") as fp:
@@ -312,6 +319,9 @@ async def get_mode(mode_name: str, corpora: list, cache: Memcached | None = None
     else:
         corpus_files = list(Path(settings.CORPUS_CONFIG_DIR, "corpora").glob("*.yaml"))
 
+    cached_corpora: dict[Path, dict] | None = None
+    cache_prefix = None
+
     if cache:
         cache_prefix = await caching.cache_prefix(cache, config=True)
         cache_keys = {
@@ -322,7 +332,7 @@ async def get_mode(mode_name: str, corpora: list, cache: Memcached | None = None
         }
 
     to_cache = await anyio.to_thread.run_sync(  # type: ignore
-        partial(_get_mode_sync, mode, mode_name, corpora, corpus_files, cached_corpora if cache else None)
+        partial(_get_mode_sync, mode, mode_name, corpora, corpus_files, cached_corpora)
     )
 
     if cache:
