@@ -142,7 +142,9 @@ class Settings(BaseSettings):
     TESTING: bool = False
 
     # Override default settings with settings from .env file
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", env_nested_delimiter="__")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", env_nested_delimiter="__", env_parse_none_str="null"
+    )
 
     @model_validator(mode="after")
     def _expand_paths(self) -> "Settings":
