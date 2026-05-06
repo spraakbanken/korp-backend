@@ -146,6 +146,11 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
             app.state.cache_enabled = (
                 app.state.memcached.active and settings.CACHE_DIR and Path(settings.CACHE_DIR).is_dir()
             )
+            if settings.CACHE_DIR and not Path(settings.CACHE_DIR).is_dir():
+                logger.warning(
+                    "Cache directory %s does not exist or is not a directory. Caching will be disabled.",
+                    settings.CACHE_DIR,
+                )
             if app.state.cache_enabled:
                 logger.info("Caching is enabled.")
                 await caching.setup_cache(app.state.memcached)
