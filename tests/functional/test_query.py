@@ -6,7 +6,7 @@ import pytest
 
 
 @pytest.fixture
-def query_testcorpus(get_json: Callable) -> Callable[..., dict]:
+def query_testcorpus(get_json: Callable, corpora: list[str]) -> Callable[..., dict]:  # noqa: ARG001
     """Return function returning JSON response for `/query` to testcorpus.
 
     The returned function takes as its parameters the CQP query, possible additional query parameters and Korp
