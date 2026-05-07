@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from korp.config import Settings
+from tests.configutils import get_test_settings
 
 
 def test_plugins_config_loaded_from_yaml_file(tmp_path: Path) -> None:
@@ -16,7 +17,7 @@ def test_plugins_config_loaded_from_yaml_file(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    settings = Settings(_env_file=None, PLUGINS_CONFIG_FILE=plugins_file)  # type: ignore
+    settings = get_test_settings(PLUGINS_CONFIG_FILE=plugins_file)
 
     assert settings.PLUGINS_CONFIG == {
         "plugins.example": {
@@ -33,8 +34,7 @@ def test_plugins_config_explicit_value_overrides_yaml_file(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    settings = Settings(
-        _env_file=None,  # type: ignore
+    settings = get_test_settings(
         PLUGINS_CONFIG_FILE=plugins_file,
         PLUGINS_CONFIG={"plugins.example": {"greeting": "Hello from override!"}},
     )
@@ -55,4 +55,4 @@ def test_plugins_config_file_requires_mapping(tmp_path: Path) -> None:
     plugins_file.write_text('- "not-a-mapping"\n', encoding="utf-8")
 
     with pytest.raises(ValidationError):
-        Settings(_env_file=None, PLUGINS_CONFIG_FILE=plugins_file)  # type: ignore
+        get_test_settings(PLUGINS_CONFIG_FILE=plugins_file)
