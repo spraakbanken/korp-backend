@@ -12,3 +12,8 @@ def get_korp_config() -> dict[str, Any]:
     overrides from `.env` via `Settings`).
     """
     return Settings().model_dump()
+
+
+def get_test_settings(**overrides: Any) -> Settings:
+    """Return Settings for tests without loading .env."""
+    return Settings(**{"_env_file": None, **overrides})
