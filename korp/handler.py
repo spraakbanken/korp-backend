@@ -27,6 +27,39 @@ from korp.dependencies import AbortSignal, Ctx, CtxDep
 logger = getLogger(__name__)
 
 
+def _unwrap_error(exc: BaseException) -> BaseException:
+    """Return the most useful leaf exception from a wrapped error.
+
+    AnyIO task groups can surface failures as ``ExceptionGroup`` instances, which are too generic to expose directly in
+    API responses. Prefer the first non-cancellation leaf with a message, and fall back to the original exception if we
+    cannot find a better candidate.
+
+    Args:
+        exc: The exception to unwrap.
+
+    Returns:
+        The most informative underlying exception.
+    """
+
+    def iter_leaves(error: BaseException) -> list[BaseException]:
+        if isinstance(error, BaseExceptionGroup):
+            leaves: list[BaseException] = []
+            for child in error.exceptions:
+                leaves.extend(iter_leaves(child))
+            return leaves
+        return [error]
+
+    leaves = [leaf for leaf in iter_leaves(exc) if not isinstance(leaf, asyncio.CancelledError)]
+    if not leaves:
+        return exc
+
+    for leaf in leaves:
+        if str(leaf):
+            return leaf
+
+    return leaves[0]
+
+
 def docs_response(
     model: type[Any],
     *,
@@ -185,9 +218,10 @@ def _format_error(exc: BaseException, *, debug: bool) -> dict[str, Any]:
     Returns:
         A dictionary representing the error response.
     """
-    err: dict[str, Any] = {"ERROR": {"type": type(exc).__name__, "value": str(exc)}}
+    error = _unwrap_error(exc)
+    err: dict[str, Any] = {"ERROR": {"type": type(error).__name__, "value": str(error)}}
     if debug:
-        tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
+        tb = traceback.format_exception(type(error), error, error.__traceback__)
         err["ERROR"]["traceback"] = [line.rstrip("\n") for line in tb]
     return err
 

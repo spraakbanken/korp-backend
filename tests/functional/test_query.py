@@ -83,3 +83,11 @@ class TestQuery:
         # before returning the data.
         data = query_testcorpus_kwic_rows(0, 1000000)
         assert len(data["kwic"]) == data["hits"]
+
+    @staticmethod
+    def test_query_invalid_cqp_surfaces_cqp_error(query_testcorpus: Callable[..., dict]) -> None:
+        """Test that invalid CQP in parallel query execution exposes the underlying CQP error."""
+        data = query_testcorpus("unquoted")
+
+        assert data["ERROR"]["type"] == "CQPError"
+        assert "Corpus ``unquoted'' is undefined" in data["ERROR"]["value"]
