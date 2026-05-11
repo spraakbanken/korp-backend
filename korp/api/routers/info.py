@@ -174,6 +174,8 @@ async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bo
                     break
                 if ":" in line and not line.endswith(":"):
                     infokey, infoval = (x.strip() for x in line.split(":", 1))
+                    if infokey in {"Size", "Sentences"} and infoval.isdigit():
+                        infoval = int(infoval)
                     info[infokey] = infoval
 
             result["corpora"][c] = {"attrs": attrs, "info": info}
