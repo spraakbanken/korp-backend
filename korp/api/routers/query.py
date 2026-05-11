@@ -545,7 +545,7 @@ async def query_sample(
     count is calculated.
 
     Yields:
-        A single KWIC result as a dictionary, or an empty result if no matches are found.
+        A single KWIC result as a dictionary, or an empty KWIC list if no matches are found.
     """
     query_params = await parse_parameters(
         ctx=ctx,
@@ -576,9 +576,13 @@ async def query_sample(
         params_corpus = dataclasses.replace(query_params, corpora=[c])
         async for item in perform_query(params_corpus, ctx, abort_signal=abort_signal):
             if item.get("hits", 0) > 0:
+                item.pop("hits", None)
+                item.pop("corpus_hits", None)
+                item.pop("query_data", None)
                 yield item
                 return
 
+    yield {"kwic": []}
 
 @router.get("/query", response_model=None)
 @router.post("/query", response_model=None, include_in_schema=False)
