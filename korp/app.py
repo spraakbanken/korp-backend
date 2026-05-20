@@ -24,16 +24,23 @@ from korp.rate_limit import RequestRateLimiter, resolve_rate_limit_storage_uri
 
 logger = getLogger(__name__)
 
-_TAGS = [
+# Structure for API documentation, defining tags and route order
+_API_DOCUMENTATION_STRUCTURE = [
     {
         "name": "Corpus Information",
         "description": "Routes for retrieving information about corpora and their attributes.",
+        "routes": ["/info", "/corpus_info", "/attr_values", "/corpus_config"],
     },
     {
         "name": "Concordance",
         "description": "Routes for retrieving concordance lines and related information.",
+        "routes": ["/query", "/query_sample"],
     },
-    {"name": "Statistics", "description": "Routes for retrieving various corpus statistics."},
+    {
+        "name": "Statistics",
+        "description": "Routes for retrieving various corpus statistics.",
+        "routes": ["/count", "/count_all", "/count_time", "/timespan", "/loglike", "/lemgram_count"],
+    },
     {
         "name": "Word Relations",
         "description": "Routes for querying word relations.",
@@ -43,6 +50,79 @@ _TAGS = [
         "description": "Routes for administrative tasks.",
     },
 ]
+
+_OPENAPI_TAGS = [
+    {k: v for k, v in tag.items() if k != "routes"}
+    for tag in _API_DOCUMENTATION_STRUCTURE
+]
+
+_DESCRIPTION = """
+# Korp Backend API
+
+Korp is a corpus search system developed at [Språkbanken Text](https://spraakbanken.gu.se/eng). The Korp backend API
+lets applications query annotated text corpora, inspect corpus metadata, and calculate corpus statistics. It powers the
+[Korp frontend](https://github.com/spraakbanken/korp-frontend), and can also be used directly by other applications and
+scripts.
+
+Use this API to:
+
+- discover available corpora and their annotations
+- run concordance queries and retrieve matching lines with annotations
+- count query matches, attribute values, and time distributions
+- query word relations when relation data is configured
+- maintain server-side caches
+
+Available corpora, annotations, and optional features depend on the Korp installation you are using.
+
+The [source code](https://github.com/spraakbanken/korp-backend) is available on GitHub under the MIT license.
+
+## Request Basics
+
+A typical API request is an HTTP `GET` request following the pattern:
+
+> `/command?parameter=value&parameter=value...`
+
+Parameters are typically sent as query parameters. Parameters that accept multiple values usually support both
+comma-separated values and repeated parameters.
+
+While the API documentation only presents endpoints as accepting `GET` requests with query parameters, the backend also
+supports `POST` requests with parameters sent in the request body, encoded as either `application/x-www-form-urlencoded`
+or `application/json`. This makes it possible to send long queries that might otherwise exceed URL length limits. If a
+parameter is sent both in the query string and the body, the query string value takes precedence.
+
+All responses are returned as JSON.
+
+## Return Codes
+
+Most API routes stream the response body. Streaming lets the backend send keepalive whitespace while long-running CQP or
+database work is still in progress, which helps avoid proxy and browser timeouts.
+
+Because HTTP status and headers are sent before the full result has been computed, errors that happen after streaming
+has started cannot be reported by changing the HTTP status code. In those cases the response still has status `200`,
+and the JSON object contains an `ERROR` field with the error details. Clients should therefore check the response body
+for `ERROR` instead of treating HTTP `200` alone as a successful API result. When `debug=true`, errors may include extra
+debug information such as tracebacks.
+
+Errors that happen before the route starts streaming may still use normal HTTP status codes, for example malformed
+requests, unknown routes, validation errors, or rate limiting.
+
+## CQP Queries
+
+For many routes, Korp uses Corpus Workbench's CQP query language. For details about the query syntax, see the [CQP Query
+Language Tutorial](http://cwb.sourceforge.net/files/CQP_Tutorial.pdf).
+"""
+
+_CONTACT = {
+    "name": "Språkbanken Text",
+    "url": "https://spraakbanken.gu.se/eng",
+    "email": "sb-info@svenska.gu.se",
+}
+
+_LICENSE = {
+    "name": "MIT License",
+    "identifier": "MIT",
+    "url": "https://opensource.org/licenses/MIT",
+}
 
 
 def _apply_settings_override(config_override: dict[str, Any] | None) -> bool:
@@ -198,9 +278,14 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Korp Backend",
+        summary="API backend for Korp, a corpus query system.",
+        description=_DESCRIPTION,
         version=importlib.metadata.version("korp-backend"),
         lifespan=lifespan,
-        openapi_tags=_TAGS,
+        openapi_tags=_OPENAPI_TAGS,
+        contact=_CONTACT,
+        license_info=_LICENSE,
+        servers=settings.SERVERS,
     )
 
     app.state.db = MySQL()
@@ -234,6 +319,60 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         allow_headers=["*"],
         max_age=settings.HTTP_CACHE_MAXAGE * 3600,
     )
+
+    # Save original OpenAPI method
+    original_openapi = app.openapi
+
+    def customize_openapi_response() -> dict[str, Any]:
+        """Customize the OpenAPI schema response.
+
+        This puts common response properties at the end of response schemas and removes auto-generated titles from
+        parameters.
+
+        Returns:
+            The customized OpenAPI schema.
+        """
+        if app.openapi_schema is not None:
+            return app.openapi_schema
+        schema = original_openapi()
+
+        # Reorder response properties
+        common_keys = ("time", "DEBUG", "ERROR")
+        comps = schema.get("components", {}).get("schemas", {})
+        for s in comps.values():
+            props = s.get("properties")
+            if not props:
+                continue
+            # Keep original order for non-common, then append common keys in the order defined in common_keys
+            new_props = {k: v for k, v in props.items() if k not in common_keys}
+            for k in common_keys:
+                if k in props:
+                    new_props[k] = props[k]
+            s["properties"] = new_props
+
+        # Remove auto-generated titles from parameters
+        for path_item in schema.get("paths", {}).values():
+            for operation in path_item.values():
+                if not isinstance(operation, dict):
+                    continue
+                for parameter in operation.get("parameters", []):
+                    if isinstance(parameter, dict):
+                        parameter.get("schema", {}).pop("title", None)
+
+        # Reorder routes according to _API_DOCUMENTATION_STRUCTURE
+        routes_order = [r for t in _API_DOCUMENTATION_STRUCTURE for r in t.get("routes", [])]
+        new_paths = {}
+        for route in routes_order:
+            new_paths[route] = schema["paths"][route]
+        for route, path_item in schema["paths"].items():
+            if route not in new_paths:
+                new_paths[route] = path_item
+        schema["paths"] = new_paths
+
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = customize_openapi_response
 
     for router in routers:
         app.include_router(router)

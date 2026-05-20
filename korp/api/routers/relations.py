@@ -11,16 +11,17 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal, TypeAlias
 
 from fastapi import APIRouter, Query
-from pydantic import BeforeValidator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic.json_schema import SkipJsonSchema
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from korp import auth, caching, utils
-from korp.api import params
+from korp.api import params, schemas
 from korp.api.routers import info
 from korp.config import settings
 from korp.dependencies import AbortDep, AbortSignal, CtxDep
-from korp.handler import api_handler
+from korp.handler import api_handler, docs_response
 from korp.memcached import CacheError
 
 from . import query, timespan
@@ -76,11 +77,280 @@ class Measures(StrEnum):
     rmi = "rmi"
 
 
+RELATIONS_DESCRIPTION = """Get word-picture dependency relations for a word or lemgram.
+
+The route looks up dependency relations where the requested value occurs as either the head or the dependent. Each
+relation row identifies the head, dependency relation, dependent, part-of-speech tags, optional dependent prefix, and
+source ids that can be passed to `/relations_sentences`.
+
+The statistical measures included in each row are controlled by `measures`. `freq` is the absolute relation frequency,
+`freq_relative` is the relation frequency per million tokens, `mi` is lexicographer's mutual information, and `rmi` is
+relative MI.
+
+By default `/relations` returns overall relation statistics. Set `split=true` to also include time-sliced data in
+`relations_time`; use `/relations_time` when you only want the time-sliced view.
+
+### Example
+
+Get dependency relations for the lemgram `ge..vb.1`:
+
+`/relations?word=ge..vb.1&type=lemgram&corpus=ROMI`
+"""
+
+RELATIONS_TIME_DESCRIPTION = """Get word-picture dependency relations grouped by year or multi-year period.
+
+The response groups rows in `relations_time` by period key. With `period_size=1`, keys are years such as `2018`; with
+larger periods, keys are ranges such as `2016-2018`. Undated material is grouped under an empty key.
+
+Use `period_size` and `period_align` to control how years are grouped. `max_scope=per_period` applies the `max` limit
+inside each period; `max_scope=overall` first selects the top overall relations and then returns time data only for
+those relations.
+"""
+
+RELATIONS_SENTENCES_DESCRIPTION = """Return KWIC sentences containing word-picture relation sources.
+
+Use the `source` ids returned by `/relations` to retrieve the corpus sentences where those relation instances occur.
+The sentence rows use the same KWIC structure as `/query`, with the relation span highlighted as the match.
+"""
+
+RELATIONS_TIME_SENTENCES_DESCRIPTION = """Return KWIC sentences for time-sliced word-picture relation sources.
+
+This is the sentence lookup companion to `/relations_time`. It returns the same KWIC-style structure as
+`/relations_sentences`.
+"""
+
+WordParam: TypeAlias = Annotated[
+    str,
+    Query(
+        description="Word form or lemgram to look up. Use `type=lemgram` when the value is a lemgram.",
+        examples=["ge..vb.1", "är"],
+    ),
+]
+
+RelationTypeParam: TypeAlias = Annotated[
+    RelationType,
+    Query(
+        alias="type",
+        description="Interpret `word` as a plain word form or as a lemgram.",
+    ),
+]
+
+MinFreqParam: TypeAlias = Annotated[
+    int | None,
+    Query(
+        alias="min",
+        ge=0,
+        description="Minimum absolute relation frequency. Omit the parameter to use no frequency cutoff.",
+        examples=[5],
+    ),
+]
+
+MaxResultsParam: TypeAlias = Annotated[
+    int,
+    Query(
+        alias="max",
+        ge=0,
+        description=("Maximum number of rows to return for each relation label and direction. Use `0` for no limit."),
+        examples=[15],
+    ),
+]
+
+RelationsSortParam: TypeAlias = Annotated[
+    RelationsSort,
+    Query(description="Measure used for sorting and for selecting rows when `max` applies."),
+]
+
+RelationsSplitParam: TypeAlias = Annotated[
+    bool,
+    Query(description="Whether `/relations` should include time-sliced results in `relations_time`."),
+]
+
+PeriodSizeParam: TypeAlias = Annotated[
+    int,
+    Query(
+        ge=1,
+        description="Number of years per time bucket. Use `1` for yearly output.",
+        examples=[1, 5],
+    ),
+]
+
+PeriodAlignParam: TypeAlias = Annotated[
+    PeriodAlign,
+    Query(
+        description=(
+            "How multi-year buckets are aligned when the available range is not evenly divisible by `period_size`: "
+            "`newest` anchors buckets to the newest year, while `oldest` anchors them to the oldest year."
+        )
+    ),
+]
+
+YearParam: TypeAlias = Annotated[
+    int | None,
+    Query(
+        ge=0,
+        description="Inclusive year filter for time-sliced relation data.",
+        examples=[2018],
+    ),
+]
+
+OverallParam: TypeAlias = Annotated[
+    bool,
+    Query(description="Whether to include overall relation rows in `relations` in addition to time-sliced data."),
+]
+
+MaxScopeParam: TypeAlias = Annotated[
+    MaxScope,
+    Query(
+        description=(
+            "How `max` is applied when time-sliced data is requested: `per_period` selects top rows independently "
+            "inside each period, while `overall` selects top overall rows first."
+        )
+    ),
+]
+
 MeasuresParam: TypeAlias = Annotated[
     Sequence[Measures],
-    Query(description="Comma-separated list of measures to include in the response."),
+    Query(
+        description=(
+            "Comma-separated list of measures to include on each relation row. The relation identifiers and `source` "
+            "are always included."
+        ),
+        examples=[["freq,mi"], ["freq,freq_relative,mi,rmi"]],
+    ),
     BeforeValidator(utils.split_csv),
 ]
+
+RelationsStartParam: TypeAlias = Annotated[
+    int,
+    Query(description="Zero-based index of the first sentence row to return.", examples=[0]),
+]
+
+RelationsEndParam: TypeAlias = Annotated[
+    int,
+    Query(description="Zero-based index of the last sentence row to return, inclusive.", examples=[9]),
+]
+
+RelationsShowParam: TypeAlias = Annotated[
+    str,
+    Query(
+        description="Comma-separated list of positional attributes to include on each returned token.",
+        examples=["word,lemma,pos"],
+    ),
+]
+
+RelationsShowStructParam: TypeAlias = Annotated[
+    str,
+    Query(
+        description=(
+            "Comma-separated list of structural attributes to include for each KWIC row. `sentence_id` is included by "
+            "default."
+        ),
+        examples=["text_title,text_author"],
+    ),
+]
+
+RelationsDefaultContextParam: TypeAlias = Annotated[
+    str,
+    Query(
+        description="Context size for sentence lookup results.",
+        examples=["1 sentence"],
+    ),
+]
+
+
+class RelationRow(BaseModel):
+    """A word-picture relation row."""
+
+    head: str = Field(..., description="Head word form or lemgram.", examples=["cat"])
+    headpos: str = Field(..., description="Part of speech for the head.", examples=["NN"])
+    rel: str = Field(..., description="Dependency relation label.", examples=["AT"])
+    dep: str = Field(..., description="Dependent word form or lemgram.", examples=["black"])
+    deppos: str = Field(..., description="Part of speech for the dependent.", examples=["JJ"])
+    depextra: str = Field(..., description="Dependent prefix or extra string data.", examples=[""])
+    source: list[str] = Field(
+        ...,
+        description=(
+            "Source ids for retrieving example sentences. Use `/relations_sentences` for overall relation rows and "
+            "`/relations_time_sentences` for time-sliced relation rows."
+        ),
+        examples=[["ROMI:253662"]],
+    )
+    freq: int | SkipJsonSchema[None] = Field(None, description="Absolute relation frequency.", examples=[5])
+    freq_relative: float | SkipJsonSchema[None] = Field(
+        None,
+        description="Relation frequency per one million corpus tokens.",
+        examples=[2.13],
+    )
+    mi: float | SkipJsonSchema[None] = Field(
+        None,
+        description="Lexicographer's mutual information score.",
+        examples=[17.326],
+    )
+    rmi: float | SkipJsonSchema[None] = Field(None, description="Relative MI score.", examples=[0.91])
+
+
+class RelationsRange(BaseModel):
+    """Year range covered by time-sliced relation output."""
+
+    start: int = Field(..., description="First year covered by the returned time range.", examples=[2010])
+    end: int = Field(..., description="Last year covered by the returned time range.", examples=[2020])
+
+
+class RelationsResponse(schemas.CommonResponse):
+    """Response model for `/relations` and `/relations_time` routes."""
+
+    model_config = ConfigDict(extra="allow")
+
+    relations: list[RelationRow] | SkipJsonSchema[None] = Field(
+        None,
+        description="Overall relation rows. Included when overall relation output is requested.",
+    )
+    relations_time: dict[str, list[RelationRow]] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Time-sliced relation rows keyed by year or period. Included when `split=true` on `/relations` or when "
+            "using `/relations_time`."
+        ),
+    )
+    range: RelationsRange | SkipJsonSchema[None] = Field(
+        None,
+        description="Dated year range covered by the time-sliced output.",
+    )
+    period_size: int | SkipJsonSchema[None] = Field(
+        None,
+        description="Number of years represented by each period key in `relations_time`.",
+        examples=[1],
+    )
+    progress_corpora: list[str] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Corpora that will produce incremental progress updates. Included only when `incremental=true`; individual "
+            "progress entries are returned as dynamic keys such as `progress_0`."
+        ),
+        examples=[["ROMI", "SUC3"]],
+    )
+
+
+class RelationsSentencesResponse(schemas.CommonResponse):
+    """Response model for relation sentence lookup routes."""
+
+    model_config = ConfigDict(extra="allow")
+
+    hits: int | SkipJsonSchema[None] = Field(None, description="Total number of matching relation sentences.")
+    corpus_hits: dict[str, int] | SkipJsonSchema[None] = Field(
+        None,
+        description="Number of matching relation sentences per corpus.",
+        examples=[{"ROMI": 3}],
+    )
+    corpus_order: list[str] | SkipJsonSchema[None] = Field(
+        None,
+        description="Order in which corpora are represented in the KWIC rows.",
+        examples=[["ROMI"]],
+    )
+    kwic: list[query.KWICRow] | SkipJsonSchema[None] = Field(
+        None,
+        description="KWIC sentence rows using the same row structure as `/query`.",
+    )
 
 
 def _calc_freq_relative(freq: int, corpus_size: int) -> float:
@@ -1246,9 +1516,12 @@ def _limit_rows_per_bucket(
     return limited
 
 
-SourceParam = Annotated[
+SourceParam: TypeAlias = Annotated[
     list[str],
-    Query(description="Source IDs in the format `CORPUS:ID`, repeated or comma-separated."),
+    Query(
+        description="Source ids in the format `CORPUS:ID`, repeated or comma-separated.",
+        examples=[["ROMI:253662,ROMI:253663"]],
+    ),
     BeforeValidator(utils.split_csv),
 ]
 
@@ -1558,24 +1831,30 @@ async def _relations_impl(
     yield result
 
 
-@router.get("/relations", response_model=None)
+@router.get(
+    "/relations",
+    response_model=None,
+    responses=docs_response(RelationsResponse),
+    summary="Word Picture",
+    description=RELATIONS_DESCRIPTION,
+)
 @router.post("/relations", response_model=None, include_in_schema=False)
 @api_handler
 async def relations(
     ctx: CtxDep,
     corpus: params.CorpusParam,
-    word: str,
-    relation_type: Annotated[RelationType, Query(alias="type")] = RelationType.word,
-    min_freq: Annotated[int | None, Query(alias="min", ge=0)] = None,
-    max_results: Annotated[int, Query(alias="max", ge=0)] = 15,
-    sort: RelationsSort = RelationsSort.mi,
-    split: bool = False,
-    period_size: Annotated[int, Query(ge=1)] = 1,
-    period_align: PeriodAlign = PeriodAlign.newest,
-    start_year: Annotated[int | None, Query(ge=0)] = None,
-    end_year: Annotated[int | None, Query(ge=0)] = None,
-    overall: bool = True,
-    max_scope: MaxScope = MaxScope.per_period,
+    word: WordParam,
+    relation_type: RelationTypeParam = RelationType.word,
+    min_freq: MinFreqParam = None,
+    max_results: MaxResultsParam = 15,
+    sort: RelationsSortParam = RelationsSort.mi,
+    split: RelationsSplitParam = False,
+    period_size: PeriodSizeParam = 1,
+    period_align: PeriodAlignParam = PeriodAlign.newest,
+    start_year: YearParam = None,
+    end_year: YearParam = None,
+    overall: OverallParam = True,
+    max_scope: MaxScopeParam = MaxScope.per_period,
     measures: MeasuresParam = tuple(Measures),
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
@@ -1605,23 +1884,29 @@ async def relations(
         yield item
 
 
-@router.get("/relations_time", response_model=None)
+@router.get(
+    "/relations_time",
+    response_model=None,
+    responses=docs_response(RelationsResponse),
+    summary="Word Picture Over Time",
+    description=RELATIONS_TIME_DESCRIPTION,
+)
 @router.post("/relations_time", response_model=None, include_in_schema=False)
 @api_handler
 async def relations_time(
     ctx: CtxDep,
     corpus: params.CorpusParam,
-    word: str,
-    relation_type: Annotated[RelationType, Query(alias="type")] = RelationType.word,
-    min_freq: Annotated[int | None, Query(alias="min", ge=0)] = None,
-    max_results: Annotated[int, Query(alias="max", ge=0)] = 15,
-    sort: RelationsSort = RelationsSort.mi,
-    period_size: Annotated[int, Query(ge=1)] = 1,
-    period_align: PeriodAlign = PeriodAlign.newest,
-    start_year: Annotated[int | None, Query(ge=0)] = None,
-    end_year: Annotated[int | None, Query(ge=0)] = None,
-    overall: bool = False,
-    max_scope: MaxScope = MaxScope.per_period,
+    word: WordParam,
+    relation_type: RelationTypeParam = RelationType.word,
+    min_freq: MinFreqParam = None,
+    max_results: MaxResultsParam = 15,
+    sort: RelationsSortParam = RelationsSort.mi,
+    period_size: PeriodSizeParam = 1,
+    period_align: PeriodAlignParam = PeriodAlign.newest,
+    start_year: YearParam = None,
+    end_year: YearParam = None,
+    overall: OverallParam = False,
+    max_scope: MaxScopeParam = MaxScope.per_period,
     measures: MeasuresParam = tuple(Measures),
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
@@ -1785,18 +2070,23 @@ async def _relations_sentences_impl(
     return result
 
 
-@router.get("/relations_sentences", response_model=None)
+@router.get(
+    "/relations_sentences",
+    response_model=None,
+    responses=docs_response(RelationsSentencesResponse),
+    summary="Word Picture Sentences",
+    description=RELATIONS_SENTENCES_DESCRIPTION,
+)
 @router.post("/relations_sentences", response_model=None, include_in_schema=False)
 @api_handler
 async def relations_sentences(
     ctx: CtxDep,
     source: SourceParam,
-    start: int = 0,
-    end: int = 9,
-    show: str = "word",
-    show_struct: str = "",
-    default_context: str = "1 sentence",
-    split: bool = False,
+    start: RelationsStartParam = 0,
+    end: RelationsEndParam = 9,
+    show: RelationsShowParam = "word",
+    show_struct: RelationsShowStructParam = "",
+    default_context: RelationsDefaultContextParam = "1 sentence",
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
     """Find sentences containing relations from word picture source IDs.
@@ -1809,7 +2099,6 @@ async def relations_sentences(
         show: Comma-separated list of token fields to include in results.
         show_struct: Comma-separated list of structural attributes to include.
         default_context: Default context size for query results (e.g., "1 sentence").
-        split: Whether the sentences are from time-split tables.
         abort_signal: Optional signal for aborting long-running operations.
 
     Yields:
@@ -1823,22 +2112,28 @@ async def relations_sentences(
         show=show,
         show_struct=show_struct,
         default_context=default_context,
-        yearly=split,
+        yearly=False,
         abort_signal=abort_signal,
     )
 
 
-@router.get("/relations_time_sentences", response_model=None)
+@router.get(
+    "/relations_time_sentences",
+    response_model=None,
+    responses=docs_response(RelationsSentencesResponse),
+    summary="Word Picture Time Sentences",
+    description=RELATIONS_TIME_SENTENCES_DESCRIPTION,
+)
 @router.post("/relations_time_sentences", response_model=None, include_in_schema=False)
 @api_handler
 async def relations_time_sentences(
     ctx: CtxDep,
     source: SourceParam,
-    start: int = 0,
-    end: int = 9,
-    show: str = "word",
-    show_struct: str = "",
-    default_context: str = "1 sentence",
+    start: RelationsStartParam = 0,
+    end: RelationsEndParam = 9,
+    show: RelationsShowParam = "word",
+    show_struct: RelationsShowStructParam = "",
+    default_context: RelationsDefaultContextParam = "1 sentence",
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
     """Find time-split sentences containing relations from word picture source IDs.

@@ -5,13 +5,14 @@ from collections.abc import AsyncIterator
 from copy import deepcopy
 from functools import partial
 from pathlib import Path
-from typing import Annotated, TypeAlias
+from typing import Annotated, Any, TypeAlias
 
 import anyio
 import yaml
-from pydantic import AfterValidator, BeforeValidator
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
 
+from korp.api import schemas
 from korp.config import settings
 from korp.memcached import CacheError, Memcached
 
@@ -24,28 +25,118 @@ from fastapi import APIRouter, Query
 
 from korp import caching, utils
 from korp.dependencies import CtxDep
-from korp.handler import api_handler
+from korp.handler import api_handler, docs_response
 
 router = APIRouter(tags=["Corpus Information"])
+
+CORPUS_CONFIG_DESCRIPTION = """Return the corpus configuration used by the Korp frontend.
+
+Builds a JSON configuration describing corpora, shared attribute definitions, available modes, optional folder/grouping
+metadata, and configuration warnings.
+
+If `corpus` is omitted, the route includes the corpora that belong to the selected `mode`. If `corpus` is provided, only
+the specified corpora are included.
+
+Hidden modes are omitted from the returned `modes` list unless the hidden mode is requested directly.
+
+Any extra fields in the mode or corpus configuration YAML files are included in the output as-is.
+"""
+
+Label: TypeAlias = str | dict[str, str]
 
 
 CorpusParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
-        description="Comma-separated list of corpora to include in configuration. If specified, overrides the mode's "
-        "corpus list."
+        description=(
+            "Comma-separated list of corpora to include in the configuration. If specified, this overrides the "
+            "corpus list from `mode`."
+        ),
+        examples=[["ROMI,SUC3"]],
     ),
     BeforeValidator(utils.split_csv),
     AfterValidator(lambda v: [x.upper() for x in v]),
 ]
 
 
-@router.get("/corpus_config", response_model=dict, name="Corpus Configuration")
-@router.post("/corpus_config", response_model=dict, include_in_schema=False)
+class ModeSummary(BaseModel):
+    """Mode entry returned in the `modes` list."""
+
+    mode: str = Field(..., description="Mode id.", examples=["default"])
+    label: Label = Field(
+        ...,
+        description=(
+            "Human-readable mode label. Either a simple string or a dictionary mapping language codes to labels."
+        ),
+        examples=[{"eng": "Default"}],
+    )
+
+
+class CorpusConfigResponse(schemas.CommonResponse):
+    """Response model for `/corpus_config` route."""
+
+    model_config = ConfigDict(extra="allow")
+
+    label: Label | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Human-readable label for the selected mode, if defined by the mode file. Either a simple string or a "
+            "dictionary mapping language codes to labels."
+        ),
+        examples=[{"eng": "Default", "swe": "Standard"}],
+    )
+    corpora: dict[str, dict[str, Any]] = Field(
+        ...,
+        description=(
+            "Corpus configuration keyed by corpus id. The exact fields are defined by the corpus configuration YAML; "
+            "common fields include `id`, `description`, `pos_attributes`, and `struct_attributes`."
+        ),
+    )
+    attributes: dict[str, dict[str, dict[str, Any]]] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Shared attribute definitions grouped by attribute kind, for example `pos_attributes`, "
+            "`struct_attributes`, and `custom_attributes`."
+        ),
+    )
+    modes: list[ModeSummary] = Field(
+        ...,
+        description="Modes available to the frontend. Hidden modes are included only when requested directly.",
+    )
+    folders: dict[str, Any] | SkipJsonSchema[None] = Field(
+        None,
+        description="Optional folder tree for grouping corpora in the frontend.",
+    )
+    preselected_corpora: list[str] | SkipJsonSchema[None] = Field(
+        None,
+        description="Optional corpora that should be selected by default in the frontend.",
+        examples=[["ROMI", "SUC3"]],
+    )
+    warnings: list[str] | SkipJsonSchema[None] = Field(
+        None,
+        description="Configuration warnings, such as missing attribute presets or missing corpus config files.",
+    )
+
+
+@router.get(
+    "/corpus_config",
+    response_model=None,
+    responses=docs_response(CorpusConfigResponse),
+    name="Corpus Configuration",
+    summary="Corpus Configuration",
+    description=CORPUS_CONFIG_DESCRIPTION,
+)
+@router.post("/corpus_config", response_model=None, include_in_schema=False)
 @api_handler
 async def corpus_config(
     ctx: CtxDep,
-    mode: Annotated[str, Query(description="Mode to get configuration for.")] = "default",
+    mode: Annotated[
+        str,
+        Query(
+            description="Mode to build configuration for. Defaults to `default`.",
+            examples=["default"],
+        ),
+    ] = "default",
     corpus: CorpusParam = None,
 ) -> AsyncIterator[dict]:
     """Get corpus configuration for a given mode or list of corpora. To be used by the Korp frontend.

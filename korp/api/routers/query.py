@@ -18,11 +18,11 @@ import anyio
 import anyio.to_thread
 from anyio import CapacityLimiter
 from fastapi import APIRouter, Query
-from pydantic import BeforeValidator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
 
-from korp import auth, caching, cqp, utils
-from korp.api import params
+from korp import auth, caching, cqp, handler, utils
+from korp.api import params, schemas
 from korp.config import settings
 from korp.cwb import CWB
 from korp.dependencies import AbortDep, AbortSignal, CtxDep
@@ -34,11 +34,61 @@ if TYPE_CHECKING:
 
 router = APIRouter(tags=["Concordance"])
 
+QUERY_DESCRIPTION = """Search for concordance lines in one or more corpora.
+
+The route returns KWIC rows: each row contains the matching tokens, the requested left and right context, token
+annotations requested with `show`, optional structural annotations requested with `show_struct`, and the match position
+inside the returned context.
+
+Results are grouped by corpus and returned in `corpus_order`; sorting is also done within each corpus, not globally
+across all selected corpora. Use `start` and `end` for pagination. The response also includes total hit counts per
+corpus and a `query_data` value that can be sent back with later pages of the same query to avoid recalculating hit
+distribution across corpora.
+
+Repeat the `cqp` parameter to run multiple queries in sequence, where each query is executed on the result of the
+previous one. When multiple `cqp` parameters are used with the default `expand_prequeries=true`, the query also needs
+`default_within` or per-corpus `within` values so intermediate results can be expanded to a structural context.
+
+Context is controlled by `default_context`, or per corpus with `context`, `left_context`, and `right_context`.
+`left_context` and `right_context` let you request asymmetric context around the match.
+
+When `in_order=false`, token order in the CQP query does not matter. Each occurrence of a matched query token is
+highlighted separately, so the row's `match` field becomes a list of match objects. Free-order searches require
+`default_within` or `within`. Not all CQP queries can be run in free order; if the query cannot be executed in free
+order, an error is returned.
+
+When `incremental=true`, progress keys such as `progress_corpora` and `progress_0` may be included before the final
+concordance data in the streamed JSON object.
+
+### Examples
+
+Query `SUC3` and return the first ten hits for `"och" [] [pos="NN"]`, including the `msd` and `lemma` annotations:
+
+`/query?corpus=SUC3&start=0&end=9&default_context=1+sentence&cqp="och"+[]+[pos="NN"]&show=msd,lemma`
+"""
+
+QUERY_SAMPLE_DESCRIPTION = """Do a random-sample concordance search.
+
+This route has the same query language, context, and annotation parameters as `/query`, but it is optimized for finding
+a random example. The selected corpora are shuffled, then searched one at a time until a hit is found. Processing stops
+as soon as one corpus produces a hit, and no full hit count is calculated.
+
+The search is always sorted randomly, so the `sort` parameter from `/query` is not exposed here. Provide `random_seed`
+when you need reproducible sampling for the same corpus data and query parameters.
+
+The response always contains a `kwic` list. Since the route stops at the first sampled hit, it does not return `hits`,
+`corpus_hits`, or `query_data`; those fields would only describe the capped per-corpus sample query, not the full set of
+selected corpora.
+"""
+
 LeftContextParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
-        description="The amount of context to show on the left of each match. This overrides 'default_context' for "
-        "the specified corpora. Format: `corpus1:context1,corpus2:context2,...`"
+        description=(
+            "Left-side context to show for specific corpora, overriding `default_context` and `context`. "
+            "Use `corpus:context`, for example `SUC3:5 words`. Multiple values can be comma-separated."
+        ),
+        examples=[["SUC3:5 words,ROMI:1 sentence"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -46,56 +96,220 @@ LeftContextParam: TypeAlias = Annotated[
 RightContextParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
-        description="The amount of context to show on the right of each match. This overrides 'default_context' for "
-        "the specified corpora. Format: `corpus1:context1,corpus2:context2,...`"
+        description=(
+            "Right-side context to show for specific corpora, overriding `default_context` and `context`. "
+            "Use `corpus:context`, for example `SUC3:5 words`. Multiple values can be comma-separated."
+        ),
+        examples=[["SUC3:5 words,ROMI:1 sentence"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
 
-InOrderParam: TypeAlias = Annotated[bool, Query(description="Whether to perform an in-order search.")]
-
-QueryDataParam: TypeAlias = Annotated[
-    str | None, Query(description="Previously saved query data for caching purposes.")
+InOrderParam: TypeAlias = Annotated[
+    bool,
+    Query(
+        description=(
+            "Whether token order in the CQP query should matter. When set to `false`, Korp performs a free-order "
+            "search, highlights each matched query token separately, and returns `match` as a list. Free-order search "
+            "also requires `default_within` or `within`."
+        )
+    ),
 ]
 
-RandomSeedParam: TypeAlias = Annotated[int | None, Query(description="Random seed for random sorting.")]
+QueryDataParam: TypeAlias = Annotated[
+    str | None,
+    Query(
+        description=(
+            "The `query_data` value returned by an earlier page of the same query. Pass it back unchanged when "
+            "requesting later pages to reuse cached hit-distribution data across corpora."
+        )
+    ),
+]
+
+RandomSeedParam: TypeAlias = Annotated[
+    int | None,
+    Query(
+        description=(
+            "Numerical seed for reproducible random ordering. Used with `sort=random` on `/query`, and for sampling "
+            "order on `/query_sample` when provided."
+        ),
+        examples=[984326587],
+    ),
+]
 
 ShowParam: TypeAlias = Annotated[
     Sequence[str],
-    Query(description="Comma-separated list of positional attributes to show in the results."),
+    Query(
+        description=(
+            "Comma-separated list of positional attributes to include on each returned token. `word` is always "
+            "included, even when it is not listed."
+        ),
+        examples=[["word"], ["msd,lemma"]],
+    ),
     BeforeValidator(utils.split_csv),
 ]
 
 ShowStructParam: TypeAlias = Annotated[
     Sequence[str] | SkipJsonSchema[None],
-    Query(description="Comma-separated list of structural attributes to show in the results."),
+    Query(
+        description=(
+            "Comma-separated list of structural attributes to include for each KWIC row. These are returned in the "
+            "row-level `structs` object when available."
+        ),
+        examples=[["text_author,text_title"]],
+    ),
     BeforeValidator(utils.split_csv),
 ]
 
 SortParam: TypeAlias = Annotated[
     Literal["keyword", "left", "right", "random"] | str | SkipJsonSchema[None],
     Query(
-        description="Sorting method for the results. The sorting is performed *within* each corpus.\n\n"
+        description="Sorting method for returned rows. Sorting is per corpus, never across corpora.\n\n"
         "The available options are:\n\n"
         "- `keyword` - Sort by match\n"
         "- `left` - Sort by left context\n"
         "- `right` - Sort by right context\n"
         "- `random` - Random order\n"
         "- Any positional attribute - Sort by given attribute\n\n"
-        "It is not possible to sort across corpora, or to sort by structural attributes.\n\n"
+        "It is not possible to sort by structural attributes.\n\n"
         "By default, results are returned in corpus order."
     ),
 ]
 
 StartParam: TypeAlias = Annotated[
     int,
-    Query(description="The index of the first row to return (0-based)."),
+    Query(description="Zero-based index of the first matching row to return.", examples=[0]),
 ]
 
 EndParam: TypeAlias = Annotated[
     int,
-    Query(description="The index of the last row to return (0-based, inclusive)."),
+    Query(description="Zero-based index of the last matching row to return, inclusive.", examples=[9]),
 ]
+
+CutParam: TypeAlias = Annotated[
+    int | SkipJsonSchema[None],
+    Query(
+        description=(
+            "Maximum number of hits to consider per corpus before pagination. Use this to cap expensive searches; "
+            "when it is set, `hits` and `corpus_hits` describe the capped result, not necessarily the full corpus hit "
+            "count."
+        ),
+        examples=[25],
+    ),
+]
+
+
+class Match(BaseModel):
+    """Match position in a KWIC row."""
+
+    start: int = Field(..., description="Start token offset of the match within the returned context.", examples=[5])
+    end: int = Field(
+        ...,
+        description="End token offset of the match within the returned context. The end offset is exclusive.",
+        examples=[6],
+    )
+    position: int | SkipJsonSchema[None] = Field(
+        None, description="Global corpus position of the first matched token.", examples=[73648]
+    )
+
+
+class Token(BaseModel):
+    """Token and its requested annotations."""
+
+    model_config = ConfigDict(extra="allow")
+
+    word: str | None = Field(
+        ...,
+        description="The token text. This can be `null` if the corpus stores the token value as undefined.",
+        examples=["cat"],
+    )
+    structs: dict[str, Any] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Structural annotations whose span starts or ends at this token, included when structural attributes are "
+            "requested with `show` rather than `show_struct`."
+        ),
+        examples=[{"open": [{"sentence": {"id": "s1"}}], "close": ["sentence"]}],
+    )
+
+
+class KWICRow(BaseModel):
+    """A single concordance row."""
+
+    corpus: str = Field(..., description="Corpus that produced this KWIC row.", examples=["SUC3"])
+    match: Match | list[Match] = Field(
+        ...,
+        description=(
+            "Match position in the returned context. For free-order searches (`in_order=false`), this is a list with "
+            "one match object per highlighted token."
+        ),
+    )
+    structs: dict[str, str | None] | SkipJsonSchema[None] = Field(
+        None,
+        description="Structural attributes requested with `show_struct`.",
+        examples=[{"text_author": "Söderberg, Hjalmar", "text_title": "Doktor Glas"}],
+    )
+    tokens: list[Token] = Field(
+        ..., description="Tokens in the returned context with requested positional annotations."
+    )
+    aligned: dict[str, list[Token]] | SkipJsonSchema[None] = Field(
+        None,
+        description="Aligned corpus context keyed by aligned corpus id, included for parallel-corpus results.",
+    )
+
+
+class QueryResponse(schemas.CommonResponse):
+    """Response model for `/query` route."""
+
+    model_config = ConfigDict(extra="allow")
+
+    hits: int = Field(..., description="Total number of hits across all selected corpora.", examples=[1422])
+    corpus_hits: dict[str, int] = Field(
+        ..., description="Number of hits per corpus.", examples=[{"ROMI": 1135, "SUC3": 287}]
+    )
+    corpus_order: list[str] = Field(
+        ...,
+        description="Order in which corpora are represented in the grouped result.",
+        examples=[["ROMI", "SUC3"]],
+    )
+    kwic: list[KWICRow] = Field(..., description="Returned KWIC rows for the requested page.")
+    query_data: str = Field(
+        ...,
+        description=(
+            "Compact hit-distribution data for this query. Submit this value as the `query_data` parameter when "
+            "requesting another page with the same corpus, CQP, `within`, `cut`, and `in_order` settings."
+        ),
+        examples=[
+            "eJwdxsERgCAMBMCWwnEY0Ap8OM7YAUlI_yXouK-tUV0NBKw0j8wNQ4tQJ9kXxupZWqX5RLJ0CafICvONYRE4nvs6d3T--QZ9AbXiFqk="
+        ],
+    )
+    progress_corpora: list[str] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Corpora that will produce incremental progress updates. Included only when `incremental=true`; individual "
+            "progress entries are returned as dynamic keys such as `progress_0`."
+        ),
+        examples=[["ROMI", "SUC3"]],
+    )
+
+
+class QuerySampleResponse(schemas.CommonResponse):
+    """Response model for `/query_sample` route."""
+
+    model_config = ConfigDict(extra="allow")
+
+    corpus_order: list[str] | SkipJsonSchema[None] = Field(
+        None, description="Corpus that produced the sample hit, included when a hit is found."
+    )
+    kwic: list[KWICRow] = Field(..., description="Sample KWIC row if a hit is found, otherwise an empty list.")
+    progress_corpora: list[str] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Corpora that will produce incremental progress updates. Included only when `incremental=true`; individual "
+            "progress entries are returned as dynamic keys such as `progress_0`."
+        ),
+        examples=[["ROMI", "SUC3"]],
+    )
 
 
 @dataclass
@@ -518,8 +732,14 @@ async def perform_query(
     yield result
 
 
-@router.get("/query_sample", response_model=dict)
-@router.post("/query_sample", response_model=dict, include_in_schema=False)
+@router.get(
+    "/query_sample",
+    response_model=None,
+    responses=handler.docs_response(QuerySampleResponse),
+    summary="Sample Concordance",
+    description=QUERY_SAMPLE_DESCRIPTION,
+)
+@router.post("/query_sample", response_model=None, include_in_schema=False)
 @api_handler
 async def query_sample(
     ctx: CtxDep,
@@ -584,7 +804,14 @@ async def query_sample(
 
     yield {"kwic": []}
 
-@router.get("/query", response_model=None)
+
+@router.get(
+    "/query",
+    response_model=None,
+    responses=handler.docs_response(QueryResponse),
+    summary="Concordance",
+    description=QUERY_DESCRIPTION,
+)
 @router.post("/query", response_model=None, include_in_schema=False)
 @api_handler
 async def query(
@@ -595,7 +822,7 @@ async def query(
     end: EndParam = 9,
     show: ShowParam = ("word",),
     show_struct: ShowStructParam = None,
-    cut: int | None = None,
+    cut: CutParam = None,
     sort: SortParam = None,
     random_seed: RandomSeedParam = None,
     in_order: InOrderParam = True,

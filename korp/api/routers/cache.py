@@ -4,17 +4,71 @@ import time
 from pathlib import Path
 
 from fastapi import APIRouter
+from pydantic import Field
+from pydantic.json_schema import SkipJsonSchema
 
 from korp import caching
+from korp.api import schemas
 from korp.config import settings
 from korp.dependencies import CtxDep
-from korp.handler import api_handler
+from korp.handler import api_handler, docs_response
 
 router = APIRouter(tags=["Administration"])
 
+CACHE_DESCRIPTION = """Refresh Korp's cache metadata and remove stale cache files.
 
-@router.get("/cache", response_model=dict)
-@router.post("/cache", response_model=dict, include_in_schema=False)
+This administration route compares the current corpus registry and corpus configuration files with the versions stored
+in Memcached. When a corpus or configuration has changed, the corresponding cache version is incremented so later API
+requests stop using stale cached data. The route also removes expired query-data files from the cache directory.
+
+If caching is disabled, the response contains only the common response fields. During first-time cache setup,
+`initial_setup` is returned and no invalidation counters are included.
+"""
+
+
+class CacheResponse(schemas.CommonResponse):
+    """Response model for `/cache` route."""
+
+    initial_setup: bool | SkipJsonSchema[None] = Field(
+        None,
+        description="Whether cache metadata was initialized for the first time.",
+        examples=[True],
+    )
+    multi_invalidated: bool | SkipJsonSchema[None] = Field(
+        None,
+        description="Whether combined query caches were invalidated because corpus data changed.",
+        examples=[False],
+    )
+    multi_config_invalidated: bool | SkipJsonSchema[None] = Field(
+        None,
+        description="Whether combined configuration caches were invalidated because corpus configuration changed.",
+        examples=[True],
+    )
+    corpora_invalidated: int | SkipJsonSchema[None] = Field(
+        None,
+        description="Number of corpora whose data cache version was incremented.",
+        examples=[1],
+    )
+    configs_invalidated: int | SkipJsonSchema[None] = Field(
+        None,
+        description="Number of corpus configurations whose cache version was incremented.",
+        examples=[2],
+    )
+    files_removed: int | SkipJsonSchema[None] = Field(
+        None,
+        description="Number of stale cache files removed from the cache directory.",
+        examples=[14],
+    )
+
+
+@router.get(
+    "/cache",
+    response_model=None,
+    responses=docs_response(CacheResponse),
+    summary="Refresh Cache",
+    description=CACHE_DESCRIPTION,
+)
+@router.post("/cache", response_model=None, include_in_schema=False)
 @api_handler
 async def cache_handler(ctx: CtxDep) -> dict:
     """Check for updated corpora and invalidate caches where needed, and remove old cache files.

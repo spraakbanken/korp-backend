@@ -9,24 +9,93 @@ from dataclasses import dataclass
 from logging import getLogger
 from operator import itemgetter
 from time import perf_counter
-from typing import Annotated, Any
+from typing import Annotated, Any, TypeAlias
 
 import anyio.to_process
 import anyio.to_thread
 from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Query
+from pydantic import ConfigDict, Field
+from pydantic.json_schema import SkipJsonSchema
 from sqlalchemy import text
 
 from korp import caching, utils
-from korp.api import params
+from korp.api import params, schemas
 from korp.api.params import GranularityValues
 from korp.config import settings
 from korp.dependencies import CtxDep
-from korp.handler import api_handler
+from korp.handler import api_handler, docs_response
 from korp.memcached import CacheError
 
 router = APIRouter(tags=["Statistics"])
 logger = getLogger(__name__)
+
+TIMESPAN_DESCRIPTION = f"""Show the distribution of corpus tokens over time.
+
+The route returns token counts grouped by time period. Use `granularity` to choose the period size: year, month, day,
+hour, minute, or second. The response can include per-corpus series, one combined series for all selected corpora, or
+both.
+
+Each key in a time series marks the start of a period. The value applies from that key until the next key. For example,
+with yearly granularity, a series containing `2010: 100`, `2012: 50`, and `2015: 0` means 100 tokens during 2010-2011,
+50 tokens during 2012-2014, and zero tokens from 2015 until the next key.
+
+Use `date_from` and `date_to` together to limit the date range.
+
+### Time Matching Strategies
+
+{params.TIME_STRATEGY_DESCRIPTION}
+
+### Example
+
+Show yearly token distribution for a corpus:
+
+`/timespan?corpus=VIVILL&granularity=y`
+"""
+
+DateFromParam: TypeAlias = Annotated[
+    str | None,
+    Query(
+        pattern=r"^(\d{8}(\d{6})?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$",
+        description=(
+            "Start date/time for filtering, inclusive. Must be used together with `date_to`. Accepted formats: "
+            "YYYYMMDDHHMMSS, YYYYMMDD, YYYY-MM-DD HH:MM:SS, or YYYY-MM-DD."
+        ),
+        examples=["20200101000000", "2020-01-01"],
+    ),
+]
+
+DateToParam: TypeAlias = Annotated[
+    str | None,
+    Query(
+        pattern=r"^(\d{8}(\d{6})?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$",
+        description=(
+            "End date/time for filtering, inclusive. Must be used together with `date_from`. Accepted formats: "
+            "YYYYMMDDHHMMSS, YYYYMMDD, YYYY-MM-DD HH:MM:SS, or YYYY-MM-DD."
+        ),
+        examples=["20201231235959", "2020-12-31"],
+    ),
+]
+
+
+class TimespanResponse(schemas.CommonResponse):
+    """Response model for `/timespan` route."""
+
+    model_config = ConfigDict(extra="allow")
+
+    corpora: dict[str, dict[str, int]] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Token counts per time period, keyed first by corpus id and then by period start. Omitted when "
+            "`per_corpus=false`."
+        ),
+        examples=[{"ROMI": {"2017": 15366, "2018": 7437}}],
+    )
+    combined: dict[str, int] | SkipJsonSchema[None] = Field(
+        None,
+        description="Combined token counts per time period across all selected corpora. Omitted when `combined=false`.",
+        examples=[{"2017": 15366, "2018": 7437}],
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +162,13 @@ def _adjust_date(date_str: str, granularity: GranularityValues, *, subtract: boo
     return int(d.strftime(g_config.date_fmt))
 
 
-@router.get("/timespan", response_model=None)
+@router.get(
+    "/timespan",
+    response_model=None,
+    responses=docs_response(TimespanResponse),
+    summary="Distribution Over Time",
+    description=TIMESPAN_DESCRIPTION,
+)
 @router.post("/timespan", response_model=None, include_in_schema=False)
 @api_handler
 async def timespan(
@@ -103,22 +178,8 @@ async def timespan(
     combined: params.CombinedParam = True,
     per_corpus: params.PerCorpusParam = True,
     strategy: params.StrategyParam = params.StrategyValues.some_overlaps,
-    date_from: Annotated[
-        str | None,
-        Query(
-            alias="from",
-            pattern=r"^(\d{8}\d{6}?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$",
-            description="Start date for filtering (inclusive). Format: YYYYMMDD[HHMMSS] or YYYY-MM-DD[ HH:MM:SS].",
-        ),
-    ] = None,
-    date_to: Annotated[
-        str | None,
-        Query(
-            alias="to",
-            pattern=r"^(\d{8}\d{6}?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$",
-            description="End date for filtering (inclusive). Format: YYYYMMDD[HHMMSS] or YYYY-MM-DD[ HH:MM:SS].",
-        ),
-    ] = None,
+    date_from: DateFromParam = None,
+    date_to: DateToParam = None,
 ) -> AsyncIterator[dict]:
     """Calculate timespan information for corpora.
 

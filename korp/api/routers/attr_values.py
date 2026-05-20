@@ -5,11 +5,12 @@ from collections import defaultdict
 from collections.abc import AsyncIterator
 from copy import deepcopy
 from functools import partial
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any, TypeAlias
 
-from pydantic import BeforeValidator
+from pydantic import BeforeValidator, ConfigDict, Field
+from pydantic.json_schema import SkipJsonSchema
 
-from korp.api import params
+from korp.api import params, schemas
 
 if TYPE_CHECKING:
     import anyio.abc
@@ -17,7 +18,7 @@ import anyio
 from anyio import CapacityLimiter
 from fastapi import APIRouter, Query
 
-from korp import auth, caching, utils
+from korp import auth, caching, handler, utils
 from korp.config import settings
 from korp.dependencies import CtxDep
 from korp.handler import api_handler
@@ -27,27 +28,119 @@ from . import count as count_route
 
 router = APIRouter(tags=["Corpus Information"])
 
+ATTR_VALUES_DESCRIPTION = """List the values available for one or more corpus attributes.
 
-@router.get("/attr_values", response_model=dict)
-@router.post("/attr_values", response_model=dict, include_in_schema=False)
+The route can be used for positional attributes such as `word`, `lemma`, or `pos`, and for structural attributes such
+as `text_author` or `text_title`. It is similar to `/count_all`, but the result is organized as a lookup of attribute
+values instead of frequency rows, and it supports hierarchical attribute expressions.
+
+Use `attr` to request one or more attributes. A value can be a single attribute, such as `text_author`, or a hierarchy
+using `>`, such as `text_author>text_title`. Hierarchical expressions produce nested objects, which are useful for
+building dependent filters: for example, authors as top-level keys and their titles as child values.
+
+By default the result contains value lists. When `count=true`, leaf values are token counts instead. Use `split` for
+set-valued attributes whose values should be split on `|` before being included in the result.
+
+Use `combined` and `per_corpus` to choose whether to include merged values across all selected corpora, per-corpus
+values, or both. When `incremental=true`, progress keys such as `progress_corpora` and `progress_0` may be included
+before the final result in the streamed JSON object.
+
+### Example
+
+Get all authors and their titles with token counts:
+
+`/attr_values?corpus=ROMI&attr=text_author>text_title&count=true`
+"""
+
+AttrParam: TypeAlias = Annotated[
+    list[str],
+    Query(
+        description=(
+            "Comma-separated list of attributes or attribute hierarchies. Use `>` to request nested values, for "
+            "example `text_author>text_title`."
+        ),
+        examples=[["text_author"], ["text_author>text_title"], ["pos,lemma"]],
+    ),
+    BeforeValidator(utils.split_csv),
+]
+
+AttrValuesSplitParam: TypeAlias = Annotated[
+    list[str] | SkipJsonSchema[None],
+    Query(
+        description="Comma-separated list of set-valued attributes to split on `|` before collecting values.",
+        examples=[["text_topic"], ["sense,lemma"]],
+    ),
+    BeforeValidator(utils.split_csv),
+]
+
+IncludeCountParam: TypeAlias = Annotated[
+    bool,
+    Query(
+        description=(
+            "Whether to return token counts for each leaf value. When disabled, leaf values are returned as lists; "
+            "when enabled, leaf values are returned as objects mapping value to count."
+        )
+    ),
+]
+
+AttributeValuesData = dict[str, list[str] | dict[str, Any]]
+
+
+class AttrValuesResponse(schemas.CommonResponse):
+    """Response model for `/attr_values` route."""
+
+    model_config = ConfigDict(extra="allow")
+
+    corpora: dict[str, AttributeValuesData] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Per-corpus attribute values, keyed by corpus id. Omitted when `per_corpus=false`. Within each corpus, "
+            "keys are the requested `attr` expressions."
+        ),
+        examples=[{"ROMI": {"text_author": ["Söderberg, Hjalmar"], "pos": {"NN": 1250, "VB": 341}}}],
+    )
+    combined: AttributeValuesData | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Attribute values merged across all selected corpora. Omitted when `combined=false`. Keys are the "
+            "requested `attr` expressions."
+        ),
+        examples=[{"text_author>text_title": {"Söderberg, Hjalmar": {"Doktor Glas": 12345}}}],
+    )
+    progress_corpora: list[str] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Corpora that will produce incremental progress updates. Included only when `incremental=true`; individual "
+            "progress entries are returned as dynamic keys such as `progress_0`."
+        ),
+        examples=[["ROMI", "SUC3"]],
+    )
+
+
+@router.get(
+    "/attr_values",
+    response_model=None,
+    responses=handler.docs_response(AttrValuesResponse),
+    summary="Attribute Values",
+    description=ATTR_VALUES_DESCRIPTION,
+)
+@router.post("/attr_values", response_model=None, include_in_schema=False)
 @api_handler
 async def attr_values(
     ctx: CtxDep,
     corpus: params.CorpusParam,
-    attr: Annotated[
-        list[str], Query(description="Comma-separated list of structural attributes."), BeforeValidator(utils.split_csv)
-    ],
-    count: Annotated[bool, Query(description="Whether to include counts for each attribute value.")] = False,
+    attr: AttrParam,
+    count: IncludeCountParam = False,
     per_corpus: params.PerCorpusParam = True,
     combined: params.CombinedParam = True,
-    split: params.SplitParam = None,
+    split: AttrValuesSplitParam = None,
 ) -> AsyncIterator[dict]:
-    """Get all available values for one or more structural attributes.
+    """Get all available values for one or more corpus attributes.
 
     Args:
         ctx: Request context.
         corpus: Comma-separated list of corpora.
-        attr: Comma-separated list of structural attributes.
+        attr: Comma-separated list of attributes or attribute hierarchies.
         count: Whether to include counts for each attribute value.
         per_corpus: Whether to include per-corpus results.
         combined: Whether to include combined results across corpora.

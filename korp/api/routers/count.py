@@ -14,11 +14,11 @@ import anyio
 from anyio import CapacityLimiter
 from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Query
-from pydantic import BeforeValidator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
 
-from korp import auth, caching, cqp, utils
-from korp.api import params
+from korp import auth, caching, cqp, handler, utils
+from korp.api import params, schemas
 from korp.config import settings
 from korp.dependencies import AbortDep, AbortSignal, CtxDep
 from korp.handler import api_handler
@@ -38,60 +38,266 @@ TIMETO = "text_timeto"
 
 router = APIRouter(tags=["Statistics"])
 
+COUNT_DESCRIPTION = """Calculate frequencies for one or more attributes in the result of a CQP query.
+
+The response contains absolute counts and relative frequencies. Relative frequencies are expressed as hits per one
+million tokens.
+
+Use `group_by` for positional attributes and `group_by_struct` for structural attributes. If neither is supplied, the
+route groups by `word`. To count the value of a specific token in a multi-token query, mark that token as the CQP target
+with `@`, for example `[pos = "JJ"] @[pos = "NN"]`.
+
+Repeat the `cqp` parameter to run prequeries in sequence. Repeat the `subcqp` parameter to add subqueries over the final
+main-query result. When subqueries are used, `combined` and each entry in `corpora` become arrays: the first item is the
+main query result and the following items are the subquery results, each with a `cqp` field.
+
+When `incremental=true`, progress keys such as `progress_corpora` and `progress_0` may be included before the final
+statistics in the streamed JSON object.
+"""
+
+COUNT_ALL_DESCRIPTION = """Calculate frequencies for all tokens in the selected corpora, grouped by the requested
+attributes.
+
+This is the optimized variant to use when no CQP query is needed, for example when listing all part-of-speech values or
+all word forms in a corpus. It uses the same grouping and formatting parameters as `/count`, except it does not accept
+`cqp` or `subcqp`.
+
+If neither `group_by` nor `group_by_struct` is supplied, the route groups by `word`.
+"""
+
+COUNT_TIME_DESCRIPTION = f"""Calculate the frequency of a query over time.
+
+The response contains absolute counts and relative frequencies per time period. Relative frequencies are expressed as
+hits per one million tokens for the corresponding time period.
+
+Each data point covers the period from that key until the next key. For example, with yearly granularity, values for
+`2010`, `2012`, `2013`, and `2016` describe 2010-2011, 2012, 2013-2015, and 2016 onward respectively. A value of `null`
+means there is no corpus data for that period; `0` means data exists but the query had no hits.
+
+### Time Matching Strategies
+
+{params.TIME_STRATEGY_DESCRIPTION}
+
+Repeat the `subcqp` parameter to add subqueries over the final main-query result. When subqueries are used, `combined`
+and each entry in `corpora` become arrays: the first item is the main query result and the following items are the
+subquery results, each with a `cqp` field.
+"""
+
 GroupByParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
-    Query(description="Attributes to group results by."),
+    Query(
+        description=(
+            "Comma-separated list of positional attributes to group results by. Defaults to `word` if neither "
+            "`group_by` nor `group_by_struct` is supplied."
+        ),
+        examples=[["word"], ["pos,lemma"]],
+    ),
     BeforeValidator(utils.split_csv),
 ]
 
 GroupByStructParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
-    Query(description="Structural attributes to group results by."),
+    Query(
+        description=(
+            "Comma-separated list of structural attributes to group results by. The value at the first token of the "
+            "match is used."
+        ),
+        examples=[["text_author"], ["text_author,text_title"]],
+    ),
     BeforeValidator(utils.split_csv),
 ]
 
 StartParam: TypeAlias = Annotated[
     int,
-    Query(description="Start index for result slicing (0-based).", ge=0),
+    Query(description="Start index for result slicing after sorting by absolute frequency.", ge=0, examples=[0]),
 ]
 
 EndParam: TypeAlias = Annotated[
     int,
-    Query(description="End index for result slicing (0-based, inclusive). Use -1 for no limit.", ge=-1),
+    Query(description="End index for result slicing (0-based, inclusive). Use -1 for no limit.", ge=-1, examples=[25]),
 ]
 
 IgnoreCaseParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
-    Query(description="Comma-separated list of attributes for which case should be ignored."),
+    Query(
+        description="Comma-separated list of attributes whose values should be lowercased before counting.",
+        examples=[["word"], ["word,lemma"]],
+    ),
     BeforeValidator(utils.split_csv),
 ]
 
 SubCQPParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
-    Query(description="CQP subqueries to perform after the main CQP query."),
+    Query(
+        description=(
+            "CQP subqueries to perform over the final main-query result. Repeat the `subcqp` parameter to provide "
+            "multiple subqueries."
+        ),
+        examples=[['[lex contains "tsunami..nn.1"]', '[lex contains "flodvåg..nn.1"]']],
+    ),
 ]
 
 RelativeToStructParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
-    Query(description="Structural attributes to which relative frequencies are calculated."),
+    Query(
+        description=(
+            "Structural attributes to use as the denominator for relative frequencies instead of total corpus size. "
+            "Every value must also be included in `group_by_struct`."
+        ),
+        examples=[["text_author"]],
+    ),
     BeforeValidator(utils.split_csv),
 ]
 
 StripPointerParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
-    Query(description="Attributes for which multi-word pointers should be stripped."),
+    Query(
+        description="Comma-separated list of attributes whose multi-word pointer suffixes should be stripped.",
+        examples=[["sense"]],
+    ),
     BeforeValidator(utils.split_csv),
 ]
 
 TopParam: TypeAlias = Annotated[
-    str | SkipJsonSchema[None],
+    list[str] | SkipJsonSchema[None],
     Query(
         description=(
-            "Attributes for which only the top N values should be considered. "
-            "Format: `attr1:5,attr2:10` or `attr1,attr2` (defaults to 1)."
-        )
+            "Comma-separated list of attributes for which only the first N values in a set should be counted. "
+            "Use `attr:n`; if `:n` is omitted, N defaults to 1. Usually used together with `split`."
+        ),
+        examples=[["sense:3"], ["sense:3,lemma"]],
     ),
+    BeforeValidator(utils.split_csv),
 ]
+
+
+class FrequencySums(BaseModel):
+    """Frequency sums for a statistics result."""
+
+    absolute: int = Field(..., description="Absolute frequency sum.", examples=[598])
+    relative: float = Field(..., description="Relative frequency sum.", examples=[13.765536])
+
+
+class CountRow(BaseModel):
+    """A grouped count row."""
+
+    value: dict[str, str | list[str]] = Field(
+        ...,
+        description=(
+            "Grouped attribute values. Positional attributes are arrays with one value per token in the match; "
+            "structural attributes normally contain one value."
+        ),
+        examples=[{"word": ["run"], "pos": ["VB"]}, {"text_author": ["Söderberg, Hjalmar"]}],
+    )
+    absolute: int = Field(..., description="Absolute frequency.", examples=[598])
+    relative: float = Field(..., description="Relative frequency per one million tokens.", examples=[13.765536])
+
+
+class CountStatistics(BaseModel):
+    """Statistics for one query or subquery."""
+
+    rows: list[CountRow] = Field(..., description="Grouped frequency rows.")
+    sums: FrequencySums = Field(..., description="Frequency sums over all returned rows.")
+    cqp: str | SkipJsonSchema[None] = Field(
+        None, description="Subquery CQP string. Included only for `subcqp` results."
+    )
+
+
+class CountResponse(schemas.CommonResponse):
+    """Response model for `/count` route."""
+
+    model_config = ConfigDict(extra="allow")
+
+    corpora: dict[str, CountStatistics | list[CountStatistics]] = Field(
+        ...,
+        description=(
+            "Statistics per corpus. Values are arrays when `subcqp` is used; otherwise each value is one statistics "
+            "object."
+        ),
+    )
+    combined: CountStatistics | list[CountStatistics] = Field(
+        ...,
+        description=(
+            "Combined statistics for all corpora. This is an array when `subcqp` is used; otherwise it is one "
+            "statistics object."
+        ),
+    )
+    count: int = Field(
+        ..., description="Total number of distinct grouped values before response slicing.", examples=[241]
+    )
+    progress_corpora: list[str] | SkipJsonSchema[None] = Field(
+        None,
+        description="Corpora that will produce incremental progress updates, included only when `incremental=true`.",
+        examples=[["ROMI", "SUC3"]],
+    )
+
+
+class CountAllResponse(schemas.CommonResponse):
+    """Response model for `/count_all` route."""
+
+    model_config = ConfigDict(extra="allow")
+
+    corpora: dict[str, CountStatistics] = Field(..., description="Statistics per corpus.")
+    combined: CountStatistics = Field(..., description="Combined statistics for all corpora.")
+    count: int = Field(
+        ..., description="Total number of distinct grouped values before response slicing.", examples=[241]
+    )
+    progress_corpora: list[str] | SkipJsonSchema[None] = Field(
+        None,
+        description="Corpora that will produce incremental progress updates, included only when `incremental=true`.",
+        examples=[["ROMI", "SUC3"]],
+    )
+
+
+class TimeStatistics(BaseModel):
+    """Time-series statistics for one query or subquery."""
+
+    absolute: dict[str, int | None] | int = Field(
+        ...,
+        description=(
+            "Absolute frequencies per time period. A value of `null` means there is no corpus data for that period; "
+            "`0` means data exists but the query had no hits."
+        ),
+        examples=[{"2017": 354, "2018": 115, "2019": None}],
+    )
+    relative: dict[str, float | None] | float = Field(
+        ...,
+        description=(
+            "Relative frequencies per time period. A value of `null` means there is no corpus data for that period; "
+            "`0` means data exists but the query had no hits."
+        ),
+        examples=[{"2017": 65.265, "2018": 87.521, "2019": None}],
+    )
+    sums: FrequencySums = Field(..., description="Frequency sums over the time series.")
+    cqp: str | SkipJsonSchema[None] = Field(
+        None, description="Subquery CQP string. Included only for `subcqp` results."
+    )
+
+
+class CountTimeResponse(schemas.CommonResponse):
+    """Response model for `/count_time` route."""
+
+    model_config = ConfigDict(extra="allow")
+
+    corpora: dict[str, TimeStatistics | list[TimeStatistics]] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Time-series statistics per corpus. Omitted when `per_corpus=false`. Values are arrays when `subcqp` is "
+            "used; otherwise each value is one statistics object."
+        ),
+    )
+    combined: TimeStatistics | list[TimeStatistics] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Combined time-series statistics for all corpora. Omitted when `combined=false`. This is an array when "
+            "`subcqp` is used; otherwise it is one statistics object."
+        ),
+    )
+    progress_corpora: list[str] | SkipJsonSchema[None] = Field(
+        None,
+        description="Corpora that will produce incremental progress updates, included only when `incremental=true`.",
+        examples=[["ROMI", "SUC3"]],
+    )
 
 
 @dataclass
@@ -129,7 +335,7 @@ async def parse_parameters(
     relative_to_struct: list[str] | None,
     split: list[str] | None,
     strip_pointer: list[str] | None,
-    top: str | None,
+    top: list[str] | None,
     simple: bool,
     expand_prequeries: bool,
     start: int,
@@ -632,7 +838,13 @@ async def perform_count(
     yield result
 
 
-@router.get("/count", response_model=None)
+@router.get(
+    "/count",
+    response_model=None,
+    responses=handler.docs_response(CountResponse),
+    summary="Statistics",
+    description=COUNT_DESCRIPTION,
+)
 @router.post("/count", response_model=None, include_in_schema=False)
 @api_handler
 async def count(
@@ -685,7 +897,13 @@ async def count(
         yield item
 
 
-@router.get("/count_all", response_model=None)
+@router.get(
+    "/count_all",
+    response_model=None,
+    responses=handler.docs_response(CountAllResponse),
+    summary="Complete Statistics",
+    description=COUNT_ALL_DESCRIPTION,
+)
 @router.post("/count_all", response_model=None, include_in_schema=False)
 @api_handler
 async def count_all(
@@ -738,15 +956,35 @@ async def count_all(
 
 DateFromParam: TypeAlias = Annotated[
     str | SkipJsonSchema[None],
-    Query(description="Start date/time in YYYYMMDDhhmmss format.", pattern=r"^\d{14}$"),
+    Query(
+        description=(
+            "Start date/time for filtering, inclusive. Must be used together with `date_to`. Accepted formats: "
+            "YYYYMMDDHHMMSS, YYYYMMDD, YYYY-MM-DD HH:MM:SS, or YYYY-MM-DD."
+        ),
+        pattern=r"^(\d{8}(\d{6})?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$",
+        examples=["20200101000000", "2020-01-01"],
+    ),
 ]
 DateToParam: TypeAlias = Annotated[
     str | SkipJsonSchema[None],
-    Query(description="End date/time in YYYYMMDDhhmmss format.", pattern=r"^\d{14}$"),
+    Query(
+        description=(
+            "End date/time for filtering, inclusive. Must be used together with `date_from`. Accepted formats: "
+            "YYYYMMDDHHMMSS, YYYYMMDD, YYYY-MM-DD HH:MM:SS, or YYYY-MM-DD."
+        ),
+        pattern=r"^(\d{8}(\d{6})?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$",
+        examples=["20201231235959", "2020-12-31"],
+    ),
 ]
 
 
-@router.get("/count_time", response_model=None)
+@router.get(
+    "/count_time",
+    response_model=None,
+    responses=handler.docs_response(CountTimeResponse),
+    summary="Statistics Over Time",
+    description=COUNT_TIME_DESCRIPTION,
+)
 @router.post("/count_time", response_model=None, include_in_schema=False)
 @api_handler
 async def count_time(
@@ -1160,7 +1398,7 @@ def _save_count_cache(
     nr_hits: int,
     corpus_size: int,
     cache_max: int,
-    mc: MemcachedSyncClient
+    mc: MemcachedSyncClient,
 ) -> tuple[str, ...]:
     """Save count query results to cache.
 

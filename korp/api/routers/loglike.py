@@ -5,41 +5,135 @@ import dataclasses
 import math
 from collections import defaultdict
 from collections.abc import AsyncGenerator
-from typing import Annotated
+from typing import Annotated, TypeAlias
 
 from fastapi import APIRouter, Query
-from pydantic import AfterValidator, BeforeValidator
+from pydantic import AfterValidator, BeforeValidator, ConfigDict, Field
 
 from korp import auth, utils
-from korp.api import params
+from korp.api import params, schemas
 from korp.dependencies import AbortDep, CtxDep
-from korp.handler import api_handler
+from korp.handler import api_handler, docs_response
 
 from . import count
 
 router = APIRouter(tags=["Statistics"])
 
+LOGLIKE_DESCRIPTION = """Compare two searches with log-likelihood.
 
-@router.get("/loglike", response_model=dict)
-@router.post("/loglike", response_model=dict, include_in_schema=False)
+The route first counts the requested attribute values in two sets, then calculates a log-likelihood score for each
+value. By default, values are grouped by `word`; use `group_by` and `group_by_struct` to compare other positional or
+structural attributes.
+
+The sign of each score shows which set the value is relatively more prominent in:
+
+- Negative values are more prominent in set 1.
+- Positive values are more prominent in set 2.
+- Larger absolute values indicate a stronger difference between the sets.
+
+`set1` and `set2` contain the absolute frequencies used for the returned values. `average` is the average absolute
+log-likelihood score before the result list is split by sign and limited.
+
+Use `max` to limit how many values to return from each side of the comparison. For example, `max=10` can return up to
+ten set-1-prominent values and ten set-2-prominent values. Use `max=0` for no limit.
+
+Most grouping and value-normalization parameters are shared with `/count`, including `group_by`, `group_by_struct`,
+`ignore_case`, `split`, `strip_pointer`, `top`, `within`, and `default_within`.
+
+### Example
+
+Compare nouns in two corpora and return up to ten values from each side:
+
+`/loglike?set1_cqp=[pos="NN"]&set2_cqp=[pos="NN"]&group_by=word&max=10&set1_corpus=ROMI&set2_corpus=GP2012`
+"""
+
+Set1CQPParam: TypeAlias = Annotated[
+    str,
+    Query(
+        description="CQP query for set 1.",
+        examples=['[pos="NN"]'],
+    ),
+]
+
+Set2CQPParam: TypeAlias = Annotated[
+    str,
+    Query(
+        description="CQP query for set 2.",
+        examples=['[pos="NN"]'],
+    ),
+]
+
+Set1CorpusParam: TypeAlias = Annotated[
+    list[str],
+    Query(description="Comma-separated list of corpora for set 1.", examples=[["ROMI,SUC3"]]),
+    BeforeValidator(utils.split_csv),
+    AfterValidator(lambda v: [x.upper() for x in v]),
+]
+
+Set2CorpusParam: TypeAlias = Annotated[
+    list[str],
+    Query(description="Comma-separated list of corpora for set 2.", examples=[["GP2012"]]),
+    BeforeValidator(utils.split_csv),
+    AfterValidator(lambda v: [x.upper() for x in v]),
+]
+
+MaxResultsParam: TypeAlias = Annotated[
+    int,
+    Query(
+        description=("Maximum number of results to return from each side of the comparison. Use 0 for no limit."),
+        alias="max",
+        ge=0,
+        examples=[15],
+    ),
+]
+
+
+class LoglikeResponse(schemas.CommonResponse):
+    """Response model for `/loglike` route."""
+
+    model_config = ConfigDict(extra="allow")
+
+    average: float = Field(
+        ...,
+        description="Average absolute log-likelihood score across all compared values before result limiting.",
+        examples=[12.43],
+    )
+    loglike: dict[str, float] = Field(
+        ...,
+        description=(
+            "Log-likelihood scores keyed by grouped value. Negative values are more prominent in set 1; positive "
+            "values are more prominent in set 2."
+        ),
+        examples=[{"cat": -5.43, "dog": 4.12}],
+    )
+    set1: dict[str, int] = Field(
+        ...,
+        description="Absolute frequencies in set 1 for the returned values.",
+        examples=[{"cat": 447, "dog": 808}],
+    )
+    set2: dict[str, int] = Field(
+        ...,
+        description="Absolute frequencies in set 2 for the returned values.",
+        examples=[{"cat": 254, "dog": 614}],
+    )
+
+
+@router.get(
+    "/loglike",
+    response_model=None,
+    responses=docs_response(LoglikeResponse),
+    summary="Log-Likelihood Comparison",
+    description=LOGLIKE_DESCRIPTION,
+)
+@router.post("/loglike", response_model=None, include_in_schema=False)
 @api_handler
 async def loglike(
     ctx: CtxDep,
-    set1_cqp: Annotated[str, Query(description="CQP query for set 1")],
-    set2_cqp: Annotated[str, Query(description="CQP query for set 2")],
-    set1_corpus: Annotated[
-        list[str],
-        Query(description="Comma-separated list of corpora for set 1"),
-        BeforeValidator(utils.split_csv),
-        AfterValidator(lambda v: [x.upper() for x in v]),
-    ],
-    set2_corpus: Annotated[
-        list[str],
-        Query(description="Comma-separated list of corpora for set 2"),
-        BeforeValidator(utils.split_csv),
-        AfterValidator(lambda v: [x.upper() for x in v]),
-    ],
-    max_results: Annotated[int, Query(description="Maximum number of results", alias="max")] = 15,
+    set1_cqp: Set1CQPParam,
+    set2_cqp: Set2CQPParam,
+    set1_corpus: Set1CorpusParam,
+    set2_corpus: Set2CorpusParam,
+    max_results: MaxResultsParam = 15,
     group_by: count.GroupByParam = None,
     group_by_struct: count.GroupByStructParam = None,
     within: params.WithinParam = None,

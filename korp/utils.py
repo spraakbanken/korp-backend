@@ -54,7 +54,7 @@ def strptime(date: str) -> datetime.datetime:
     We need this since the built-in strptime isn't thread safe (and this is much faster).
 
     Args:
-        date: Date string in the format "YYYYMMDDhhmmss".
+        date: Date string in the format "YYYY[MM[DD[HH[MM[SS]]]]]".
 
     Returns:
         A datetime object representing the parsed date.

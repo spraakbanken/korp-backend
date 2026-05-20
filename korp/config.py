@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     WSGI_HOST: str = "0.0.0.0"
     WSGI_PORT: int = 8000
 
+    # Server instances used in API documentation
+    # E.g. [{"url": "http://localhost:8000", "description": "Local development server"}]
+    SERVERS: list[dict[str, str]] = []
+
     # The absolute path to the CQP binaries (required)
     CQP_EXECUTABLE: Path | None = None
     CWB_SCAN_EXECUTABLE: Path | None = None
