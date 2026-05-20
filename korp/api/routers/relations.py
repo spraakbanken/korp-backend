@@ -2068,8 +2068,9 @@ async def _relations_sentences_impl(
     table_suffix = f"{SPLIT_SUFFIX}_sentences" if yearly else "_sentences"
     shown = show or "word"
     shown_structs = set(utils.split_csv(show_struct))
+    debug: dict[str, Any] = {}
 
-    querystarttime = time.time()
+    sql_query_start_time = time.perf_counter()
     async with ctx.db.async_connection() as conn:
         await conn.execute(text("SET @@session.long_query_time = 1000;"))
         tables = await _existing_tables(conn, f"{settings.DB_WP_TABLE}_%{table_suffix}")
@@ -2117,7 +2118,8 @@ async def _relations_sentences_impl(
         count_rows = await _fetch_mappings(conn, " UNION ALL ".join(counts))
         corpus_hits = {row["corpus"]: int(row["freq"]) for row in count_rows}
         sentence_rows = await _fetch_mappings(conn, " UNION ALL ".join(selects) + f" LIMIT {start}, {end - start + 1}")
-        querytime = time.time() - querystarttime
+        if ctx.common.debug:
+            debug["sql_time"] = time.perf_counter() - sql_query_start_time
 
     corpora_dict: dict[str, dict[str, list[tuple[int, int]]]] = {}
     for row in sentence_rows:
@@ -2127,7 +2129,7 @@ async def _relations_sentences_impl(
     if not corpora_dict:
         return {"hits": 0}
 
-    cqpstarttime = time.time()
+    cqp_query_start_time = time.perf_counter()
     result: dict[str, Any] = {}
     for corpus, sids in sorted(corpora_dict.items(), key=operator.itemgetter(0)):
         if abort_signal and abort_signal.is_set():
@@ -2169,8 +2171,9 @@ async def _relations_sentences_impl(
     result["hits"] = total_hits
     result["corpus_hits"] = corpus_hits
     result["corpus_order"] = corpora
-    result["querytime"] = querytime
-    result["cqptime"] = time.time() - cqpstarttime
+    if ctx.common.debug:
+        debug["cqp_time"] = time.perf_counter() - cqp_query_start_time
+        result["DEBUG"] = debug
     return result
 
 
