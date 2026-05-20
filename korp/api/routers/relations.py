@@ -312,6 +312,11 @@ class RelationsResponse(schemas.CommonResponse):
             "using `/relations_time`."
         ),
     )
+    token_frequencies: dict[str, int] | SkipJsonSchema[None] = Field(
+        None,
+        description="Total token frequencies for the same time buckets as `relations_time`.",
+        examples=[{"2017": 15366, "2018": 7437}],
+    )
     range: RelationsRange | SkipJsonSchema[None] = Field(
         None,
         description="Dated year range covered by the time-sliced output.",
@@ -1466,6 +1471,100 @@ def _build_time_rows(
     return rows
 
 
+def _period_bucket_key(period_start: object, period_end: object, period_size: int) -> str:
+    """Return the serialized bucket key for period-based output."""
+    if period_size > 1:
+        return f"{period_start}-{period_end}" if period_start is not None and period_end is not None else ""
+    return str(period_start if period_start is not None else "")
+
+
+def _build_period_token_totals(
+    corpus_size_per_year: Mapping[int | None, int],
+    *,
+    period_size: int,
+    period_align: PeriodAlign,
+    start_year: int | None,
+    end_year: int | None,
+    bounds: tuple[int, int] | None = None,
+) -> dict[str, int]:
+    """Aggregate total token frequencies into the same period buckets as `relations_time`.
+
+    Args:
+        corpus_size_per_year: Mapping of year to total token frequency for selected corpora.
+        period_size: Period size in years.
+        period_align: Alignment mode used for period bucket boundaries.
+        start_year: Optional start year filter.
+        end_year: Optional end year filter.
+        bounds: Optional precomputed period bounds.
+
+    Returns:
+        Mapping from serialized period keys to token totals.
+    """
+    if not corpus_size_per_year:
+        return {}
+
+    period_min: int | None = None
+    period_max: int | None = None
+    period_origin: int | None = None
+
+    dated_years = sorted(year for year in corpus_size_per_year if year is not None)
+    if dated_years:
+        if bounds is not None:
+            period_min, period_max = bounds
+            period_origin = period_min if period_align is PeriodAlign.oldest else period_max - period_size + 1
+        else:
+            period_min, period_max, period_origin = _compute_period_bounds(
+                period_size,
+                start_year,
+                end_year,
+                dated_years,
+                align=period_align,
+            )
+
+    bucket_totals: dict[tuple[int | None, int | None], int] = defaultdict(int)
+    for year, freq in corpus_size_per_year.items():
+        period_start: int | None
+        period_end: int | None
+
+        if (
+            year is not None
+            and period_min is not None
+            and period_max is not None
+            and not (period_min <= year <= period_max)
+        ):
+            continue
+
+        if year is None:
+            period_start = None
+            period_end = None
+        elif period_size == 1:
+            period_start = year
+            period_end = year
+        else:
+            assert period_origin is not None
+            assert period_min is not None
+            assert period_max is not None
+            period_index = (year - period_origin) // period_size
+            raw_start = period_origin + period_index * period_size
+            period_end = min(raw_start + period_size - 1, period_max)
+            period_start = max(raw_start, period_min)
+
+        bucket_totals[period_start, period_end] += int(freq)
+
+    sorted_bucket_keys = sorted(
+        bucket_totals,
+        key=lambda key: (
+            1 if key[0] is None else 0,
+            key[0] if key[0] is not None else float("inf"),
+            key[1] if key[1] is not None else float("inf"),
+        ),
+    )
+    return {
+        _period_bucket_key(period_start, period_end, period_size): bucket_totals[period_start, period_end]
+        for period_start, period_end in sorted_bucket_keys
+    }
+
+
 def _limit_rows_per_bucket(
     rows: list[dict[str, object]],
     bucket_field: str,
@@ -1733,6 +1832,15 @@ async def _relations_impl(
         start_year=start_year,
         end_year=end_year,
     )
+    if include_split:
+        result["token_frequencies"] = _build_period_token_totals(
+            corpus_size_per_year,
+            period_size=period_size,
+            period_align=period_align,
+            start_year=start_year,
+            end_year=end_year,
+            bounds=bounds,
+        )
 
     overall_relation_entries = []
     if overall_map:
@@ -1818,11 +1926,7 @@ async def _relations_impl(
             result["period_size"] = period_size
             grouped_time_result = {}
             for row in per_period_rows:
-                bucket_key = (
-                    f"{row['period_start']}-{row['period_end']}"
-                    if period_size > 1
-                    else str(row["period_start"] if row["period_start"] is not None else "")
-                )
+                bucket_key = _period_bucket_key(row["period_start"], row["period_end"], period_size)
                 grouped_time_result.setdefault(bucket_key, []).append(_relation_output(row, measures))
             result["relations_time"] = grouped_time_result
         else:
