@@ -1060,9 +1060,11 @@ async def count_time(
     corpora_copy = count_params.corpora.copy()
 
     def _parse_corpus_date(date_str: str) -> datetime:
-        return utils.strptime(date_str.replace("-", "").replace(":", "").replace(" ", ""))
+        return utils.strptime(re.sub(r"\D", "", date_str))
 
     if date_from and date_to:
+        date_from = re.sub(r"\D", "", date_from)
+        date_to = re.sub(r"\D", "", date_to)
         df = utils.strptime(date_from)
         dt = utils.strptime(date_to)
 
