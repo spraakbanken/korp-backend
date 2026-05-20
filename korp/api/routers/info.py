@@ -142,7 +142,7 @@ class CorpusInfoResponse(schemas.CommonResponse):
 async def info(
     ctx: CtxDep,
 ) -> AsyncIterator[dict]:
-    """Get version information about list of available corpora.
+    """Get general information about the Korp backend and available corpora.
 
     Yields:
         Info about the Korp backend and available corpora.
@@ -283,7 +283,7 @@ async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bo
                     break
                 if ":" in line and not line.endswith(":"):
                     infokey, infoval = (x.strip() for x in line.split(":", 1))
-                    if infokey in {"Size", "Sentences"} and infoval.isdigit():
+                    if infokey in {"Size", "Sentences"} and isinstance(infoval, str) and infoval.isdigit():
                         infoval = int(infoval)
                     info[infokey] = infoval
 
@@ -293,10 +293,10 @@ async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bo
 
     for c in corpora:
         info = result["corpora"][c]["info"]
-        total_size += int(info["Size"])
-        sentences = info.get("Sentences", "")
-        if sentences.isdigit():
-            total_sentences += int(sentences)
+        total_size += info["Size"]
+        sentences = info.get("Sentences", 0)
+        if isinstance(sentences, int):
+            total_sentences += sentences
 
     if memcached_data:
         await cache.set_many(memcached_data)
