@@ -42,7 +42,7 @@ class RelationType(StrEnum):
     """Relation lookup type."""
 
     word = "word"
-    lemgram = "lemgram"
+    lexeme = "lexeme"
 
 
 class RelationsSort(StrEnum):
@@ -77,7 +77,7 @@ class Measures(StrEnum):
     rmi = "rmi"
 
 
-RELATIONS_DESCRIPTION = """Get word-picture dependency relations for a word or lemgram.
+RELATIONS_DESCRIPTION = """Get word-picture dependency relations for a word or lexeme.
 
 The route looks up dependency relations where the requested value occurs as either the head or the dependent. Each
 relation row identifies the head, dependency relation, dependent, part-of-speech tags, optional dependent prefix, and
@@ -92,9 +92,9 @@ By default `/relations` returns overall relation statistics. Set `split=true` to
 
 ### Example
 
-Get dependency relations for the lemgram `ge..vb.1`:
+Get dependency relations for the lexeme `ge..vb.1`:
 
-`/relations?word=ge..vb.1&type=lemgram&corpus=ROMI`
+`/relations?word=ge..vb.1&type=lexeme&corpus=ROMI`
 """
 
 RELATIONS_TIME_DESCRIPTION = """Get word-picture dependency relations grouped by year or multi-year period.
@@ -122,7 +122,7 @@ This is the sentence lookup companion to `/relations_time`. It returns the same 
 WordParam: TypeAlias = Annotated[
     str,
     Query(
-        description="Word form or lemgram to look up. Use `type=lemgram` when the value is a lemgram.",
+        description="Word form or lexeme to look up. Use `type=lexeme` when the value is a lexeme.",
         examples=["ge..vb.1", "är"],
     ),
 ]
@@ -131,7 +131,7 @@ RelationTypeParam: TypeAlias = Annotated[
     RelationType,
     Query(
         alias="type",
-        description="Interpret `word` as a plain word form or as a lemgram.",
+        description="Interpret `word` as a plain word form or as a lexeme.",
     ),
 ]
 
@@ -261,10 +261,10 @@ RelationsDefaultContextParam: TypeAlias = Annotated[
 class RelationRow(BaseModel):
     """A word-picture relation row."""
 
-    head: str = Field(..., description="Head word form or lemgram.", examples=["cat"])
+    head: str = Field(..., description="Head word form or lexeme.", examples=["cat"])
     headpos: str = Field(..., description="Part of speech for the head.", examples=["NN"])
     rel: str = Field(..., description="Dependency relation label.", examples=["AT"])
-    dep: str = Field(..., description="Dependent word form or lemgram.", examples=["black"])
+    dep: str = Field(..., description="Dependent word form or lexeme.", examples=["black"])
     deppos: str = Field(..., description="Part of speech for the dependent.", examples=["JJ"])
     depextra: str = Field(..., description="Dependent prefix or extra string data.", examples=[""])
     source: list[str] = Field(
@@ -437,17 +437,17 @@ def _table_names(corpus: str, *, split: bool) -> dict[str, str]:
     }
 
 
-def _lemgram_clause(lemgram: bool, *, second: bool = False) -> str:
-    """Return SQL clause for lemgram or wordform selection.
+def _lexeme_clause(lexeme: bool, *, second: bool = False) -> str:
+    """Return SQL clause for lexeme or wordform selection.
 
     Args:
-        lemgram: If `True`, select lemgrams; if `False`, select wordforms.
+        lexeme: If `True`, select lexemes; if `False`, select wordforms.
         second: If `True`, generate clause for the second query (dep); if `False`, for the first (head).
 
     Returns:
         SQL clause as a string.
     """
-    if lemgram:
+    if lexeme:
         return " f.bfhead = 1 AND f.bfdep = 1"
     if second:
         return " f.wfdep = 1"
@@ -491,14 +491,14 @@ def _year_clause(
 def _build_overall_triples_query(
     corpus: str,
     *,
-    lemgram: bool,
+    lexeme: bool,
     min_freq: int | None = None,
 ) -> tuple[str, dict[str, object]]:
     """Build combined SQL query for overall relations (no year splitting).
 
     Args:
         corpus: The corpus name.
-        lemgram: If `True`, select lemgrams; if `False`, select wordforms.
+        lexeme: If `True`, select lexemes; if `False`, select wordforms.
         min_freq: Minimum frequency filter or `None` (no minimum).
 
     Returns:
@@ -527,7 +527,7 @@ def _build_overall_triples_query(
         other_alias = "s2" if role == "head" else "s1"
         join_col = role  # "head" or "dep"
         other_col = "dep" if role == "head" else "head"
-        lc = f"AND{_lemgram_clause(lemgram, second=(role == 'dep'))}"
+        lc = f"AND{_lexeme_clause(lexeme, second=(role == 'dep'))}"
         return f"""
     SELECT STRAIGHT_JOIN
         '{role}' AS role,
@@ -565,7 +565,7 @@ def _build_overall_triples_query(
 def _build_split_triples_query(
     corpus: str,
     *,
-    lemgram: bool,
+    lexeme: bool,
     min_freq: int | None = None,
     start_year: int | None = None,
     end_year: int | None = None,
@@ -574,7 +574,7 @@ def _build_split_triples_query(
 
     Args:
         corpus: The corpus name.
-        lemgram: If `True`, select lemgrams; if `False`, select wordforms.
+        lexeme: If `True`, select lexemes; if `False`, select wordforms.
         min_freq: Minimum frequency filter or `None`.
         start_year: Start year (inclusive) or `None`.
         end_year: End year (inclusive) or `None`.
@@ -583,8 +583,8 @@ def _build_split_triples_query(
         A tuple containing the SQL query as a string and a dictionary of parameters.
     """
     tables = _table_names(corpus, split=True)
-    lemgram_clause_1 = _lemgram_clause(lemgram)
-    lemgram_clause_2 = _lemgram_clause(lemgram, second=True)
+    lexeme_clause_1 = _lexeme_clause(lexeme)
+    lexeme_clause_2 = _lexeme_clause(lexeme, second=True)
     freq_clause = ""
     params: dict[str, int] = {}
     if min_freq is not None:
@@ -621,7 +621,7 @@ def _build_split_triples_query(
     JOIN `{tables["strings"]}` AS hs ON f.head = hs.id
     JOIN `{tables["strings"]}` AS ds ON f.dep = ds.id
     WHERE
-    {lemgram_clause_1}
+    {lexeme_clause_1}
     {year_clause}
     {freq_clause}
     UNION ALL
@@ -645,7 +645,7 @@ def _build_split_triples_query(
     JOIN `{tables["strings"]}` AS hs ON f.head = hs.id
     JOIN `{tables["strings"]}` AS ds ON f.dep = ds.id
     WHERE
-    {lemgram_clause_2}
+    {lexeme_clause_2}
     {year_clause}
     {freq_clause}
     ORDER BY yearfrom, role, freq DESC
@@ -657,7 +657,7 @@ def _build_head_or_dep_query(
     corpus: str,
     *,
     role: Literal["head", "dep"],
-    lemgram: bool,
+    lexeme: bool,
     start_year: int | None = None,
     end_year: int | None = None,
 ) -> tuple[str, dict[str, int]]:
@@ -666,7 +666,7 @@ def _build_head_or_dep_query(
     Args:
         corpus: The corpus name.
         role: Whether to build a query for "head" or "dep" relations.
-        lemgram: If `True`, select lemgrams; if `False`, select wordforms.
+        lexeme: If `True`, select lexemes; if `False`, select wordforms.
         start_year: Start year (inclusive) or `None`.
         end_year: End year (inclusive) or `None`.
 
@@ -674,8 +674,8 @@ def _build_head_or_dep_query(
         A tuple containing the SQL query as a string and a dictionary of parameters.
     """
     tables = _table_names(corpus, split=True)
-    lemgram_clause_1 = _lemgram_clause(lemgram)
-    lemgram_clause_2 = _lemgram_clause(lemgram, second=True)
+    lexeme_clause_1 = _lexeme_clause(lexeme)
+    lexeme_clause_2 = _lexeme_clause(lexeme, second=True)
     scope_clause, scope_params = _year_clause("f.yearfrom", start_year, end_year, prefix="scope")
     if scope_clause:
         scope_clause = "AND " + scope_clause
@@ -699,14 +699,14 @@ def _build_head_or_dep_query(
         FROM `{tables["main"]}` AS f
         JOIN target AS t ON f.head = t.id
         WHERE
-        {lemgram_clause_1}
+        {lexeme_clause_1}
         {scope_clause}
         UNION
         SELECT DISTINCT f.{col}, f.rel
         FROM `{tables["main"]}` AS f
         JOIN target AS t ON f.dep = t.id
         WHERE
-        {lemgram_clause_2}
+        {lexeme_clause_2}
         {scope_clause}
     )
     SELECT
@@ -1333,7 +1333,7 @@ async def _fetch_split_relation_rows(
     conn: AsyncConnection,
     corpus: str,
     word: str,
-    is_lemgram: bool,
+    is_lexeme: bool,
     min_freq: int | None,
     start_year: int | None = None,
     end_year: int | None = None,
@@ -1344,7 +1344,7 @@ async def _fetch_split_relation_rows(
         conn: Async SQLAlchemy connection.
         corpus: The corpus name.
         word: The target word.
-        is_lemgram: If `True`, select lemgrams; if `False`, select wordforms.
+        is_lexeme: If `True`, select lexemes; if `False`, select wordforms.
         min_freq: Minimum frequency filter or `None`.
         start_year: Start year (inclusive) or `None`.
         end_year: End year (inclusive) or `None`.
@@ -1354,16 +1354,16 @@ async def _fetch_split_relation_rows(
     """
     triple_sql, triple_params = _build_split_triples_query(
         corpus,
-        lemgram=is_lemgram,
+        lexeme=is_lexeme,
         min_freq=min_freq,
         start_year=start_year,
         end_year=end_year,
     )
     head_sql, head_params = _build_head_or_dep_query(
-        corpus, role="head", lemgram=is_lemgram, start_year=start_year, end_year=end_year
+        corpus, role="head", lexeme=is_lexeme, start_year=start_year, end_year=end_year
     )
     dep_sql, dep_params = _build_head_or_dep_query(
-        corpus, role="dep", lemgram=is_lemgram, start_year=start_year, end_year=end_year
+        corpus, role="dep", lexeme=is_lexeme, start_year=start_year, end_year=end_year
     )
     rel_sql, rel_params = _build_rel_query(corpus, start_year=start_year, end_year=end_year)
 
@@ -1386,7 +1386,7 @@ async def _fetch_overall_relation_rows(
     conn: AsyncConnection,
     corpus: str,
     word: str,
-    is_lemgram: bool,
+    is_lexeme: bool,
     min_freq: int | None,
 ) -> dict[str, object]:
     """Fetch combined overall relation rows using query optimized for overall data.
@@ -1395,13 +1395,13 @@ async def _fetch_overall_relation_rows(
         conn: Async SQLAlchemy connection.
         corpus: The corpus name.
         word: The target word.
-        is_lemgram: If `True`, select lemgrams; if `False`, select wordforms.
+        is_lexeme: If `True`, select lexemes; if `False`, select wordforms.
         min_freq: Minimum frequency filter or `None`.
 
     Returns:
         A dictionary containing relation rows and frequency maps.
     """
-    sql, params = _build_overall_triples_query(corpus, lemgram=is_lemgram, min_freq=min_freq)
+    sql, params = _build_overall_triples_query(corpus, lexeme=is_lexeme, min_freq=min_freq)
     triples = await _fetch_mappings(conn, sql, {"word": word, **params})
 
     # Maps for deduplicating head/dep/rel frequencies across rows
@@ -1653,8 +1653,8 @@ async def _relations_impl(
     Args:
         ctx: Common dependencies.
         corpora: List of corpus names.
-        word: The target word or lemgram.
-        relation_type: Whether the target is a word or lemgram.
+        word: The target word or lexeme.
+        relation_type: Whether the target is a word or lexeme.
         min_freq: Minimum frequency filter or `None`.
         sort_field: The field to sort results by.
         max_results: Maximum number of results per relation and direction.
@@ -1678,7 +1678,7 @@ async def _relations_impl(
         yield {"ERROR": "Both split and overall results are disabled."}
         return
 
-    is_lemgram = relation_type == RelationType.lemgram
+    is_lexeme = relation_type == RelationType.lexeme
     limit_per_period = max_scope == MaxScope.per_period
     time_filter = start_year is not None or end_year is not None
     # Use split tables whenever split output or year filtering is requested
@@ -1693,7 +1693,7 @@ async def _relations_impl(
     cached_corpora: set[str] = set()
 
     if ctx.common.cache:
-        cache_checksum = utils.get_hash((word, is_lemgram, min_freq, use_split_data, start_year, end_year))
+        cache_checksum = utils.get_hash((word, is_lexeme, min_freq, use_split_data, start_year, end_year))
         cache_prefixes = await caching.cache_prefix(ctx.cache, corpora)
         for corpus in corpora:
             cache_key = f"{cache_prefixes[corpus]}:relations_{cache_checksum}"
@@ -1740,14 +1740,14 @@ async def _relations_impl(
                     conn,
                     corpus,
                     word,
-                    is_lemgram,
+                    is_lexeme,
                     min_freq,
                     start_year=start_year,
                     end_year=end_year,
                 )
             else:
                 # Neither split output nor year filtering requested: use overall-optimized query
-                data = await _fetch_overall_relation_rows(conn, corpus, word, is_lemgram, min_freq)
+                data = await _fetch_overall_relation_rows(conn, corpus, word, is_lexeme, min_freq)
             corpus_results[corpus] = data
             if ctx.common.cache and cache_checksum is not None:
                 cache_key = f"{cache_prefixes[corpus]}:relations_{cache_checksum}"

@@ -1,0 +1,16 @@
+
+# Korp MySQL database table information for lexeme_counts
+
+
+- tablename: lexeme_counts
+  filenames:
+  - 'lexeme(s|_counts)/{corpus}([_:+]lexeme(s|_counts))?'
+  - '{corpus}/lexeme(s|_counts)'
+  definition: |
+    `lexeme` varchar(64) NOT NULL,
+    `freq` int(11) DEFAULT NULL,
+    `freq_prefix` int(11) DEFAULT NULL,
+    `freq_suffix` int(11) DEFAULT NULL,
+    `corpus` varchar(64) NOT NULL,
+    PRIMARY KEY `lexeme_corpus` (`lexeme`, `corpus`, `freq`,
+                                  `freq_prefix`, `freq_suffix`)

@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     # Word Picture table prefix
     DB_WP_TABLE: str = "relations"
 
+    # Lexeme counts table name
+    DB_LEXEME_COUNTS_TABLE: str = "lexeme_counts"
+
     # Username and password for database access
     DB_USER: str = ""
     DB_PASSWORD: str = ""

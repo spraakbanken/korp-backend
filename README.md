@@ -196,7 +196,7 @@ A corpus dated 2006 would have the following values:
 
 ## Database tables
 
-This section describes the database tables needed to use the Word Picture, Lemgram index and Trend Diagram features.
+This section describes the database tables needed to use the Word Picture, Lexeme Count and Trend Diagram features.
 If you don't need any of these features, you can skip this section.
 
 ### Relations for the Word Picture
@@ -214,8 +214,8 @@ Columns:
     rel            enum(...)            The syntactic relation  
     dep            int                  Reference to an ID in the strings table (below). The dependent in the relation  
     freq           int                  Frequency of the triplet (head, rel, dep)  
-    bfhead         bool                 True if head is a base form (or lemgram)  
-    bfdep          bool                 True if dep  is a base form (or lemgram)  
+    bfhead         bool                 True if head is a base form (or lexeme)  
+    bfdep          bool                 True if dep  is a base form (or lexeme)  
     wfhead         bool                 True if head is a word form  
     wfdep          bool                 True if dep is a word form  
 
@@ -299,24 +299,23 @@ that relation.
 The `sentences` table contains sentence IDs for sentences containing the relations, with start and end
 values to point out exactly where in the sentences the relations occur (1 being the first word of the sentence).
 
-### Lemgram Index
+### Lexeme Counts
 
-The lemgram index is an index of every lemgram in every corpus, along with the
-number of occurrences. This is used by the frontend to grey out auto-completion
-suggestions which would not give any results in the selected corpora. The lemgram
-index consists of a single MySQL table, with the following layout:
+The lexeme counts table contains the number of occurrences of each lexeme in each corpus. This is used by the frontend
+to grey out auto-completion suggestions which would not give any results in the selected corpora. The lexeme counts data
+consists of a single MySQL table, with the following layout:
 
 ```text
-Table name: lemgram_index  
+Table name: lexeme_counts  
 Charset:    UTF-8  
 
 Columns:  
-    lemgram      varchar(64)         The lemgram  
+    lexeme       varchar(64)         The lexeme  
     freq         int                 Number of occurrences  
     corpus       varchar(64)         The corpus name  
 
 Indexes:  
-    (lemgram, corpus, freq)
+    (lexeme, corpus, freq)
 ```
 
 ### Time data

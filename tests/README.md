@@ -131,18 +131,18 @@ If the endpoint uses the Korp MySQL database, it should also use the `database_t
 database table data. For example:
 
 ```python
-def test_lemgram_count_single_corpus(get_json, database_tables):
-    """Test `/lemgram_count` on a single corpus."""
-    database_tables("testcorpus1", "lemgram_index")
-    lemgram = "test..nn.1"
+def test_lexeme_count_single_corpus(get_json, database_tables):
+    """Test `/lexeme_count` on a single corpus."""
+    database_tables("testcorpus1", "lexeme_counts")
+    lexeme = "test..nn.1"
     response = get_json(
-        "/lemgram_count",
+        "/lexeme_count",
         params={
             "corpus": "testcorpus1",
-            "lemgram": lemgram,
+            "lexeme": lexeme,
             "cache": "false",
         })
-    assert lemgram in response
+    assert lexeme in response
 ```
 
 ### Corpus data
@@ -300,7 +300,7 @@ Each file, whether SQL or TSV, should contain data only for one corpus, whose id
 directory) name.
 
 Data can be imported by specifying either the corpus id and type(s) of table(s) (one or more of `timedata`,
-`lemgram_index` and `relations`) or the files containing data (globs can be used).
+`lexeme_counts` and `relations`) or the files containing data (globs can be used).
 
 The YAML files in [`data/db/tableinfo/`](data/db/tableinfo) contain table information specifying a mapping from (TSV)
 data files to database tables (and indirectly also the other way round). Each file contains a sequence of one or more
@@ -340,9 +340,9 @@ Currently, the table information files support the following file name and direc
 Here:
 
 - _corpus_ = corpus id (in lower case)
-- _tabletype_ = high-level table type: one of `lemgram_index` (or `lemgrams`), `timedata` and `relations`
+- _tabletype_ = high-level table type: one of `lexeme_counts` (or `lexemes`), `timedata` and `relations`
 - _tabletype\_detailed_ = more detailed table type (mainly for TSV files):
-  - `lemgram_index`: `lemgram_index` (or `lemgrams`) (the same as the high-level type)
+  - `lexeme_counts`: `lexeme_counts` (or `lexemes`) (the same as the high-level type)
   - `timedata`: `timedata` or `timedata_date`
   - `relations`: `relations`, `relations_strings`, `relations_rel`, `relations_head_rel`, `relations_dep_rel` or
      `relations_sentence`
