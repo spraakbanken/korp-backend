@@ -41,7 +41,7 @@ annotations requested with `show`, optional structural annotations requested wit
 inside the returned context.
 
 Results are grouped by corpus and returned in `corpus_order`; sorting is also done within each corpus, not globally
-across all selected corpora. Use `start` and `end` for pagination. The response also includes total hit counts per
+across all selected corpora. Use `offset` and `limit` for pagination. The response also includes total hit counts per
 corpus and a `query_data` value that can be sent back with later pages of the same query to avoid recalculating hit
 distribution across corpora.
 
@@ -64,7 +64,7 @@ concordance data in the streamed JSON object.
 
 Query `SUC3` and return the first ten hits for `"och" [] [pos="NN"]`, including the `msd` and `lemma` annotations:
 
-`/query?corpus=SUC3&start=0&end=9&default_context=1+sentence&cqp="och"+[]+[pos="NN"]&show=msd,lemma`
+`/query?corpus=SUC3&offset=0&limit=10&default_context=1+sentence&cqp="och"+[]+[pos="NN"]&show=msd,lemma`
 """
 
 QUERY_SAMPLE_DESCRIPTION = """Do a random-sample concordance search.
@@ -176,14 +176,14 @@ SortParam: TypeAlias = Annotated[
     ),
 ]
 
-StartParam: TypeAlias = Annotated[
+OffsetParam: TypeAlias = Annotated[
     int,
-    Query(description="Zero-based index of the first matching row to return.", examples=[0]),
+    Query(description="Number of matching rows to skip before returning results.", ge=0, examples=[0]),
 ]
 
-EndParam: TypeAlias = Annotated[
+LimitParam: TypeAlias = Annotated[
     int,
-    Query(description="Zero-based index of the last matching row to return, inclusive.", examples=[9]),
+    Query(description="Maximum number of matching rows to return.", ge=1, examples=[10]),
 ]
 
 CutParam: TypeAlias = Annotated[
@@ -334,12 +334,17 @@ class QueryParameters:
     query_data: str | None = None
 
 
+def _end_from_offset_limit(offset: int, limit: int) -> int:
+    """Return the legacy inclusive end index for CQP pagination."""
+    return offset + limit - 1
+
+
 async def parse_parameters(
     ctx: CtxDep,
     corpus: list[str],
     cqp_query: list[str],
-    start: int,
-    end: int,
+    offset: int,
+    limit: int,
     show: Sequence[str],
     show_struct: Sequence[str] | None,
     cut: int | None = None,
@@ -361,8 +366,8 @@ async def parse_parameters(
         ctx: The request context.
         corpus: List of corpora to query.
         cqp_query: List of CQP query strings.
-        start: The index of the first row to return (0-based).
-        end: The index of the last row to return (0-based, inclusive).
+        offset: Number of rows to skip.
+        limit: Maximum number of rows to return.
         show: List of positional attributes to show in the results.
         show_struct: List of structural attributes to show in the results.
         cut: Maximum number of results to return per corpus. With this enabled, the total number of results will be
@@ -393,7 +398,7 @@ async def parse_parameters(
 
     show_structs = set(show_struct) if show_struct else set()
 
-    if settings.MAX_KWIC_ROWS and end - start >= settings.MAX_KWIC_ROWS:
+    if settings.MAX_KWIC_ROWS and limit > settings.MAX_KWIC_ROWS:
         raise ValueError(f"At most {settings.MAX_KWIC_ROWS} KWIC rows can be returned per call.")
 
     within_dict = cqp.parse_within(within, default_within)
@@ -436,8 +441,8 @@ async def parse_parameters(
         corpora=corpora,
         cqp_query=cqp_query,
         within=within_dict,
-        start=start,
-        end=end,
+        start=offset,
+        end=offset + limit - 1,
         show=show_set,
         show_struct=show_structs,
         cut=cut,
@@ -771,8 +776,8 @@ async def query_sample(
         ctx=ctx,
         corpus=corpus,
         cqp_query=cqp_query,
-        start=0,
-        end=0,
+        offset=0,
+        limit=1,
         show=show,
         show_struct=show_struct,
         cut=1,
@@ -818,8 +823,8 @@ async def query(
     ctx: CtxDep,
     corpus: params.CorpusParam,
     cqp_query: params.CQPParam,
-    start: StartParam = 0,
-    end: EndParam = 9,
+    offset: OffsetParam = 0,
+    limit: LimitParam = 10,
     show: ShowParam = ("word",),
     show_struct: ShowStructParam = None,
     cut: CutParam = None,
@@ -845,8 +850,8 @@ async def query(
         ctx=ctx,
         corpus=corpus,
         cqp_query=cqp_query,
-        start=start,
-        end=end,
+        offset=offset,
+        limit=limit,
         show=show,
         show_struct=show_struct,
         cut=cut,
@@ -883,8 +888,8 @@ def query_corpus(
     Args:
         query_params: Parsed and validated query parameters.
         corpus: Corpus to query.
-        start: Start index of results to return.
-        end: End index of results to return.
+        start: Start index of results to return (0-based).
+        end: End index of results to return (0-based, inclusive).
         cwb: CWB instance to use for querying.
         no_results: If True, do not return any KWIC rows, only the number of hits.
         use_cache: Whether to use caching for this query.

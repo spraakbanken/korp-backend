@@ -34,15 +34,15 @@ def query_testcorpus_kwic_rows(
 
     The returned function takes as its parameters the value for `MAX_KWIC_ROWS` and the number of rows to request. It
     returns the JSON response for `/query` to corpus "testcorpus" with CQP query "[]" (any word) from the beginning of
-    the corpus (start=0).
+    the corpus (offset=0).
     """
 
     def _query_testcorpus_kwic_rows(max_rows: int, request_rows: int) -> dict:
         return query_testcorpus(
             "[]",
             {
-                "start": "0",
-                "end": str(request_rows - 1),
+                "offset": "0",
+                "limit": str(request_rows),
             },
             {"MAX_KWIC_ROWS": max_rows},
         )

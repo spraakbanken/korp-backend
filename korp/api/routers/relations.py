@@ -220,14 +220,14 @@ MeasuresParam: TypeAlias = Annotated[
     BeforeValidator(utils.split_csv),
 ]
 
-RelationsStartParam: TypeAlias = Annotated[
+RelationsOffsetParam: TypeAlias = Annotated[
     int,
-    Query(description="Zero-based index of the first sentence row to return.", examples=[0]),
+    Query(description="Number of sentence rows to skip before returning results.", ge=0, examples=[0]),
 ]
 
-RelationsEndParam: TypeAlias = Annotated[
+RelationsLimitParam: TypeAlias = Annotated[
     int,
-    Query(description="Zero-based index of the last sentence row to return, inclusive.", examples=[9]),
+    Query(description="Maximum number of sentence rows to return.", ge=1, examples=[10]),
 ]
 
 RelationsShowParam: TypeAlias = Annotated[
@@ -2054,8 +2054,8 @@ def _parse_source(source: list[str]) -> dict[str, set[int]]:
 async def _relations_sentences_impl(
     ctx: CtxDep,
     source: list[str],
-    start: int,
-    end: int,
+    offset: int,
+    limit: int,
     show: str,
     show_struct: str,
     default_context: str,
@@ -2117,7 +2117,7 @@ async def _relations_sentences_impl(
 
         count_rows = await _fetch_mappings(conn, " UNION ALL ".join(counts))
         corpus_hits = {row["corpus"]: int(row["freq"]) for row in count_rows}
-        sentence_rows = await _fetch_mappings(conn, " UNION ALL ".join(selects) + f" LIMIT {start}, {end - start + 1}")
+        sentence_rows = await _fetch_mappings(conn, " UNION ALL ".join(selects) + f" LIMIT {offset}, {limit}")
         if ctx.common.debug:
             debug["sql_time"] = time.perf_counter() - sql_query_start_time
 
@@ -2139,8 +2139,8 @@ async def _relations_sentences_impl(
             ctx=ctx,
             corpus=[corpus],
             cqp_query=[cqp],
-            start=0,
-            end=end - start,
+            offset=0,
+            limit=limit,
             show=utils.split_csv(shown),
             show_struct=["sentence_id", *shown_structs],
             default_context=default_context,
@@ -2189,8 +2189,8 @@ async def _relations_sentences_impl(
 async def relations_sentences(
     ctx: CtxDep,
     source: SourceParam,
-    start: RelationsStartParam = 0,
-    end: RelationsEndParam = 9,
+    offset: RelationsOffsetParam = 0,
+    limit: RelationsLimitParam = 10,
     show: RelationsShowParam = "word",
     show_struct: RelationsShowStructParam = "",
     default_context: RelationsDefaultContextParam = "1 sentence",
@@ -2201,8 +2201,8 @@ async def relations_sentences(
     Args:
         ctx: Common dependencies.
         source: List of source IDs in the format `CORPUS:ID`.
-        start: Starting index for pagination (0-based).
-        end: Ending index for pagination (inclusive).
+        offset: Number of sentence rows to skip.
+        limit: Maximum number of sentence rows to return.
         show: Comma-separated list of token fields to include in results.
         show_struct: Comma-separated list of structural attributes to include.
         default_context: Default context size for query results (e.g., "1 sentence").
@@ -2214,8 +2214,8 @@ async def relations_sentences(
     yield await _relations_sentences_impl(
         ctx=ctx,
         source=source,
-        start=start,
-        end=end,
+        offset=offset,
+        limit=limit,
         show=show,
         show_struct=show_struct,
         default_context=default_context,
@@ -2236,8 +2236,8 @@ async def relations_sentences(
 async def relations_time_sentences(
     ctx: CtxDep,
     source: SourceParam,
-    start: RelationsStartParam = 0,
-    end: RelationsEndParam = 9,
+    offset: RelationsOffsetParam = 0,
+    limit: RelationsLimitParam = 10,
     show: RelationsShowParam = "word",
     show_struct: RelationsShowStructParam = "",
     default_context: RelationsDefaultContextParam = "1 sentence",
@@ -2248,8 +2248,8 @@ async def relations_time_sentences(
     Args:
         ctx: Common dependencies.
         source: List of source IDs in the format `CORPUS:ID`.
-        start: Starting index for pagination (0-based).
-        end: Ending index for pagination (inclusive).
+        offset: Number of sentence rows to skip.
+        limit: Maximum number of sentence rows to return.
         show: Comma-separated list of token fields to include in results.
         show_struct: Comma-separated list of structural attributes to include.
         default_context: Default context size for query results (e.g., "1 sentence").
@@ -2261,8 +2261,8 @@ async def relations_time_sentences(
     yield await _relations_sentences_impl(
         ctx=ctx,
         source=source,
-        start=start,
-        end=end,
+        offset=offset,
+        limit=limit,
         show=show,
         show_struct=show_struct,
         default_context=default_context,

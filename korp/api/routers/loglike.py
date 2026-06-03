@@ -139,8 +139,8 @@ async def loglike(
     within: params.WithinParam = None,
     default_within: params.DefaultWithinParam = None,
     # cut: int | None = None,
-    start: count.StartParam = 0,
-    end: count.EndParam = -1,
+    offset: count.OffsetParam = 0,
+    limit: count.LimitParam = 0,
     ignore_case: count.IgnoreCaseParam = None,
     relative_to_struct: count.RelativeToStructParam = None,
     split: params.SplitParam = None,
@@ -172,8 +172,8 @@ async def loglike(
         top=top,
         simple=False,
         expand_prequeries=expand_prequeries,
-        start=start,
-        end=end,
+        offset=offset,
+        limit=limit,
     )
 
     # Handle parameters specific to loglike

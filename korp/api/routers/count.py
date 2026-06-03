@@ -107,14 +107,18 @@ GroupByStructParam: TypeAlias = Annotated[
     BeforeValidator(utils.split_csv),
 ]
 
-StartParam: TypeAlias = Annotated[
+OffsetParam: TypeAlias = Annotated[
     int,
-    Query(description="Start index for result slicing after sorting by absolute frequency.", ge=0, examples=[0]),
+    Query(description="Number of result rows to skip after sorting by absolute frequency.", ge=0, examples=[0]),
 ]
 
-EndParam: TypeAlias = Annotated[
+LimitParam: TypeAlias = Annotated[
     int,
-    Query(description="End index for result slicing (0-based, inclusive). Use -1 for no limit.", ge=-1, examples=[25]),
+    Query(
+        description="Maximum number of result rows to return after `offset`. Use 0 for no limit.",
+        ge=0,
+        examples=[25],
+    ),
 ]
 
 IgnoreCaseParam: TypeAlias = Annotated[
@@ -338,8 +342,8 @@ async def parse_parameters(
     top: list[str] | None,
     simple: bool,
     expand_prequeries: bool,
-    start: int,
-    end: int,
+    offset: int,
+    limit: int,
 ) -> CountParameters:
     """Parse and validate parameters for count query.
 
@@ -404,8 +408,8 @@ async def parse_parameters(
         strip_pointer=set(strip_pointer) if strip_pointer else set(),
         top=tops,
         expand_prequeries=expand_prequeries,
-        start=start,
-        end=end,
+        start=offset,
+        end=-1 if limit == 0 else offset + limit - 1,
         cut=cut,
     )
 
@@ -561,14 +565,15 @@ def _finalize_count_results(
         relative_to_struct: Structural attributes for relative calculation.
         total_size: Total size across all corpora.
         start: Start index for result slicing.
-        end: End index for result slicing.
+        end: End index for result slicing. Use -1 for no upper bound.
     """
     for query_no in range(len(subcqp) + 1):
-        if end > -1 and (start > 0 or len(total_stats[0]["rows"]) > (end - start) + 1):
+        slice_end = None if end == -1 else end + 1
+        if start > 0 or (end > -1 and len(total_stats[query_no]["rows"]) > (end - start) + 1):
             # Only a selected range of results requested
             total_stats[query_no]["rows"] = dict(
                 sorted(total_stats[query_no]["rows"].items(), key=lambda x: x[1]["absolute"], reverse=True)[
-                    start : end + 1
+                    start:slice_end
                 ]
             )
 
@@ -857,8 +862,8 @@ async def count(
     within: params.WithinParam = None,
     default_within: params.DefaultWithinParam = None,
     # cut: int | None = None,
-    start: StartParam = 0,
-    end: EndParam = -1,
+    offset: OffsetParam = 0,
+    limit: LimitParam = 0,
     ignore_case: IgnoreCaseParam = None,
     relative_to_struct: RelativeToStructParam = None,
     split: params.SplitParam = None,
@@ -889,8 +894,8 @@ async def count(
         top=top,
         simple=False,
         expand_prequeries=expand_prequeries,
-        start=start,
-        end=end,
+        offset=offset,
+        limit=limit,
     )
 
     async for item in perform_count(count_params, ctx, abort_signal):
@@ -914,8 +919,8 @@ async def count_all(
     within: params.WithinParam = None,
     default_within: params.DefaultWithinParam = None,
     # cut: int | None = None,
-    start: StartParam = 0,
-    end: EndParam = -1,
+    offset: OffsetParam = 0,
+    limit: LimitParam = 0,
     ignore_case: IgnoreCaseParam = None,
     relative_to_struct: RelativeToStructParam = None,
     split: params.SplitParam = None,
@@ -946,8 +951,8 @@ async def count_all(
         top=top,
         simple=True,
         expand_prequeries=expand_prequeries,
-        start=start,
-        end=end,
+        offset=offset,
+        limit=limit,
     )
 
     async for item in perform_count(count_params, ctx, abort_signal):
@@ -995,8 +1000,8 @@ async def count_time(
     within: params.WithinParam = None,
     default_within: params.DefaultWithinParam = None,
     # cut: int | None = None,
-    start: StartParam = 0,
-    end: EndParam = -1,
+    offset: OffsetParam = 0,
+    limit: LimitParam = 0,
     ignore_case: IgnoreCaseParam = None,
     relative_to_struct: RelativeToStructParam = None,
     split: params.SplitParam = None,
@@ -1036,8 +1041,8 @@ async def count_time(
         top=top,
         simple=True,
         expand_prequeries=expand_prequeries,
-        start=start,
-        end=end,
+        offset=offset,
+        limit=limit,
     )
 
     incremental = ctx.common.incremental
