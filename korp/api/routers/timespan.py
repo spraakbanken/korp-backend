@@ -189,8 +189,7 @@ async def timespan(
         granularity: Granularity of result ('y' = year, 'm' = month, 'd' = day, 'h' = hour, 'n' = minute, 's' = second).
         combined: Whether to include combined results.
         per_corpus: Whether to include results per corpus.
-        strategy: Strategy for date range matching (1 = some overlaps permitted, 2 = all overlaps permitted, 3 = strict
-            matching).
+        strategy: Strategy for date range matching.
         date_from: Start date for filtering (inclusive).
         date_to: End date for filtering (inclusive).
 
@@ -230,8 +229,7 @@ async def get_timespan(
         granularity: Granularity of result ('y' = year, 'm' = month, 'd' = day, 'h' = hour, 'n' = minute, 's' = second).
         combined: Whether to include combined results.
         per_corpus: Whether to include results per corpus.
-        strategy: Strategy for date range matching (1 = some overlaps permitted, 2 = all overlaps permitted, 3 = strict
-            matching).
+        strategy: Strategy for date range matching.
         date_from: Start date for filtering (inclusive).
         date_to: End date for filtering (inclusive).
         no_combined_cache: If True, do not use combined caching for multiple corpora.
@@ -556,8 +554,7 @@ def timespan_calculator(
         granularity: Granularity of result ('y' = year, 'm' = month, 'd' = day, 'h' = hour, 'n' = minute, 's' = second).
         combined: Whether to include combined results.
         per_corpus: Whether to include results per corpus.
-        strategy: Strategy for date range matching (1 = some overlaps permitted, 2 = all overlaps permitted, 3 = strict
-            matching).
+        strategy: Strategy for date range matching.
 
     Returns:
         A dictionary containing the timespan information.

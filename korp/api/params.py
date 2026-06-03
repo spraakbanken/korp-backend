@@ -128,29 +128,30 @@ for `granularity=m`.
 Let `t1` and `t2` be the start and end of the material time span, and `r1` and `r2` the start and end of the result time
 span:
 
-- `1`: include material when either span fully contains the other:
+- `some_overlaps`: include material when either span fully contains the other:
   `(t1 >= r1 AND t2 <= r2) OR (t1 <= r1 AND t2 >= r2)`.
-- `2`: include material when the spans overlap in any way: `t1 <= r2 AND t2 >= r1`.
-- `3`: include material only when the material span is fully contained by the result span:
+- `all_overlaps`: include material when the spans overlap in any way: `t1 <= r2 AND t2 >= r1`.
+- `strict`: include material only when the material span is fully contained by the result span:
   `t1 >= r1 AND t2 <= r2`.
 """
 
 
-class StrategyValues(IntEnum):
+class StrategyValues(StrEnum):
     """Allowed strategies for timespan matching."""
 
-    some_overlaps = 1
-    all_overlaps = 2
-    strict = 3
+    some_overlaps = "some_overlaps"
+    all_overlaps = "all_overlaps"
+    strict = "strict"
 
 
 StrategyParam: TypeAlias = Annotated[
     StrategyValues,
     Query(
         description=(
-            "Date-span matching strategy for time-based routes. `1` includes material when either the material span "
-            "contains the result period or the result period contains the material span; `2` includes any material "
-            "span that overlaps the result period; `3` includes only material spans contained by the result period."
+            "Date-span matching strategy for time-based routes. `some_overlaps` includes material when either the "
+            "material span contains the result period or the result period contains the material span; `all_overlaps` "
+            "includes any material span that overlaps the result period; `strict` includes only material spans "
+            "contained by the result period."
         )
     ),
 ]
