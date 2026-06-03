@@ -38,8 +38,8 @@ FREQ_RELATIVE_MULTIPLIER = 1_000_000
 SPLIT_SUFFIX = "_yearly"
 
 
-class RelationType(StrEnum):
-    """Relation lookup type."""
+class TermType(StrEnum):
+    """Type of the queried term."""
 
     word = "word"
     lexeme = "lexeme"
@@ -94,7 +94,7 @@ By default `/relations` returns overall relation statistics. Set `split=true` to
 
 Get dependency relations for the lexeme `ge..vb.1`:
 
-`/relations?term=ge..vb.1&type=lexeme&corpus=ROMI`
+`/relations?term=ge..vb.1&term_type=lexeme&corpus=ROMI`
 """
 
 RELATIONS_TIME_DESCRIPTION = """Get word-picture dependency relations grouped by year or multi-year period.
@@ -122,15 +122,15 @@ This is the sentence lookup companion to `/relations_time`. It returns the same 
 TermParam: TypeAlias = Annotated[
     str,
     Query(
-        description="Word form or lexeme to look up. Use `type=lexeme` when the value is a lexeme.",
+        description="Word form or lexeme to look up. Use `term_type=lexeme` when the value is a lexeme.",
         examples=["ge..vb.1", "är"],
     ),
 ]
 
-RelationTypeParam: TypeAlias = Annotated[
-    RelationType,
+TermTypeParam: TypeAlias = Annotated[
+    TermType,
     Query(
-        alias="type",
+        alias="term_type",
         description="Interpret `term` as a plain word form or as a lexeme.",
     ),
 ]
@@ -1634,7 +1634,7 @@ async def _relations_impl(
     ctx: CtxDep,
     corpora: list[str],
     term: str,
-    relation_type: RelationType,
+    term_type: TermType,
     min_freq: int | None,
     sort_field: RelationsSort,
     max_results: int,
@@ -1654,7 +1654,7 @@ async def _relations_impl(
         ctx: Common dependencies.
         corpora: List of corpus names.
         term: The target term.
-        relation_type: Whether the target is a word or lexeme.
+        term_type: The type of the target term (lexeme or word form).
         min_freq: Minimum frequency filter or `None`.
         sort_field: The field to sort results by.
         max_results: Maximum number of results per relation and direction.
@@ -1678,7 +1678,7 @@ async def _relations_impl(
         yield {"error": "Both split and overall results are disabled."}
         return
 
-    is_lexeme = relation_type == RelationType.lexeme
+    is_lexeme = term_type == TermType.lexeme
     limit_per_period = max_scope == MaxScope.per_period
     time_filter = start_year is not None or end_year is not None
     # Use split tables whenever split output or year filtering is requested
@@ -1948,7 +1948,7 @@ async def relations(
     ctx: CtxDep,
     corpus: params.CorpusParam,
     term: TermParam,
-    relation_type: RelationTypeParam = RelationType.word,
+    term_type: TermTypeParam = TermType.word,
     min_freq: MinFreqParam = None,
     max_results: MaxResultsParam = 15,
     sort: RelationsSortParam = RelationsSort.mi,
@@ -1971,7 +1971,7 @@ async def relations(
         ctx=ctx,
         corpora=corpus,
         term=term,
-        relation_type=relation_type,
+        term_type=term_type,
         min_freq=min_freq,
         sort_field=sort,
         max_results=max_results,
@@ -2001,7 +2001,7 @@ async def relations_time(
     ctx: CtxDep,
     corpus: params.CorpusParam,
     term: TermParam,
-    relation_type: RelationTypeParam = RelationType.word,
+    term_type: TermTypeParam = TermType.word,
     min_freq: MinFreqParam = None,
     max_results: MaxResultsParam = 15,
     sort: RelationsSortParam = RelationsSort.mi,
@@ -2023,7 +2023,7 @@ async def relations_time(
         ctx=ctx,
         corpora=corpus,
         term=term,
-        relation_type=relation_type,
+        term_type=term_type,
         min_freq=min_freq,
         sort_field=sort,
         max_results=max_results,
