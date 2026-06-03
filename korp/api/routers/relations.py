@@ -262,11 +262,11 @@ class RelationRow(BaseModel):
     """A word-picture relation row."""
 
     head: str = Field(..., description="Head word form or lexeme.", examples=["cat"])
-    headpos: str = Field(..., description="Part of speech for the head.", examples=["NN"])
+    head_pos: str = Field(..., description="Part of speech for the head.", examples=["NN"])
     rel: str = Field(..., description="Dependency relation label.", examples=["AT"])
     dep: str = Field(..., description="Dependent word form or lexeme.", examples=["black"])
-    deppos: str = Field(..., description="Part of speech for the dependent.", examples=["JJ"])
-    depextra: str = Field(..., description="Dependent prefix or extra string data.", examples=[""])
+    dep_pos: str = Field(..., description="Part of speech for the dependent.", examples=["JJ"])
+    dep_extra: str = Field(..., description="Dependent prefix or extra string data.", examples=[""])
     source: list[str] = Field(
         ...,
         description=(
@@ -401,11 +401,11 @@ def _relation_output(entry: dict, measures: Container[Measures]) -> dict[str, st
     """
     output: dict[str, str | int | float] = {
         "head": entry["head"],
-        "headpos": entry["headpos"],
+        "head_pos": entry["head_pos"],
         "rel": entry["rel"],
         "dep": entry["dep"],
-        "deppos": entry["deppos"],
-        "depextra": entry["depextra"],
+        "dep_pos": entry["dep_pos"],
+        "dep_extra": entry["dep_extra"],
         "source": entry["source"],
     }
     if Measures.freq in measures:
@@ -861,10 +861,10 @@ def _build_overall_only_relations(
                     "role": row["role"],
                     "rel": rel,
                     "head": row["head_string"],
-                    "headpos": head_pos,
+                    "head_pos": head_pos,
                     "dep": row["dep_string"],
-                    "deppos": dep_pos,
-                    "depextra": dep_extra,
+                    "dep_pos": dep_pos,
+                    "dep_extra": dep_extra,
                     "freq": 0,
                     "head_rel_freq": 0,
                     "dep_rel_freq": 0,
@@ -899,10 +899,10 @@ def _build_overall_only_relations(
                 "role": bucket["role"],
                 "rel": bucket["rel"],
                 "head": bucket["head"],
-                "headpos": bucket["headpos"],
+                "head_pos": bucket["head_pos"],
                 "dep": bucket["dep"],
-                "deppos": bucket["deppos"],
-                "depextra": bucket["depextra"],
+                "dep_pos": bucket["dep_pos"],
+                "dep_extra": bucket["dep_extra"],
                 "freq": freq,
                 "freq_relative": _calc_freq_relative(freq, corpus_size),
                 "mi": mi_value,
@@ -1450,11 +1450,11 @@ def _build_time_rows(
             {
                 "role": role,
                 "head": strings["head_string"],
-                "headpos": head_pos,
+                "head_pos": head_pos,
                 "rel": rel,
                 "dep": strings["dep_string"],
-                "deppos": dep_pos,
-                "depextra": dep_extra,
+                "dep_pos": dep_pos,
+                "dep_extra": dep_extra,
                 "period_start": row["period_start"],
                 "period_end": row["period_end"],
                 "freq": row["freq"],
@@ -1855,10 +1855,10 @@ async def _relations_impl(
                     "key": key,
                     "rel": rel,
                     "head": strings["head_string"],
-                    "headpos": head_pos,
+                    "head_pos": head_pos,
                     "dep": strings["dep_string"],
-                    "deppos": dep_pos,
-                    "depextra": dep_extra,
+                    "dep_pos": dep_pos,
+                    "dep_extra": dep_extra,
                     "freq": int(bucket["freq"]),
                     "freq_relative": _calc_freq_relative(int(bucket["freq"]), total_corpus_size),
                     "mi": bucket["mi"],
