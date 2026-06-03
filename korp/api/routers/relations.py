@@ -94,7 +94,7 @@ By default `/relations` returns overall relation statistics. Set `split=true` to
 
 Get dependency relations for the lexeme `ge..vb.1`:
 
-`/relations?word=ge..vb.1&type=lexeme&corpus=ROMI`
+`/relations?term=ge..vb.1&type=lexeme&corpus=ROMI`
 """
 
 RELATIONS_TIME_DESCRIPTION = """Get word-picture dependency relations grouped by year or multi-year period.
@@ -119,7 +119,7 @@ This is the sentence lookup companion to `/relations_time`. It returns the same 
 `/relations_sentences`.
 """
 
-WordParam: TypeAlias = Annotated[
+TermParam: TypeAlias = Annotated[
     str,
     Query(
         description="Word form or lexeme to look up. Use `type=lexeme` when the value is a lexeme.",
@@ -131,7 +131,7 @@ RelationTypeParam: TypeAlias = Annotated[
     RelationType,
     Query(
         alias="type",
-        description="Interpret `word` as a plain word form or as a lexeme.",
+        description="Interpret `term` as a plain word form or as a lexeme.",
     ),
 ]
 
@@ -438,10 +438,10 @@ def _table_names(corpus: str, *, split: bool) -> dict[str, str]:
 
 
 def _lexeme_clause(lexeme: bool, *, second: bool = False) -> str:
-    """Return SQL clause for lexeme or wordform selection.
+    """Return SQL clause for lexeme or word form selection.
 
     Args:
-        lexeme: If `True`, select lexemes; if `False`, select wordforms.
+        lexeme: If `True`, select lexemes; if `False`, select word forms.
         second: If `True`, generate clause for the second query (dep); if `False`, for the first (head).
 
     Returns:
@@ -498,7 +498,7 @@ def _build_overall_triples_query(
 
     Args:
         corpus: The corpus name.
-        lexeme: If `True`, select lexemes; if `False`, select wordforms.
+        lexeme: If `True`, select lexemes; if `False`, select word forms.
         min_freq: Minimum frequency filter or `None` (no minimum).
 
     Returns:
@@ -523,7 +523,7 @@ def _build_overall_triples_query(
         Returns:
             SQL SELECT statement for the given role.
         """
-        word_alias = "s1" if role == "head" else "s2"
+        term_alias = "s1" if role == "head" else "s2"
         other_alias = "s2" if role == "head" else "s1"
         join_col = role  # "head" or "dep"
         other_col = "dep" if role == "head" else "head"
@@ -546,14 +546,14 @@ def _build_overall_triples_query(
         hr.freq AS head_rel_freq,
         dr.freq AS dep_rel_freq,
         '{corpus_label}' AS corpus
-    FROM `{strings}` AS {word_alias}
-    JOIN `{main}` AS f ON {word_alias}.id = f.{join_col}
+    FROM `{strings}` AS {term_alias}
+    JOIN `{main}` AS f ON {term_alias}.id = f.{join_col}
     JOIN `{strings}` AS {other_alias} ON f.{other_col} = {other_alias}.id
     JOIN `{rel_table}` AS r ON f.rel = r.rel
     JOIN `{head_rel}` AS hr ON f.head = hr.head AND f.rel = hr.rel
     JOIN `{dep_rel}` AS dr ON f.dep = dr.dep AND f.rel = dr.rel
     WHERE
-        {word_alias}.string = :word
+        {term_alias}.string = :term
         {lc}
         {freq_clause}
     """
@@ -574,7 +574,7 @@ def _build_split_triples_query(
 
     Args:
         corpus: The corpus name.
-        lexeme: If `True`, select lexemes; if `False`, select wordforms.
+        lexeme: If `True`, select lexemes; if `False`, select word forms.
         min_freq: Minimum frequency filter or `None`.
         start_year: Start year (inclusive) or `None`.
         end_year: End year (inclusive) or `None`.
@@ -599,7 +599,7 @@ def _build_split_triples_query(
     WITH target AS (
         SELECT s.id
         FROM `{tables["strings"]}` AS s
-        WHERE s.string = :word
+        WHERE s.string = :term
     )
     SELECT
         'head' AS role,
@@ -666,7 +666,7 @@ def _build_head_or_dep_query(
     Args:
         corpus: The corpus name.
         role: Whether to build a query for "head" or "dep" relations.
-        lexeme: If `True`, select lexemes; if `False`, select wordforms.
+        lexeme: If `True`, select lexemes; if `False`, select word forms.
         start_year: Start year (inclusive) or `None`.
         end_year: End year (inclusive) or `None`.
 
@@ -692,7 +692,7 @@ def _build_head_or_dep_query(
     WITH target AS (
         SELECT s.id
         FROM `{tables["strings"]}` AS s
-        WHERE s.string = :word
+        WHERE s.string = :term
     ),
     {col}_scope AS (
         SELECT DISTINCT f.{col}, f.rel
@@ -1332,7 +1332,7 @@ async def _fetch_mappings(
 async def _fetch_split_relation_rows(
     conn: AsyncConnection,
     corpus: str,
-    word: str,
+    term: str,
     is_lexeme: bool,
     min_freq: int | None,
     start_year: int | None = None,
@@ -1343,8 +1343,8 @@ async def _fetch_split_relation_rows(
     Args:
         conn: Async SQLAlchemy connection.
         corpus: The corpus name.
-        word: The target word.
-        is_lexeme: If `True`, select lexemes; if `False`, select wordforms.
+        term: The target term.
+        is_lexeme: If `True`, select lexemes; if `False`, select word forms.
         min_freq: Minimum frequency filter or `None`.
         start_year: Start year (inclusive) or `None`.
         end_year: End year (inclusive) or `None`.
@@ -1368,9 +1368,9 @@ async def _fetch_split_relation_rows(
     rel_sql, rel_params = _build_rel_query(corpus, start_year=start_year, end_year=end_year)
 
     triples, heads, deps, rels = await asyncio.gather(
-        _fetch_mappings(conn, triple_sql, {"word": word, **triple_params}),
-        _fetch_mappings(conn, head_sql, {"word": word, **head_params}),
-        _fetch_mappings(conn, dep_sql, {"word": word, **dep_params}),
+        _fetch_mappings(conn, triple_sql, {"term": term, **triple_params}),
+        _fetch_mappings(conn, head_sql, {"term": term, **head_params}),
+        _fetch_mappings(conn, dep_sql, {"term": term, **dep_params}),
         _fetch_mappings(conn, rel_sql, rel_params),
     )
 
@@ -1385,7 +1385,7 @@ async def _fetch_split_relation_rows(
 async def _fetch_overall_relation_rows(
     conn: AsyncConnection,
     corpus: str,
-    word: str,
+    term: str,
     is_lexeme: bool,
     min_freq: int | None,
 ) -> dict[str, object]:
@@ -1394,15 +1394,15 @@ async def _fetch_overall_relation_rows(
     Args:
         conn: Async SQLAlchemy connection.
         corpus: The corpus name.
-        word: The target word.
-        is_lexeme: If `True`, select lexemes; if `False`, select wordforms.
+        term: The target term.
+        is_lexeme: If `True`, select lexemes; if `False`, select word forms.
         min_freq: Minimum frequency filter or `None`.
 
     Returns:
         A dictionary containing relation rows and frequency maps.
     """
     sql, params = _build_overall_triples_query(corpus, lexeme=is_lexeme, min_freq=min_freq)
-    triples = await _fetch_mappings(conn, sql, {"word": word, **params})
+    triples = await _fetch_mappings(conn, sql, {"term": term, **params})
 
     # Maps for deduplicating head/dep/rel frequencies across rows
     head_rel_map: Counter[tuple[int, str, str]] = Counter()
@@ -1633,7 +1633,7 @@ async def _existing_tables(conn: AsyncConnection, pattern: str) -> set[str]:
 async def _relations_impl(
     ctx: CtxDep,
     corpora: list[str],
-    word: str,
+    term: str,
     relation_type: RelationType,
     min_freq: int | None,
     sort_field: RelationsSort,
@@ -1653,7 +1653,7 @@ async def _relations_impl(
     Args:
         ctx: Common dependencies.
         corpora: List of corpus names.
-        word: The target word or lexeme.
+        term: The target term.
         relation_type: Whether the target is a word or lexeme.
         min_freq: Minimum frequency filter or `None`.
         sort_field: The field to sort results by.
@@ -1693,7 +1693,7 @@ async def _relations_impl(
     cached_corpora: set[str] = set()
 
     if ctx.common.cache:
-        cache_checksum = utils.get_hash((word, is_lexeme, min_freq, use_split_data, start_year, end_year))
+        cache_checksum = utils.get_hash((term, is_lexeme, min_freq, use_split_data, start_year, end_year))
         cache_prefixes = await caching.cache_prefix(ctx.cache, corpora)
         for corpus in corpora:
             cache_key = f"{cache_prefixes[corpus]}:relations_{cache_checksum}"
@@ -1739,7 +1739,7 @@ async def _relations_impl(
                 data = await _fetch_split_relation_rows(
                     conn,
                     corpus,
-                    word,
+                    term,
                     is_lexeme,
                     min_freq,
                     start_year=start_year,
@@ -1747,7 +1747,7 @@ async def _relations_impl(
                 )
             else:
                 # Neither split output nor year filtering requested: use overall-optimized query
-                data = await _fetch_overall_relation_rows(conn, corpus, word, is_lexeme, min_freq)
+                data = await _fetch_overall_relation_rows(conn, corpus, term, is_lexeme, min_freq)
             corpus_results[corpus] = data
             if ctx.common.cache and cache_checksum is not None:
                 cache_key = f"{cache_prefixes[corpus]}:relations_{cache_checksum}"
@@ -1947,7 +1947,7 @@ async def _relations_impl(
 async def relations(
     ctx: CtxDep,
     corpus: params.CorpusParam,
-    word: WordParam,
+    term: TermParam,
     relation_type: RelationTypeParam = RelationType.word,
     min_freq: MinFreqParam = None,
     max_results: MaxResultsParam = 15,
@@ -1970,7 +1970,7 @@ async def relations(
     async for item in _relations_impl(
         ctx=ctx,
         corpora=corpus,
-        word=word,
+        term=term,
         relation_type=relation_type,
         min_freq=min_freq,
         sort_field=sort,
@@ -2000,7 +2000,7 @@ async def relations(
 async def relations_time(
     ctx: CtxDep,
     corpus: params.CorpusParam,
-    word: WordParam,
+    term: TermParam,
     relation_type: RelationTypeParam = RelationType.word,
     min_freq: MinFreqParam = None,
     max_results: MaxResultsParam = 15,
@@ -2022,7 +2022,7 @@ async def relations_time(
     async for item in _relations_impl(
         ctx=ctx,
         corpora=corpus,
-        word=word,
+        term=term,
         relation_type=relation_type,
         min_freq=min_freq,
         sort_field=sort,
