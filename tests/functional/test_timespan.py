@@ -31,7 +31,7 @@ def timespan(get_json: Callable, database_tables: Callable) -> Callable:
 class TestTimespan:
     """Tests for `/timespan`."""
 
-    @pytest.mark.parametrize("granularity", ["y", "m", "d", "h", "n", "s"])
+    @pytest.mark.parametrize("granularity", ["year", "month", "day", "hour", "minute", "second"])
     @staticmethod
     def test_timespan_granularity(granularity: str, timespan: Callable[..., dict]) -> None:
         """Test `/timespan` with granularity on testcorpus3 and testcorpus4."""

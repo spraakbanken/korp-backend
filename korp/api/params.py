@@ -1,6 +1,6 @@
 """Common parameter type aliases for Korp routes."""
 
-from enum import IntEnum, StrEnum
+from enum import StrEnum
 from typing import Annotated, TypeAlias
 
 from fastapi import Query
@@ -95,20 +95,19 @@ ExpandPrequeriesParam: TypeAlias = Annotated[
 class GranularityValues(StrEnum):
     """Allowed granularities for time-related routes."""
 
-    year = "y"
-    month = "m"
-    day = "d"
-    hour = "h"
-    minute = "n"
-    second = "s"
+    year = "year"
+    month = "month"
+    day = "day"
+    hour = "hour"
+    minute = "minute"
+    second = "second"
 
 
 GranularityParam: TypeAlias = Annotated[
     GranularityValues,
     Query(
         description=(
-            "Time resolution for returned buckets: `y` = year, `m` = month, `d` = day, `h` = hour, `n` = minute, "
-            "`s` = second."
+            "Time resolution for returned buckets: `year`, `month`, `day`, `hour`, `minute`, or `second`."
         )
     ),
 ]
@@ -122,8 +121,8 @@ This matters when the material is dated more coarsely than the requested span. F
 `2005`, should it contribute to a query limited to `2005-01-01` through `2005-01-31`?
 
 In the rules below, the material time span is the date span stored for a text. The result time span is either the
-`date_from`/`date_to` filter or one generated result bucket, such as all of `2015` for `granularity=y` or January 2015
-for `granularity=m`.
+`date_from`/`date_to` filter or one generated result bucket, such as all of `2015` for `granularity=year` or January
+2015 for `granularity=month`.
 
 Let `t1` and `t2` be the start and end of the material time span, and `r1` and `r2` the start and end of the result time
 span:

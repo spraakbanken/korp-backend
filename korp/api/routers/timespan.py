@@ -50,7 +50,7 @@ Use `date_from` and `date_to` together to limit the date range.
 
 Show yearly token distribution for a corpus:
 
-`/timespan?corpus=VIVILL&granularity=y`
+`/timespan?corpus=VIVILL&granularity=year`
 """
 
 DateFromParam: TypeAlias = Annotated[
@@ -186,7 +186,7 @@ async def timespan(
     Args:
         ctx: The request context.
         corpus: Comma-separated list of corpora.
-        granularity: Granularity of result ('y' = year, 'm' = month, 'd' = day, 'h' = hour, 'n' = minute, 's' = second).
+        granularity: Granularity of result.
         combined: Whether to include combined results.
         per_corpus: Whether to include results per corpus.
         strategy: Strategy for date range matching.
@@ -226,7 +226,7 @@ async def get_timespan(
     Args:
         ctx: The request context.
         corpora: List of corpora.
-        granularity: Granularity of result ('y' = year, 'm' = month, 'd' = day, 'h' = hour, 'n' = minute, 's' = second).
+        granularity: Granularity of result.
         combined: Whether to include combined results.
         per_corpus: Whether to include results per corpus.
         strategy: Strategy for date range matching.
@@ -551,7 +551,7 @@ def timespan_calculator(
     Args:
         timedata: List of time data dictionaries with keys 'corpus', 'df' (datefrom), 'dt' (dateto), and 'sum' (token
             count).
-        granularity: Granularity of result ('y' = year, 'm' = month, 'd' = day, 'h' = hour, 'n' = minute, 's' = second).
+        granularity: Granularity of result.
         combined: Whether to include combined results.
         per_corpus: Whether to include results per corpus.
         strategy: Strategy for date range matching.
