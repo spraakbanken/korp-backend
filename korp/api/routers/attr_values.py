@@ -38,8 +38,8 @@ Use `attr` to request one or more attributes. A value can be a single attribute,
 using `>`, such as `text_author>text_title`. Hierarchical expressions produce nested objects, which are useful for
 building dependent filters: for example, authors as top-level keys and their titles as child values.
 
-By default the result contains value lists. When `count=true`, leaf values are token counts instead. Use `split` for
-set-valued attributes whose values should be split on `|` before being included in the result.
+By default the result contains value lists. When `include_counts=true`, leaf values are token counts instead. Use
+`split` for set-valued attributes whose values should be split on `|` before being included in the result.
 
 Use `combined` and `per_corpus` to choose whether to include merged values across all selected corpora, per-corpus
 values, or both. When `incremental=true`, progress keys such as `progress_corpora` and `progress_0` may be included
@@ -49,7 +49,7 @@ before the final result in the streamed JSON object.
 
 Get all authors and their titles with token counts:
 
-`/attr_values?corpus=ROMI&attr=text_author>text_title&count=true`
+`/attr_values?corpus=ROMI&attr=text_author>text_title&include_counts=true`
 """
 
 AttrParam: TypeAlias = Annotated[
@@ -73,7 +73,7 @@ AttrValuesSplitParam: TypeAlias = Annotated[
     BeforeValidator(utils.split_csv),
 ]
 
-IncludeCountParam: TypeAlias = Annotated[
+IncludeCountsParam: TypeAlias = Annotated[
     bool,
     Query(
         description=(
@@ -130,7 +130,7 @@ async def attr_values(
     ctx: CtxDep,
     corpus: params.CorpusParam,
     attr: AttrParam,
-    count: IncludeCountParam = False,
+    include_counts: IncludeCountsParam = False,
     per_corpus: params.PerCorpusParam = True,
     combined: params.CombinedParam = True,
     split: AttrValuesSplitParam = None,
@@ -141,7 +141,7 @@ async def attr_values(
         ctx: Request context.
         corpus: Comma-separated list of corpora.
         attr: Comma-separated list of attributes or attribute hierarchies.
-        count: Whether to include counts for each attribute value.
+        include_counts: Whether to include counts for each attribute value.
         per_corpus: Whether to include per-corpus results.
         combined: Whether to include combined results across corpora.
         split: Comma-separated list of attributes to split values for.
@@ -150,7 +150,6 @@ async def attr_values(
         Attribute values (and counts, if requested) for the specified corpora and attributes.
     """
     incremental = ctx.common.incremental
-    include_count = count
 
     await auth.check_authorization(corpus, ctx)
 
@@ -165,7 +164,7 @@ async def attr_values(
         for c in corpus:
             cache_prefixes[c] = await caching.cache_prefix(ctx.cache, c)
             for attribute in attr:
-                checksum = utils.get_hash((c, attribute, split, include_count))
+                checksum = utils.get_hash((c, attribute, split, include_counts))
                 data = await ctx.cache.get(f"{cache_prefixes[c]}:attr_values_{checksum}")
                 if data is not None:
                     result["corpora"][c][attribute] = data
@@ -234,7 +233,7 @@ async def attr_values(
                             vals_prod = [vals]
 
                         for combo in vals_prod:
-                            if include_count:
+                            if include_counts:
                                 cur = vals_dict
                                 for part in combo[:-1]:
                                     cur = cur.setdefault(part, {})
@@ -251,16 +250,16 @@ async def attr_values(
                             else [raw_val]
                         )
                         for v in split_vals:
-                            if include_count:
+                            if include_counts:
                                 corpus_stats_dict[v] = freq
                             else:
                                 corpus_stats_set.add(v)
 
                 if is_nested:
                     result["corpora"][c][attribute] = vals_dict
-                elif include_count and corpus_stats_dict:
+                elif include_counts and corpus_stats_dict:
                     result["corpora"][c][attribute] = corpus_stats_dict
-                elif not include_count and corpus_stats_set:
+                elif not include_counts and corpus_stats_set:
                     result["corpora"][c][attribute] = sorted(corpus_stats_set)
 
                 if incremental:
@@ -280,7 +279,7 @@ async def attr_values(
             for attribute in attr:
                 if (c, attribute) in from_cache:
                     continue
-                checksum = utils.get_hash((c, attribute, split, include_count))
+                checksum = utils.get_hash((c, attribute, split, include_counts))
                 try:
                     cache_key = f"{cache_prefixes[c]}:attr_values_{checksum}"
                     await ctx.cache.add(cache_key, result["corpora"][c].get(attribute, {}))
