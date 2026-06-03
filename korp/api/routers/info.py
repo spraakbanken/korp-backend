@@ -154,8 +154,8 @@ async def info(
         result = await cache.get(f"{cache_prefix}:info")
         if result:
             if ctx.common.debug:
-                result.setdefault("DEBUG", {})
-                result["DEBUG"]["cache_read"] = True
+                result.setdefault("debug", {})
+                result["debug"]["cache_read"] = True
             yield result
             return
 
@@ -177,8 +177,8 @@ async def info(
         except CacheError:
             added = False
         if added and ctx.common.debug:
-            result.setdefault("DEBUG", {})
-            result["DEBUG"]["cache_saved"] = True
+            result.setdefault("debug", {})
+            result["debug"]["cache_saved"] = True
 
     yield result
 
@@ -234,9 +234,9 @@ async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bo
         # Check if whole query is cached
         if cached_result := await cache.get(combined_cache_key):
             if ctx.common.debug:
-                cached_result.setdefault("DEBUG", {})
-                cached_result["DEBUG"]["cache_read"] = True
-                cached_result["DEBUG"]["checksum"] = checksum_combined
+                cached_result.setdefault("debug", {})
+                cached_result["debug"]["cache_read"] = True
+                cached_result["debug"]["checksum"] = checksum_combined
             return cached_result
 
     result: dict[str, Any] = {"corpora": {}}
@@ -312,6 +312,6 @@ async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bo
             pass
         else:
             if saved and ctx.common.debug:
-                result.setdefault("DEBUG", {})
-                result["DEBUG"]["cache_saved"] = True
+                result.setdefault("debug", {})
+                result["debug"]["cache_saved"] = True
     return result

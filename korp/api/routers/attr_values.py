@@ -170,8 +170,8 @@ async def attr_values(
                 if data is not None:
                     result["corpora"][c][attribute] = data
                     if ctx.common.debug:
-                        result.setdefault("DEBUG", {"caches_read": []})
-                        result["DEBUG"]["caches_read"].append(f"{c}:{attribute}")
+                        result.setdefault("debug", {"caches_read": []})
+                        result["debug"]["caches_read"].append(f"{c}:{attribute}")
                     from_cache.add((c, attribute))
                 else:
                     all_cache = False
@@ -288,9 +288,9 @@ async def attr_values(
                     pass
                 else:
                     if ctx.common.debug:
-                        result.setdefault("DEBUG", {})
-                        result["DEBUG"].setdefault("caches_saved", [])
-                        result["DEBUG"]["caches_saved"].append(f"{c}:{attribute}")
+                        result.setdefault("debug", {})
+                        result["debug"].setdefault("caches_saved", [])
+                        result["debug"]["caches_saved"].append(f"{c}:{attribute}")
 
     if not per_corpus:
         del result["corpora"]

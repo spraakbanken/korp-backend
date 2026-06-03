@@ -99,8 +99,8 @@ database work is still in progress, which helps avoid proxy and browser timeouts
 
 Because HTTP status and headers are sent before the full result has been computed, errors that happen after streaming
 has started cannot be reported by changing the HTTP status code. In those cases the response still has status `200`,
-and the JSON object contains an `ERROR` field with the error details. Clients should therefore check the response body
-for `ERROR` instead of treating HTTP `200` alone as a successful API result. When `debug=true`, errors may include extra
+and the JSON object contains an `error` field with the error details. Clients should therefore check the response body
+for `error` instead of treating HTTP `200` alone as a successful API result. When `debug=true`, errors may include extra
 debug information such as tracebacks.
 
 Errors that happen before the route starts streaming may still use normal HTTP status codes, for example malformed
@@ -337,7 +337,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         schema = original_openapi()
 
         # Reorder response properties
-        common_keys = ("time", "DEBUG", "ERROR")
+        common_keys = ("time", "debug", "error")
         comps = schema.get("components", {}).get("schemas", {})
         for s in comps.values():
             props = s.get("properties")

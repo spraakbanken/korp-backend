@@ -41,4 +41,4 @@ def test_format_error_unwraps_exception_group() -> None:
         response = client.get("/grouped")
 
     assert response.status_code == HTTP_OK
-    assert response.json()["ERROR"] == {"type": "ValueError", "value": "crash"}
+    assert response.json()["error"] == {"type": "ValueError", "value": "crash"}

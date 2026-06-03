@@ -838,7 +838,7 @@ async def perform_count(
 
     if ctx.common.debug:
         debug.update({"cqp": cqp_combined, "simple": simple})
-        result["DEBUG"] = debug
+        result["debug"] = debug
 
     yield result
 
@@ -1058,7 +1058,7 @@ async def count_time(
     if per_corpus:
         result["corpora"] = {}
     if ctx.common.debug:
-        result["DEBUG"] = {"cqp": count_params.cqp_query}
+        result["debug"] = {"cqp": count_params.cqp_query}
 
     # Get date range of selected corpora
     corpus_data = await info.get_corpus_info(ctx=ctx, corpora=count_params.corpora, no_combined_cache=True)

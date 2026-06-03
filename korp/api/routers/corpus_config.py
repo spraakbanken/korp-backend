@@ -165,8 +165,8 @@ async def corpus_config(
         result = await cache.get(f"{await caching.cache_prefix(cache, config=True)}:corpus_config_{cache_checksum}")
         if result:
             if ctx.common.debug:
-                result.setdefault("DEBUG", {})
-                result["DEBUG"]["cache_read"] = True
+                result.setdefault("debug", {})
+                result["debug"]["cache_read"] = True
             yield result
             return
 
@@ -188,12 +188,12 @@ async def corpus_config(
             pass
         else:
             if added and ctx.common.debug:
-                result.setdefault("DEBUG", {})
-                result["DEBUG"]["cache_saved"] = True
+                result.setdefault("debug", {})
+                result["debug"]["cache_saved"] = True
 
     if ctx.common.debug:
-        result.setdefault("DEBUG", {})
-        result["DEBUG"]["yaml_loader"] = SafeLoader.__name__
+        result.setdefault("debug", {})
+        result["debug"]["yaml_loader"] = SafeLoader.__name__
 
     yield result
 

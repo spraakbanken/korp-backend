@@ -273,8 +273,8 @@ async def get_timespan(
         result = await ctx.cache.get(cache_combined_key)
         if result is not None:
             if ctx.common.debug:
-                result.setdefault("DEBUG", {})
-                result["DEBUG"]["cache_read"] = True
+                result.setdefault("debug", {})
+                result["debug"]["cache_read"] = True
             return result
 
         # Look for per-corpus caches

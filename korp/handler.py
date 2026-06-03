@@ -219,10 +219,10 @@ def _format_error(exc: BaseException, *, debug: bool) -> dict[str, Any]:
         A dictionary representing the error response.
     """
     error = _unwrap_error(exc)
-    err: dict[str, Any] = {"ERROR": {"type": type(error).__name__, "value": str(error)}}
+    err: dict[str, Any] = {"error": {"type": type(error).__name__, "value": str(error)}}
     if debug:
         tb = traceback.format_exception(type(error), error, error.__traceback__)
-        err["ERROR"]["traceback"] = [line.rstrip("\n") for line in tb]
+        err["error"]["traceback"] = [line.rstrip("\n") for line in tb]
     return err
 
 

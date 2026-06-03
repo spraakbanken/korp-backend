@@ -73,8 +73,8 @@ class TestQuery:
         num = 1
         data = query_testcorpus_kwic_rows(num, num + 1)
         errmsg = f"At most {num} KWIC rows can be returned per call."
-        assert "ERROR" in data
-        assert errmsg in data["ERROR"]["value"]
+        assert "error" in data
+        assert errmsg in data["error"]["value"]
 
     @staticmethod
     def test_query_max_kwic_unlimited(query_testcorpus_kwic_rows: Callable[[int, int], dict]) -> None:
@@ -89,5 +89,5 @@ class TestQuery:
         """Test that invalid CQP in parallel query execution exposes the underlying CQP error."""
         data = query_testcorpus("unquoted")
 
-        assert data["ERROR"]["type"] == "CQPError"
-        assert "Corpus ``unquoted'' is undefined" in data["ERROR"]["value"]
+        assert data["error"]["type"] == "CQPError"
+        assert "Corpus ``unquoted'' is undefined" in data["error"]["value"]

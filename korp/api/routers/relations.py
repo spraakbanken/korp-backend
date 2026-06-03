@@ -1675,7 +1675,7 @@ async def _relations_impl(
     await auth.check_authorization(corpora, ctx)
 
     if not include_split and not include_overall:
-        yield {"ERROR": "Both split and overall results are disabled."}
+        yield {"error": "Both split and overall results are disabled."}
         return
 
     is_lexeme = relation_type == RelationType.lexeme
@@ -1723,7 +1723,7 @@ async def _relations_impl(
         corpora_rest = [c for c in corpora if c not in cached_corpora]
 
         if not corpora:
-            yield {"ERROR": "No word picture data available for the selected corpora."}
+            yield {"error": "No word picture data available for the selected corpora."}
             return
 
         if corpora_rest and ctx.common.incremental:
@@ -2173,7 +2173,7 @@ async def _relations_sentences_impl(
     result["corpus_order"] = corpora
     if ctx.common.debug:
         debug["cqp_time"] = time.perf_counter() - cqp_query_start_time
-        result["DEBUG"] = debug
+        result["debug"] = debug
     return result
 
 

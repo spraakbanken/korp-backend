@@ -732,7 +732,7 @@ async def perform_query(
     )
 
     if debug:
-        result["DEBUG"] = debug
+        result["debug"] = debug
 
     yield result
 
