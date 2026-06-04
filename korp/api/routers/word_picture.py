@@ -87,8 +87,8 @@ The statistical measures included in each row are controlled by `measures`. `fre
 `freq_relative` is the relation frequency per million tokens, `mi` is lexicographer's mutual information, and `rmi` is
 relative MI.
 
-By default `/word_picture` returns overall relation statistics. Set `split=true` to also include time-sliced data in
-`relations_time`; use `/word_picture/time` when you only want the time-sliced view.
+By default `/word_picture` returns overall relation statistics. Set `include_time=true` to also include time-sliced data
+in `relations_time`; use `/word_picture/time` when you only want the time-sliced view.
 
 ### Example
 
@@ -160,7 +160,7 @@ RelationsSortParam: TypeAlias = Annotated[
     Query(description="Measure used for sorting and for selecting rows when `max` applies."),
 ]
 
-RelationsSplitParam: TypeAlias = Annotated[
+RelationsIncludeTimeParam: TypeAlias = Annotated[
     bool,
     Query(description="Whether `/word_picture` should include time-sliced results in `relations_time`."),
 ]
@@ -308,8 +308,8 @@ class RelationsResponse(schemas.CommonResponse):
     relations_time: dict[str, list[RelationRow]] | SkipJsonSchema[None] = Field(
         None,
         description=(
-            "Time-sliced relation rows keyed by year or period. Included when `split=true` on `/word_picture` or when "
-            "using `/word_picture/time`."
+            "Time-sliced relation rows keyed by year or period. Included when `include_time=true` on `/word_picture` "
+            "or when using `/word_picture/time`."
         ),
     )
     token_frequencies: dict[str, int] | SkipJsonSchema[None] = Field(
@@ -1952,7 +1952,7 @@ async def relations(
     min_freq: MinFreqParam = None,
     max_results: MaxResultsParam = 15,
     sort: RelationsSortParam = WordPictureSort.mi,
-    split: RelationsSplitParam = False,
+    include_time: RelationsIncludeTimeParam = False,
     period_size: PeriodSizeParam = 1,
     period_align: PeriodAlignParam = PeriodAlign.newest,
     start_year: YearParam = None,
@@ -1975,7 +1975,7 @@ async def relations(
         min_freq=min_freq,
         sort_field=sort,
         max_results=max_results,
-        include_split=split,
+        include_split=include_time,
         period_size=period_size,
         period_align=period_align,
         start_year=start_year,
