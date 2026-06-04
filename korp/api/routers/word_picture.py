@@ -138,7 +138,6 @@ TermTypeParam: TypeAlias = Annotated[
 MinFreqParam: TypeAlias = Annotated[
     int | None,
     Query(
-        alias="min",
         ge=0,
         description="Minimum absolute relation frequency. Omit the parameter to use no frequency cutoff.",
         examples=[5],
@@ -148,7 +147,6 @@ MinFreqParam: TypeAlias = Annotated[
 MaxResultsParam: TypeAlias = Annotated[
     int,
     Query(
-        alias="max",
         ge=0,
         description=("Maximum number of rows to return for each relation label and direction. Use `0` for no limit."),
         examples=[15],
