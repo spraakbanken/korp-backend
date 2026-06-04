@@ -1,5 +1,5 @@
 
-# Korp MySQL database table information for relations tables
+# Korp MySQL database table information for word picture tables
 
 
 # Definitions of variables referenced in "definitions" as "{var}"
@@ -9,10 +9,10 @@
       enum('SS','OBJ','ADV','AT','ET','PA','APP','AUX','CPL','CPR','CRD','MOD','OTH','OWN','VPT') NOT NULL DEFAULT 'SS'
 
 
-- tablename: relations_{CORPUS}
+- tablename: word_picture_{CORPUS}
   filenames:
-  - 'relations/{corpus}([_:+]relations)?'
-  - '{corpus}/relations'
+  - 'word_picture/{corpus}([_:+]word_picture)?'
+  - '{corpus}/word_picture'
   exclude_filenames:
   - '.*_(strings|rel|head_rel|dep_rel|sentences)'
   definition: |
@@ -30,10 +30,10 @@
     KEY `head-dep-bfhead-bfdep-rel-freq-id` (`head`,`dep`,`bfhead`,`bfdep`,`rel`,`freq`,`id`),
     KEY `dep-head-bfhead-bfdep-rel-freq-id` (`dep`,`head`,`bfhead`,`bfdep`,`rel`,`freq`,`id`)
 
-- tablename: relations_{CORPUS}_strings
+- tablename: word_picture_{CORPUS}_strings
   filenames:
-  - 'relations/{corpus}([_:+]relations)?_strings'
-  - '{corpus}/relations_strings'
+  - 'word_picture/{corpus}([_:+]word_picture)?_strings'
+  - '{corpus}/word_picture_strings'
   definition: |
     `id` int UNIQUE NOT NULL,
     `string` varchar(100) NOT NULL,
@@ -42,10 +42,10 @@
     PRIMARY KEY (`string`,`id`,`pos`,`stringextra`),
     KEY `id-string-pos-stringextra` (`id`,`string`,`pos`,`stringextra`)
 
-- tablename: relations_{CORPUS}_rel
+- tablename: word_picture_{CORPUS}_rel
   filenames:
-  - 'relations/{corpus}([_:+]relations)?_rel'
-  - '{corpus}/relations_rel'
+  - 'word_picture/{corpus}([_:+]word_picture)?_rel'
+  - '{corpus}/word_picture_rel'
   exclude_filenames:
   - .*_(head|dep)_rel
   definition: |
@@ -53,30 +53,30 @@
     `freq` int NOT NULL,
     PRIMARY KEY (`rel`,`freq`)
 
-- tablename: relations_{CORPUS}_head_rel
+- tablename: word_picture_{CORPUS}_head_rel
   filenames:
-  - 'relations/{corpus}([_:+]relations)?_head_rel'
-  - '{corpus}/relations_head_rel'
+  - 'word_picture/{corpus}([_:+]word_picture)?_head_rel'
+  - '{corpus}/word_picture_head_rel'
   definition: |
     `head` int NOT NULL,
     `rel` {rel_type},
     `freq` int NOT NULL,
     PRIMARY KEY (`head`,`rel`,`freq`)
 
-- tablename: relations_{CORPUS}_dep_rel
+- tablename: word_picture_{CORPUS}_dep_rel
   filenames:
-  - 'relations/{corpus}([_:+]relations)?_dep_rel'
-  - '{corpus}/relations_dep_rel'
+  - 'word_picture/{corpus}([_:+]word_picture)?_dep_rel'
+  - '{corpus}/word_picture_dep_rel'
   definition: |
     `dep` int NOT NULL,
     `rel` {rel_type},
     `freq` int NOT NULL,
     PRIMARY KEY (`dep`,`rel`,`freq`)
 
-- tablename: relations_{CORPUS}_sentences
+- tablename: word_picture_{CORPUS}_sentences
   filenames:
-  - 'relations/{corpus}([_:+]relations)?_sentences'
-  - '{corpus}/relations_sentences'
+  - 'word_picture/{corpus}([_:+]word_picture)?_sentences'
+  - '{corpus}/word_picture_sentences'
   definition: |
     `id` int NOT NULL,
     `sentence` varchar(64) NOT NULL,

@@ -199,13 +199,14 @@ A corpus dated 2006 would have the following values:
 This section describes the database tables needed to use the Word Picture, Lexeme Count and Trend Diagram features.
 If you don't need any of these features, you can skip this section.
 
-### Relations for the Word Picture
+### Database tables for the Word Picture
 
-The Word Picture data consists of head-relation-dependent triplets and frequencies.
-For every corpus, you need five database tables. The table structures are as follows:
+The Word Picture data consists of head-relation-dependent triplets and frequencies. For every corpus, you need six
+database tables. The prefix of the table names (`word_picture` by default) can be configured using the
+`DB_WORD_PICTURE_TABLE` variable. The table structures are as follows:
 
 ```text
-Table name: relations_CORPUSNAME  
+Table name: word_picture_CORPUSNAME  
 Charset:    UTF-8  
 
 Columns:  
@@ -226,7 +227,7 @@ Indexes:
     (dep, head, bfhead, bfdep, rel, freq, id)
 
 
-Table name: relations_CORPUSNAME_strings  
+Table name: word_picture_CORPUSNAME_strings  
 Charset:    UTF-8  
 
 Columns:  
@@ -240,7 +241,7 @@ Indexes:
     (id, string, pos, stringextra)
 
 
-Table name: relations_CORPUSNAME_rel  
+Table name: word_picture_CORPUSNAME_rel  
 Charset:    UTF-8  
 
 Columns:  
@@ -251,7 +252,7 @@ Indexes:
     (rel, freq)  
 
 
-Table name: relations_CORPUSNAME_head_rel  
+Table name: word_picture_CORPUSNAME_head_rel  
 Charset:    UTF-8  
 
 Columns:  
@@ -263,7 +264,7 @@ Indexes:
     (head, rel, freq)
 
 
-Table name: relations_CORPUSNAME_dep_rel  
+Table name: word_picture_CORPUSNAME_dep_rel  
 Charset:    UTF-8  
 
 Columns:  
@@ -275,11 +276,11 @@ Indexes:
     (dep, rel, freq)
 
 
-Table name: relations_CORPUSNAME_sentences  
+Table name: word_picture_CORPUSNAME_sentences  
 Charset:    UTF-8  
 
 Columns:  
-    id             int                  An ID from relations_CORPUSNAME
+    id             int                  An ID from word_picture_CORPUSNAME
     sentence       varchar(64)          A sentence ID (see the section about corpus structure above)  
     start          int                  The position of the first word of the relation in the sentence  
     end            int                  The position of the last word of the relation in the sentence  
@@ -288,7 +289,7 @@ Indexes:
     id
 ```
 
-In the main `relations_CORPUSNAME` table, each relation should be represented three times. Once with both dependent
+In the main `word_picture_CORPUSNAME` table, each relation should be represented three times. Once with both dependent
 and head as base forms, once with dependent as base form and head as word form, and once with dependent as
 word form and head as base form. This is to allow searching for both base forms and word forms, giving different
 results for different searched word forms, while the results are always displayed as base forms.

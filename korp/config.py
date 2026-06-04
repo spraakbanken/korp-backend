@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     DB_CHARSET: str = "utf8"
 
     # Word Picture table prefix
-    DB_WP_TABLE: str = "relations"
+    DB_WORD_PICTURE_TABLE: str = "word_picture"
 
     # Lexeme counts table name
     DB_LEXEME_COUNTS_TABLE: str = "lexeme_counts"

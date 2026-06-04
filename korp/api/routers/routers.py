@@ -10,8 +10,8 @@ from korp.api.routers import (
     loglike,
     misc,
     query,
-    relations,
     timespan,
+    word_picture,
 )
 
 routers = [
@@ -24,6 +24,6 @@ routers = [
     loglike.router,
     misc.router,
     query.router,
-    relations.router,
     timespan.router,
+    word_picture.router,
 ]

@@ -122,6 +122,7 @@ def app_factory(
             "CWB_REGISTRY": str(corpus_registry_dir),
             "CACHE_DIR": str(cache_dir),
             "CORPUS_CONFIG_DIR": str(corpus_config_dir),
+            "DB_WORD_PICTURE_TABLE": "word_picture",
         }
         # Update the configuration from the database configuration, as
         # custom pytest command-line options can be used to change the
