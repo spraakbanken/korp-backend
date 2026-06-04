@@ -233,7 +233,7 @@ def resolve_rate_limit(route_path: str, *, settings: Settings) -> str | None:
     2. Global default from `settings.RATE_LIMIT_DEFAULT`.
 
     Args:
-        route_path: The route path, e.g. `"/query"`.
+        route_path: The route path, e.g. `"/concordance"`.
         settings: Application settings.
 
     Returns:
@@ -242,7 +242,7 @@ def resolve_rate_limit(route_path: str, *, settings: Settings) -> str | None:
     normalized = route_path.lstrip("/")
     keys = (route_path, normalized) if normalized != route_path else (normalized,)
 
-    # Check per-route overrides (support both "/query" and "query" as keys)
+    # Check per-route overrides (support both "/concordance" and "concordance" as keys)
     for key in keys:
         if key in settings.RATE_LIMITS:
             return settings.RATE_LIMITS[key] or None  # Empty string disables

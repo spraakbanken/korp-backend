@@ -195,34 +195,34 @@ def test_multi_limit_reject_short_circuits_after_first_failed_limit() -> None:
 def test_resolve_rate_limit_returns_none_when_no_config() -> None:
     """Test that no effective limit is resolved without rate-limit config."""
     s = get_test_settings()
-    assert resolve_rate_limit("/query", settings=s) is None
+    assert resolve_rate_limit("/concordance", settings=s) is None
 
 
 def test_resolve_rate_limit_global_default() -> None:
     """Test that RATE_LIMIT_DEFAULT is used as the fallback."""
     s = get_test_settings(RATE_LIMIT_DEFAULT="60/minute")
-    assert resolve_rate_limit("/query", settings=s) == "60/minute"
+    assert resolve_rate_limit("/concordance", settings=s) == "60/minute"
 
 
 def test_resolve_rate_limit_per_route_overrides_global_default() -> None:
     """Test that per-route RATE_LIMITS override the global default."""
-    s = get_test_settings(RATE_LIMIT_DEFAULT="60/minute", RATE_LIMITS={"/query": "30/minute"})
-    assert resolve_rate_limit("/query", settings=s) == "30/minute"
+    s = get_test_settings(RATE_LIMIT_DEFAULT="60/minute", RATE_LIMITS={"/concordance": "30/minute"})
+    assert resolve_rate_limit("/concordance", settings=s) == "30/minute"
 
 
 def test_resolve_rate_limit_per_route_without_slash() -> None:
     """Test that RATE_LIMITS keys without a leading slash match route paths."""
-    s = get_test_settings(RATE_LIMITS={"query": "5/minute"})
-    assert resolve_rate_limit("/query", settings=s) == "5/minute"
+    s = get_test_settings(RATE_LIMITS={"concordance": "5/minute"})
+    assert resolve_rate_limit("/concordance", settings=s) == "5/minute"
 
 
 def test_resolve_rate_limit_empty_per_route_disables() -> None:
     """Test that an empty RATE_LIMITS value disables route rate limiting."""
-    s = get_test_settings(RATE_LIMIT_DEFAULT="60/minute", RATE_LIMITS={"/query": ""})
-    assert resolve_rate_limit("/query", settings=s) is None
+    s = get_test_settings(RATE_LIMIT_DEFAULT="60/minute", RATE_LIMITS={"/concordance": ""})
+    assert resolve_rate_limit("/concordance", settings=s) is None
 
 
 def test_resolve_rate_limit_unmatched_route_uses_default() -> None:
     """Test that routes without a per-route override use RATE_LIMIT_DEFAULT."""
-    s = get_test_settings(RATE_LIMIT_DEFAULT="60/minute", RATE_LIMITS={"/query": "30/minute"})
+    s = get_test_settings(RATE_LIMIT_DEFAULT="60/minute", RATE_LIMITS={"/concordance": "30/minute"})
     assert resolve_rate_limit("/other", settings=s) == "60/minute"

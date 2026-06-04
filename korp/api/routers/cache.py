@@ -19,7 +19,8 @@ CACHE_DESCRIPTION = """Refresh Korp's cache metadata and remove stale cache file
 
 This administration route compares the current corpus registry and corpus configuration files with the versions stored
 in Memcached. When a corpus or configuration has changed, the corresponding cache version is incremented so later API
-requests stop using stale cached data. The route also removes expired query-data files from the cache directory.
+requests stop using stale cached data. The route also removes expired concordance query data files from the cache
+directory.
 
 If caching is disabled, the response contains only the common response fields. During first-time cache setup,
 `initial_setup` is returned and no invalidation counters are included.
@@ -36,7 +37,7 @@ class CacheResponse(schemas.CommonResponse):
     )
     multi_invalidated: bool | SkipJsonSchema[None] = Field(
         None,
-        description="Whether combined query caches were invalidated because corpus data changed.",
+        description="Whether combined concordance caches were invalidated because corpus data changed.",
         examples=[False],
     )
     multi_config_invalidated: bool | SkipJsonSchema[None] = Field(
@@ -129,7 +130,7 @@ async def cache_handler(ctx: CtxDep) -> dict:
             memcached_data[f"{corpus}:last_update"] = corpus_mtime
             result["corpora_invalidated"] += 1
 
-            # Remove outdated query data
+            # Remove outdated concordance data
             for cachefile in Path(settings.CACHE_DIR).glob(f"{corpus}:*"):
                 try:
                     if cachefile.stat().st_mtime < corpus_mtime:
@@ -170,8 +171,8 @@ async def cache_handler(ctx: CtxDep) -> dict:
 
     await cache.set_many(memcached_data)
 
-    # Remove old query data
-    for cachefile in Path(settings.CACHE_DIR).glob("*:query_data_*"):
+    # Remove old concordance data
+    for cachefile in Path(settings.CACHE_DIR).glob("*:concordance_data_*"):
         try:
             if cachefile.stat().st_mtime < (now - settings.CACHE_LIFESPAN * 60):
                 cachefile.unlink()

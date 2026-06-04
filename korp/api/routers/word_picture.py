@@ -24,7 +24,7 @@ from korp.dependencies import AbortDep, AbortSignal, CtxDep
 from korp.handler import api_handler, docs_response
 from korp.memcached import CacheError
 
-from . import query, timespan
+from . import concordance, timespan
 
 router = APIRouter(tags=["Word Relations"])
 
@@ -110,7 +110,7 @@ those relations.
 WORD_PICTURE_SENTENCES_DESCRIPTION = """Return KWIC sentences containing word-picture relation sources.
 
 Use the `source` ids returned by `/word_picture` to retrieve the corpus sentences where those relation instances occur.
-The sentence rows use the same KWIC structure as `/query`, with the relation span highlighted as the match.
+The sentence rows use the same KWIC structure as `/concordance`, with the relation span highlighted as the match.
 """
 
 WORD_PICTURE_TIME_SENTENCES_DESCRIPTION = """Return KWIC sentences for time-sliced word-picture relation sources.
@@ -350,9 +350,9 @@ class RelationsSentencesResponse(schemas.CommonResponse):
         description="Order in which corpora are represented in the KWIC rows.",
         examples=[["ROMI"]],
     )
-    kwic: list[query.KWICRow] | SkipJsonSchema[None] = Field(
+    kwic: list[concordance.KWICRow] | SkipJsonSchema[None] = Field(
         None,
-        description="KWIC sentence rows using the same row structure as `/query`.",
+        description="KWIC sentence rows using the same row structure as `/concordance`.",
     )
 
 
@@ -2133,7 +2133,7 @@ async def _relations_sentences_impl(
         if abort_signal and abort_signal.is_set():
             return result
         cqp = '<sentence_id="{}"> []* </sentence_id> within sentence'.format("|".join(set(sids.keys())))
-        query_params = await query.parse_parameters(
+        concordance_params = await concordance.parse_parameters(
             ctx=ctx,
             corpus=[corpus],
             cqp_query=[cqp],
@@ -2144,7 +2144,7 @@ async def _relations_sentences_impl(
             default_context=default_context,
         )
         result_temp = await utils.async_generator_to_dict(
-            query.perform_query(query_params, ctx, abort_signal=abort_signal)
+            concordance.perform_query(concordance_params, ctx, abort_signal=abort_signal)
         )
 
         # Loop backwards since we might be adding new items

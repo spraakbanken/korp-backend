@@ -1,4 +1,4 @@
-"""Router for corpus queries."""
+"""Router for concordance search routes."""
 
 import base64
 import binascii
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 router = APIRouter(tags=["Concordance"])
 
-QUERY_DESCRIPTION = """Search for concordance lines in one or more corpora.
+CONCORDANCE_DESCRIPTION = """Search for concordance lines in one or more corpora.
 
 The route returns KWIC rows: each row contains the matching tokens, the requested left and right context, token
 annotations requested with `show`, optional structural annotations requested with `show_struct`, and the match position
@@ -64,17 +64,17 @@ concordance data in the streamed JSON object.
 
 Query `SUC3` and return the first ten hits for `"och" [] [pos="NN"]`, including the `msd` and `lemma` annotations:
 
-`/query?corpus=SUC3&offset=0&limit=10&default_context=1+sentence&cqp="och"+[]+[pos="NN"]&show=msd,lemma`
+`/concordance?corpus=SUC3&offset=0&limit=10&default_context=1+sentence&cqp="och"+[]+[pos="NN"]&show=msd,lemma`
 """
 
-QUERY_SAMPLE_DESCRIPTION = """Do a random-sample concordance search.
+CONCORDANCE_SAMPLE_DESCRIPTION = """Do a random-sample concordance search.
 
-This route has the same query language, context, and annotation parameters as `/query`, but it is optimized for finding
-a random example. The selected corpora are shuffled, then searched one at a time until a hit is found. Processing stops
-as soon as one corpus produces a hit, and no full hit count is calculated.
+This route has the same query language, context, and annotation parameters as `/concordance`, but it is optimized for
+finding a random example. The selected corpora are shuffled, then searched one at a time until a hit is found.
+Processing stops as soon as one corpus produces a hit, and no full hit count is calculated.
 
-The search is always sorted randomly, so the `sort` parameter from `/query` is not exposed here. Provide `random_seed`
-when you need reproducible sampling for the same corpus data and query parameters.
+The search is always sorted randomly, so the `sort` parameter from `/concordance` is not exposed here. Provide
+`random_seed` when you need reproducible sampling for the same corpus data and query parameters.
 
 The response always contains a `kwic` list. Since the route stops at the first sampled hit, it does not return `hits`,
 `corpus_hits`, or `query_data`; those fields would only describe the capped per-corpus sample query, not the full set of
@@ -130,8 +130,8 @@ RandomSeedParam: TypeAlias = Annotated[
     int | None,
     Query(
         description=(
-            "Numerical seed for reproducible random ordering. Used with `sort=random` on `/query`, and for sampling "
-            "order on `/query_sample` when provided."
+            "Numerical seed for reproducible random ordering. Used with `sort=random` on `/concordance`, and for "
+            "sampling order on `/concordance/sample` when provided."
         ),
         examples=[984326587],
     ),
@@ -258,8 +258,8 @@ class KWICRow(BaseModel):
     )
 
 
-class QueryResponse(schemas.CommonResponse):
-    """Response model for `/query` route."""
+class ConcordanceResponse(schemas.CommonResponse):
+    """Response model for `/concordance` route."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -293,8 +293,8 @@ class QueryResponse(schemas.CommonResponse):
     )
 
 
-class QuerySampleResponse(schemas.CommonResponse):
-    """Response model for `/query_sample` route."""
+class ConcordanceSampleResponse(schemas.CommonResponse):
+    """Response model for `/concordance/sample` route."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -313,8 +313,8 @@ class QuerySampleResponse(schemas.CommonResponse):
 
 
 @dataclass
-class QueryParameters:
-    """Parameters for query routes, parsed and validated."""
+class ConcordanceParameters:
+    """Parameters for concordance routes, parsed and validated."""
 
     corpora: list[str]
     cqp_query: list[str]
@@ -359,8 +359,8 @@ async def parse_parameters(
     right_context: Sequence[str] | None = None,
     expand_prequeries: bool = True,
     query_data: str | None = None,
-) -> QueryParameters:
-    """Parse and validate query parameters.
+) -> ConcordanceParameters:
+    """Parse and validate concordance parameters.
 
     Args:
         ctx: The request context.
@@ -385,7 +385,7 @@ async def parse_parameters(
         query_data: Previously saved query data for caching purposes.
 
     Returns:
-        A QueryParameters object containing the parsed and validated parameters.
+        A ConcordanceParameters object containing the parsed and validated parameters.
 
     Raises:
         ValueError: If any of the parameters are invalid.
@@ -437,7 +437,7 @@ async def parse_parameters(
     if len(cqp_query) > 1 and expand_prequeries and not all(within_dict[c] for c in corpora):
         raise ValueError("Multiple CQP queries requires 'within' or 'expand_prequeries=false'")
 
-    return QueryParameters(
+    return ConcordanceParameters(
         corpora=corpora,
         cqp_query=cqp_query,
         within=within_dict,
@@ -458,12 +458,12 @@ async def parse_parameters(
 
 
 async def perform_query(
-    query_params: QueryParameters, ctx: CtxDep, abort_signal: AbortSignal | None = None
+    concordance_parameters: ConcordanceParameters, ctx: CtxDep, abort_signal: AbortSignal | None = None
 ) -> AsyncGenerator[dict]:
     """Execute a corpus query and stream KWIC results.
 
     Args:
-        query_params: Parsed and validated query parameters.
+        concordance_parameters: Parsed and validated concordance parameters.
         ctx: Request-scoped context containing common parameters and services.
         abort_signal: Optional abort handle that can be used to cancel a running query.
 
@@ -472,16 +472,16 @@ async def perform_query(
     """
     incremental = ctx.common.incremental
     use_cache = ctx.common.cache
-    free_search = not query_params.in_order
+    free_search = not concordance_parameters.in_order
 
-    corpora = query_params.corpora
-    cqp_query = query_params.cqp_query
-    within = query_params.within
-    cut = query_params.cut
-    expand_prequeries = query_params.expand_prequeries
-    query_data = query_params.query_data
-    start = query_params.start
-    end = query_params.end
+    corpora = concordance_parameters.corpora
+    cqp_query = concordance_parameters.cqp_query
+    within = concordance_parameters.within
+    cut = concordance_parameters.cut
+    expand_prequeries = concordance_parameters.expand_prequeries
+    query_data = concordance_parameters.query_data
+    start = concordance_parameters.start
+    end = concordance_parameters.end
 
     result: dict[str, Any] = {"kwic": []}
 
@@ -523,7 +523,7 @@ async def perform_query(
         cache_prefixes = await caching.cache_prefix(ctx.cache, [corpus.split("|")[0] for corpus in corpora])
         for corpus in corpora:
             corpus_checksum = utils.get_hash((cqp_query, within[corpus], cut, expand_prequeries, free_search))
-            memcached_keys[f"{cache_prefixes[corpus.split('|')[0]]}:query_size_{corpus_checksum}"] = corpus
+            memcached_keys[f"{cache_prefixes[corpus.split('|')[0]]}:concordance_size_{corpus_checksum}"] = corpus
 
         cached_corpus_hits = await ctx.cache.get_many(memcached_keys.keys())
         for key in cached_corpus_hits:
@@ -566,7 +566,7 @@ async def perform_query(
                         kwic, _ = await anyio.to_thread.run_sync(
                             partial(
                                 query_and_parse,
-                                query_params,
+                                concordance_parameters,
                                 corpus,
                                 start=corpora_hits[corpus][0],
                                 end=corpora_hits[corpus][1],
@@ -635,7 +635,7 @@ async def perform_query(
                 kwic, nr_hits = await anyio.to_thread.run_sync(
                     partial(
                         query_and_parse,
-                        query_params,
+                        concordance_parameters,
                         corpus,
                         start=start_local,
                         end=end_local,
@@ -682,7 +682,7 @@ async def perform_query(
                         _, nr_hits, _ = await anyio.to_thread.run_sync(
                             partial(
                                 query_corpus,
-                                query_params,
+                                concordance_parameters,
                                 corpus,
                                 start=0,
                                 end=0,
@@ -738,15 +738,15 @@ async def perform_query(
 
 
 @router.get(
-    "/query_sample",
+    "/concordance/sample",
     response_model=None,
-    responses=handler.docs_response(QuerySampleResponse),
+    responses=handler.docs_response(ConcordanceSampleResponse),
     summary="Sample Concordance",
-    description=QUERY_SAMPLE_DESCRIPTION,
+    description=CONCORDANCE_SAMPLE_DESCRIPTION,
 )
-@router.post("/query_sample", response_model=None, include_in_schema=False)
+@router.post("/concordance/sample", response_model=None, include_in_schema=False)
 @api_handler
-async def query_sample(
+async def concordance_sample(
     ctx: CtxDep,
     corpus: params.CorpusParam,
     cqp_query: params.CQPParam,
@@ -772,7 +772,7 @@ async def query_sample(
     Yields:
         A single KWIC result as a dictionary, or an empty KWIC list if no matches are found.
     """
-    query_params = await parse_parameters(
+    concordance_params = await parse_parameters(
         ctx=ctx,
         corpus=corpus,
         cqp_query=cqp_query,
@@ -794,11 +794,11 @@ async def query_sample(
         query_data=query_data,
     )
 
-    corpora = query_params.corpora
+    corpora = concordance_params.corpora
     random.shuffle(corpora)
 
     for c in corpora:
-        params_corpus = dataclasses.replace(query_params, corpora=[c])
+        params_corpus = dataclasses.replace(concordance_params, corpora=[c])
         async for item in perform_query(params_corpus, ctx, abort_signal=abort_signal):
             if item.get("hits", 0) > 0:
                 item.pop("hits", None)
@@ -811,15 +811,15 @@ async def query_sample(
 
 
 @router.get(
-    "/query",
+    "/concordance",
     response_model=None,
-    responses=handler.docs_response(QueryResponse),
+    responses=handler.docs_response(ConcordanceResponse),
     summary="Concordance",
-    description=QUERY_DESCRIPTION,
+    description=CONCORDANCE_DESCRIPTION,
 )
-@router.post("/query", response_model=None, include_in_schema=False)
+@router.post("/concordance", response_model=None, include_in_schema=False)
 @api_handler
-async def query(
+async def concordance(
     ctx: CtxDep,
     corpus: params.CorpusParam,
     cqp_query: params.CQPParam,
@@ -846,7 +846,7 @@ async def query(
     Yields:
         KWIC results as dictionaries, followed by a final dictionary containing the total hit count and other metadata.
     """
-    query_params = await parse_parameters(
+    concordance_params = await parse_parameters(
         ctx=ctx,
         corpus=corpus,
         cqp_query=cqp_query,
@@ -868,12 +868,12 @@ async def query(
         query_data=query_data,
     )
 
-    async for item in perform_query(query_params, ctx, abort_signal=abort_signal):
+    async for item in perform_query(concordance_params, ctx, abort_signal=abort_signal):
         yield item
 
 
 def query_corpus(
-    query_params: QueryParameters,
+    concordance_params: ConcordanceParameters,
     corpus: str,
     start: int,
     end: int,
@@ -886,7 +886,7 @@ def query_corpus(
     """Perform a CQP query on a single corpus and return parsed results.
 
     Args:
-        query_params: Parsed and validated query parameters.
+        concordance_params: Parsed and validated concordance parameters.
         corpus: Corpus to query.
         start: Start index of results to return (0-based).
         end: End index of results to return (0-based, inclusive).
@@ -905,22 +905,22 @@ def query_corpus(
     Raises:
         CQPError: If the CQP query fails.
     """
-    cqp_query = query_params.cqp_query
-    show = query_params.show
-    within = query_params.within[corpus]
-    context = query_params.context[corpus]
-    show_structs = query_params.show_struct
-    expand_prequeries = query_params.expand_prequeries
-    free_search = not query_params.in_order
-    cut = query_params.cut
-    sort = query_params.sort
-    random_seed = query_params.random_seed
+    cqp_query = concordance_params.cqp_query
+    show = concordance_params.show
+    within = concordance_params.within[corpus]
+    context = concordance_params.context[corpus]
+    show_structs = concordance_params.show_struct
+    expand_prequeries = concordance_params.expand_prequeries
+    free_search = not concordance_params.in_order
+    cut = concordance_params.cut
+    sort = concordance_params.sort
+    random_seed = concordance_params.random_seed
 
     cache_dir = settings.CACHE_DIR
     cache_max_query_data = settings.CACHE_MAX_QUERY_DATA
 
     @dataclass
-    class QueryCache:
+    class ConcordanceCache:
         query: str
         query_temp: str
         filename: Path
@@ -940,17 +940,17 @@ def query_corpus(
         checksum = utils.get_hash(checksum_data)
         unique_id = str(uuid.uuid4())
 
-        cache_query = f"query_data_{checksum}"
+        cache_query = f"concordance_data_{checksum}"
         cache_query_temp = cache_query + "_" + unique_id
 
         corpus_base = corpus.split("|", 1)[0]
-        cache_filename = cache_dir / f"{corpus_base}:query_data_{checksum}"
+        cache_filename = cache_dir / f"{corpus_base}:concordance_data_{checksum}"
         cache_filename_temp = cache_filename.with_name(cache_filename.name + "_" + unique_id)
 
-        cache_size_key = f"{caching.cache_prefix_sync(mc, corpus_base)}:query_size_{checksum}"
+        cache_size_key = f"{caching.cache_prefix_sync(mc, corpus_base)}:concordance_size_{checksum}"
         cache_hits = mc.get(cache_size_key)
         is_cached = cache_hits is not None and cache_filename.is_file()
-        cache = QueryCache(
+        cache = ConcordanceCache(
             query=cache_query,
             query_temp=cache_query_temp,
             filename=cache_filename,
@@ -1286,7 +1286,7 @@ def _parse_tokens(
 
 
 def query_parse_lines(
-    query_params: QueryParameters,
+    concordance_params: ConcordanceParameters,
     corpus: str,
     lines: Iterable[str],
     attrs: dict[str, list[str]],
@@ -1295,7 +1295,7 @@ def query_parse_lines(
     """Parse concordance lines from CWB.
 
     Args:
-        query_params: Parsed query parameters.
+        concordance_params: Parsed concordance parameters.
         corpus: Name of the corpus being queried.
         lines: Iterable of raw concordance lines from CWB.
         attrs: Dictionary of available attributes by type.
@@ -1304,9 +1304,9 @@ def query_parse_lines(
     Returns:
         List of KWIC row dictionaries.
     """
-    show = query_params.show
-    show_structs = query_params.show_struct
-    free_search = not query_params.in_order
+    show = concordance_params.show
+    show_structs = concordance_params.show_struct
+    free_search = not concordance_params.in_order
 
     # Filter out unavailable attributes
     p_attrs = [attr for attr in attrs["p"] if attr in show]
@@ -1375,7 +1375,7 @@ def query_parse_lines(
 
 
 def query_and_parse(
-    query_params: QueryParameters,
+    concordance_params: ConcordanceParameters,
     corpus: str,
     start: int,
     end: int,
@@ -1388,7 +1388,7 @@ def query_and_parse(
     """Perform a CQP query on a single corpus and return parsed results.
 
     Args:
-        query_params: Parsed and validated query parameters.
+        concordance_params: Parsed and validated concordance parameters.
         corpus: Corpus to query.
         start: Start index of results to return.
         end: End index of results to return.
@@ -1404,7 +1404,7 @@ def query_and_parse(
             - The total number of hits for the query.
     """
     lines, nr_hits, attrs = query_corpus(
-        query_params,
+        concordance_params,
         corpus,
         start=start,
         end=end,
@@ -1414,7 +1414,7 @@ def query_and_parse(
         use_cache=use_cache,
         abort_signal=abort_signal,
     )
-    kwic = query_parse_lines(query_params, corpus, lines, attrs, abort_signal=abort_signal)
+    kwic = query_parse_lines(concordance_params, corpus, lines, attrs, abort_signal=abort_signal)
     return kwic, nr_hits
 
 

@@ -34,7 +34,7 @@ _API_DOCUMENTATION_STRUCTURE = [
     {
         "name": "Concordance",
         "description": "Routes for retrieving concordance lines and related information.",
-        "routes": ["/query", "/query_sample"],
+        "routes": ["/concordance", "/concordance/sample"],
     },
     {
         "name": "Statistics",
