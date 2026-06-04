@@ -28,7 +28,7 @@ from . import count as count_route
 
 router = APIRouter(tags=["Corpus Information"])
 
-ATTR_VALUES_DESCRIPTION = """List the values available for one or more corpus attributes.
+ATTRIBUTE_VALUES_DESCRIPTION = """List the values available for one or more corpus attributes.
 
 The route can be used for positional attributes such as `word`, `lemma`, or `pos`, and for structural attributes such
 as `text_author` or `text_title`. It is similar to `/count_all`, but the result is organized as a lookup of attribute
@@ -49,7 +49,7 @@ before the final result in the streamed JSON object.
 
 Get all authors and their titles with token counts:
 
-`/attr_values?corpus=ROMI&attr=text_author>text_title&include_counts=true`
+`/attribute_values?corpus=ROMI&attr=text_author>text_title&include_counts=true`
 """
 
 AttrParam: TypeAlias = Annotated[
@@ -87,7 +87,7 @@ AttributeValuesData = dict[str, list[str] | dict[str, Any]]
 
 
 class AttrValuesResponse(schemas.CommonResponse):
-    """Response model for `/attr_values` route."""
+    """Response model for `/attribute_values` route."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -118,15 +118,15 @@ class AttrValuesResponse(schemas.CommonResponse):
 
 
 @router.get(
-    "/attr_values",
+    "/attribute_values",
     response_model=None,
     responses=handler.docs_response(AttrValuesResponse),
     summary="Attribute Values",
-    description=ATTR_VALUES_DESCRIPTION,
+    description=ATTRIBUTE_VALUES_DESCRIPTION,
 )
-@router.post("/attr_values", response_model=None, include_in_schema=False)
+@router.post("/attribute_values", response_model=None, include_in_schema=False)
 @api_handler
-async def attr_values(
+async def attribute_values(
     ctx: CtxDep,
     corpus: params.CorpusParam,
     attr: AttrParam,
@@ -165,7 +165,7 @@ async def attr_values(
             cache_prefixes[c] = await caching.cache_prefix(ctx.cache, c)
             for attribute in attr:
                 checksum = utils.get_hash((c, attribute, split, include_counts))
-                data = await ctx.cache.get(f"{cache_prefixes[c]}:attr_values_{checksum}")
+                data = await ctx.cache.get(f"{cache_prefixes[c]}:attribute_values_{checksum}")
                 if data is not None:
                     result["corpora"][c][attribute] = data
                     if ctx.common.debug:
@@ -281,7 +281,7 @@ async def attr_values(
                     continue
                 checksum = utils.get_hash((c, attribute, split, include_counts))
                 try:
-                    cache_key = f"{cache_prefixes[c]}:attr_values_{checksum}"
+                    cache_key = f"{cache_prefixes[c]}:attribute_values_{checksum}"
                     await ctx.cache.add(cache_key, result["corpora"][c].get(attribute, {}))
                 except CacheError:
                     pass

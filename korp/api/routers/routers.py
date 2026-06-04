@@ -1,7 +1,7 @@
 """List of all API routers."""
 
 from korp.api.routers import (
-    attr_values,
+    attribute_values,
     cache,
     concordance,
     corpus_config,
@@ -15,7 +15,7 @@ from korp.api.routers import (
 )
 
 routers = [
-    attr_values.router,
+    attribute_values.router,
     cache.router,
     concordance.router,
     corpus_config.router,
