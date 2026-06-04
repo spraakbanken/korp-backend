@@ -1,4 +1,4 @@
-"""Router for lexeme count."""
+"""Router for lexeme counts."""
 
 from collections.abc import AsyncGenerator
 from typing import Annotated, TypeAlias
@@ -28,7 +28,7 @@ with `0`.
 
 Get the number of occurrences of two lexemes in one corpus:
 
-`/lexeme_count?lexeme=ge..vb.1,ta..vb.1&corpus=ROMI`
+`/lexeme_counts?lexeme=ge..vb.1,ta..vb.1&corpus=ROMI`
 """
 
 CorpusParamOptional: TypeAlias = Annotated[
@@ -55,7 +55,7 @@ LexemeParam: TypeAlias = Annotated[
 
 
 class LexemeCountResponse(schemas.CommonResponse):
-    """Response model for `/lexeme_count` route."""
+    """Response model for `/lexeme_counts` route."""
 
     lexeme_counts: dict[str, int] = Field(
         ...,
@@ -65,15 +65,15 @@ class LexemeCountResponse(schemas.CommonResponse):
 
 
 @router.get(
-    "/lexeme_count",
+    "/lexeme_counts",
     response_model=None,
     responses=docs_response(LexemeCountResponse),
     summary="Lexeme Statistics",
     description=LEXEME_COUNT_DESCRIPTION,
 )
-@router.post("/lexeme_count", response_model=None, include_in_schema=False)
+@router.post("/lexeme_counts", response_model=None, include_in_schema=False)
 @api_handler
-async def lexeme_count(
+async def lexeme_counts(
     ctx: CtxDep,
     lexeme: LexemeParam,
     corpus: CorpusParamOptional = None,
