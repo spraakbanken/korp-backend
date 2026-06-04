@@ -8,7 +8,7 @@ from collections.abc import AsyncGenerator
 from typing import Annotated, TypeAlias
 
 from fastapi import APIRouter, Query
-from pydantic import AfterValidator, BeforeValidator, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field
 
 from korp import auth, utils
 from korp.api import params, schemas
@@ -31,8 +31,8 @@ The sign of each score shows which set the value is relatively more prominent in
 - Positive values are more prominent in set 2.
 - Larger absolute values indicate a stronger difference between the sets.
 
-`set1` and `set2` contain the absolute frequencies used for the returned values. `average` is the average absolute
-log-likelihood score before the result list is split by sign and limited.
+Each result row contains the grouped value, its log-likelihood score, and the absolute frequencies used from each set.
+`average` is the average absolute log-likelihood score before the result list is split by sign and limited.
 
 Use `max` to limit how many values to return from each side of the comparison. For example, `max=10` can return up to
 ten set-1-prominent values and ten set-2-prominent values. Use `max=0` for no limit.
@@ -44,7 +44,7 @@ Most grouping and value-normalization parameters are shared with `/count`, inclu
 
 Compare nouns in two corpora and return up to ten values from each side:
 
-`/loglike?set1_cqp=[pos="NN"]&set2_cqp=[pos="NN"]&group_by=word&max=10&set1_corpus=ROMI&set2_corpus=GP2012`
+`/log_likelihood?set1_cqp=[pos="NN"]&set2_cqp=[pos="NN"]&group_by=word&max=10&set1_corpus=ROMI&set2_corpus=GP2012`
 """
 
 Set1CQPParam: TypeAlias = Annotated[
@@ -88,8 +88,24 @@ MaxResultsParam: TypeAlias = Annotated[
 ]
 
 
-class LoglikeResponse(schemas.CommonResponse):
-    """Response model for `/loglike` route."""
+class LogLikelihoodRow(BaseModel):
+    """A log-likelihood result row."""
+
+    value: str = Field(..., description="Grouped value being compared.", examples=["cat"])
+    score: float = Field(
+        ...,
+        description=(
+            "Log-likelihood score. Negative values are more prominent in set 1; positive values are more prominent "
+            "in set 2."
+        ),
+        examples=[-5.43],
+    )
+    set1: int = Field(..., description="Absolute frequency in set 1.", examples=[447])
+    set2: int = Field(..., description="Absolute frequency in set 2.", examples=[254])
+
+
+class LogLikelihoodResponse(schemas.CommonResponse):
+    """Response model for `/log_likelihood` route."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -98,36 +114,23 @@ class LoglikeResponse(schemas.CommonResponse):
         description="Average absolute log-likelihood score across all compared values before result limiting.",
         examples=[12.43],
     )
-    loglike: dict[str, float] = Field(
+    results: list[LogLikelihoodRow] = Field(
         ...,
-        description=(
-            "Log-likelihood scores keyed by grouped value. Negative values are more prominent in set 1; positive "
-            "values are more prominent in set 2."
-        ),
-        examples=[{"cat": -5.43, "dog": 4.12}],
-    )
-    set1: dict[str, int] = Field(
-        ...,
-        description="Absolute frequencies in set 1 for the returned values.",
-        examples=[{"cat": 447, "dog": 808}],
-    )
-    set2: dict[str, int] = Field(
-        ...,
-        description="Absolute frequencies in set 2 for the returned values.",
-        examples=[{"cat": 254, "dog": 614}],
+        description="Log-likelihood rows for the returned values.",
+        examples=[[{"value": "cat", "score": -5.43, "set1": 447, "set2": 254}]],
     )
 
 
 @router.get(
-    "/loglike",
+    "/log_likelihood",
     response_model=None,
-    responses=docs_response(LoglikeResponse),
+    responses=docs_response(LogLikelihoodResponse),
     summary="Log-Likelihood Comparison",
     description=LOGLIKE_DESCRIPTION,
 )
-@router.post("/loglike", response_model=None, include_in_schema=False)
+@router.post("/log_likelihood", response_model=None, include_in_schema=False)
 @api_handler
-async def loglike(
+async def log_likelihood(
     ctx: CtxDep,
     set1_cqp: Set1CQPParam,
     set2_cqp: Set2CQPParam,
@@ -176,7 +179,7 @@ async def loglike(
         limit=limit,
     )
 
-    # Handle parameters specific to loglike
+    # Handle parameters specific to log-likelihood
     set1_corpora = set(set1_corpus)
     set2_corpora = set(set2_corpus)
 
@@ -320,15 +323,18 @@ async def loglike(
     ll_list = compute_list(sets[0]["freq"], sets[0]["total"], sets[1]["freq"], sets[1]["total"])
     ws, avg = compute_ll_stats(ll_list, max_results, sets)
 
-    result["loglike"] = {}
     result["average"] = avg
-    result["set1"] = {}
-    result["set2"] = {}
+    result["results"] = []
 
     for ll, w in ws:
         w_formatted = " ".join(w[0][1])
-        result["loglike"][w_formatted] = ll
-        result["set1"][w_formatted] = sets[0]["freq"].get(w, 0)
-        result["set2"][w_formatted] = sets[1]["freq"].get(w, 0)
+        result["results"].append(
+            {
+                "value": w_formatted,
+                "score": ll,
+                "set1": sets[0]["freq"].get(w, 0),
+                "set2": sets[1]["freq"].get(w, 0),
+            }
+        )
 
     yield result
