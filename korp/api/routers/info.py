@@ -114,7 +114,7 @@ class CorpusInfoData(BaseModel):
 
 
 class CorpusInfoResponse(schemas.CommonResponse):
-    """Response model for `/corpus_info` route."""
+    """Response model for `/corpora/info` route."""
 
     corpora: dict[str, CorpusInfoData] = Field(
         ...,
@@ -184,14 +184,14 @@ async def info(
 
 
 @router.get(
-    "/corpus_info",
+    "/corpora/info",
     response_model=None,
     responses=handler.docs_response(CorpusInfoResponse),
     name="Corpus Information",
     summary="Corpus Information",
     description=CORPUS_INFO_DESCRIPTION,
 )
-@router.post("/corpus_info", response_model=None, include_in_schema=False)
+@router.post("/corpora/info", response_model=None, include_in_schema=False)
 @api_handler
 async def corpus_info(
     ctx: CtxDep,

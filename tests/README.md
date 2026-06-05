@@ -117,7 +117,7 @@ A typical functional test testing an endpoint uses the `get_json` and `corpora` 
 def test_corpus_info_single_corpus(get_json, corpora):
     corpus = corpora[0].upper()
     response = get_json(
-        "/corpus_info",
+        "/corpora/info",
         params={
             "cache": "false",
             "corpus": corpus,
@@ -278,7 +278,7 @@ corpora are isolated from any other CWB corpora in the system. Encoded test corp
 
 ### Corpus configuration data
 
-Corpus configuration data used in tests for the `/corpus_config` endpoint is under `data/corpora/config` in the format
+Corpus configuration data used in tests for the `/corpora/config` endpoint is under `data/corpora/config` in the format
 expected by Korp; please see [the documentation](../README.md#corpus-configuration-for-the-korp-frontend) for more
 information.
 

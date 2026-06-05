@@ -1,4 +1,4 @@
-"""Pytest tests for the Korp `/info` and `/corpus_info` endpoints."""
+"""Pytest tests for the Korp `/info` and `/corpora/info` endpoints."""
 
 from collections.abc import Callable
 
@@ -7,12 +7,12 @@ import pytest
 
 @pytest.fixture
 def corpus_info(get_json: Callable, corpora: list[str]) -> Callable[[list[str]], dict]:  # noqa: ARG001
-    """Return function returning `/corpus_info` response for list of corpora."""
+    """Return function returning `/corpora/info` response for list of corpora."""
 
     def _corpus_info(corpus_list: list[str]) -> dict:
-        """Return `/corpus_info` response for the corpora in `corpus_list`."""
+        """Return `/corpora/info` response for the corpora in `corpus_list`."""
         return get_json(
-            "/corpus_info",
+            "/corpora/info",
             params={
                 "cache": "false",
                 "corpus": ",".join(corpus.upper() for corpus in corpus_list),
@@ -24,10 +24,10 @@ def corpus_info(get_json: Callable, corpora: list[str]) -> Callable[[list[str]],
 
 @pytest.fixture
 def corpus_info_single(corpus_info: Callable[[list[str]], dict]) -> Callable[[str], dict]:
-    """Return function returning `/corpus_info` response for a single corpus."""
+    """Return function returning `/corpora/info` response for a single corpus."""
 
     def _corpus_info_single(corpus: str) -> dict:
-        """Return `/corpus_info` response for corpus (corpus-specific part)."""
+        """Return `/corpora/info` response for corpus (corpus-specific part)."""
         return corpus_info([corpus])["corpora"][corpus.upper()]
 
     return _corpus_info_single
@@ -44,7 +44,7 @@ class TestInfo:
 
 
 class TestCorpusInfo:
-    """Tests for the `/corpus_info` endpoint."""
+    """Tests for the `/corpora/info` endpoint."""
 
     @staticmethod
     def _get_corpora_info_sum(data: dict, key: str) -> int:
@@ -52,7 +52,7 @@ class TestCorpusInfo:
         return sum(int(corpusdata["info"][key]) for corpusdata in data["corpora"].values())
 
     def test_corpus_info(self, corpus_info: Callable[[list[str]], dict], corpora: list[str]) -> None:
-        """Test `/corpus_info` for all corpora."""
+        """Test `/corpora/info` for all corpora."""
         data = corpus_info(corpora)
         assert len(data["corpora"]) == len(corpora)
         assert set(data["corpora"].keys()) == {corpus.upper() for corpus in corpora}
@@ -114,7 +114,7 @@ class TestCorpusInfo:
         attrs_a: list[str],
         corpus_info_single: Callable[[str], dict],
     ) -> None:
-        """Test `/corpus_info` for a single corpus."""
+        """Test `/corpora/info` for a single corpus."""
         data = corpus_info_single(corpus)
         attrs = data["attrs"]
         assert attrs

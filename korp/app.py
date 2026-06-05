@@ -29,7 +29,7 @@ _API_DOCUMENTATION_STRUCTURE = [
     {
         "name": "Corpus Information",
         "description": "Routes for retrieving information about corpora and their attributes.",
-        "routes": ["/info", "/corpus_info", "/attribute_values", "/corpus_config"],
+        "routes": ["/info", "/corpora/info", "/attribute_values", "/corpora/config"],
     },
     {
         "name": "Concordance",

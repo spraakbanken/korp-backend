@@ -1,16 +1,16 @@
-"""Pytest tests for the Korp `/corpus_config` endpoint."""
+"""Pytest tests for the Korp `/corpora/config` endpoint."""
 
 from collections.abc import Callable
 
 
 class TestCorpusConfig:
-    """Tests for /corpus_config."""
+    """Tests for /corpora/config."""
 
     @staticmethod
     def test_corpus_config(get_json: Callable, corpus_configs: None) -> None:  # noqa: ARG004
         """Test that a corpus configuration can be retrieved."""
         data = get_json(
-            "/corpus_config",
+            "/corpora/config",
             params={
                 "mode": "default",
                 "cache": "false",

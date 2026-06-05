@@ -73,7 +73,7 @@ class ModeSummary(BaseModel):
 
 
 class CorpusConfigResponse(schemas.CommonResponse):
-    """Response model for `/corpus_config` route."""
+    """Response model for `/corpora/config` route."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -119,14 +119,14 @@ class CorpusConfigResponse(schemas.CommonResponse):
 
 
 @router.get(
-    "/corpus_config",
+    "/corpora/config",
     response_model=None,
     responses=docs_response(CorpusConfigResponse),
     name="Corpus Configuration",
     summary="Corpus Configuration",
     description=CORPUS_CONFIG_DESCRIPTION,
 )
-@router.post("/corpus_config", response_model=None, include_in_schema=False)
+@router.post("/corpora/config", response_model=None, include_in_schema=False)
 @api_handler
 async def corpus_config(
     ctx: CtxDep,
