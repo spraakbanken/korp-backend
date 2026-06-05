@@ -1,4 +1,4 @@
-"""Routes for Word Picture queries."""
+"""Routes for dependency relation queries."""
 
 import asyncio
 import math
@@ -26,7 +26,7 @@ from korp.memcached import CacheError
 
 from . import concordance, timespan
 
-router = APIRouter(tags=["Word Relations"])
+router = APIRouter(tags=["Dependency Relations"])
 
 
 # (role, head_string, head_pos, rel, dep_string, dep_pos, dep_extra)
@@ -45,8 +45,8 @@ class TermType(StrEnum):
     lexeme = "lexeme"
 
 
-class WordPictureSort(StrEnum):
-    """Allowed sort fields for word pictures."""
+class DependencyRelationsSort(StrEnum):
+    """Allowed sort fields for dependency relations."""
 
     freq = "freq"
     freq_relative = "freq_relative"
@@ -77,27 +77,27 @@ class Measures(StrEnum):
     rmi = "rmi"
 
 
-WORD_PICTURE_DESCRIPTION = """Get word-picture dependency relations for a word or lexeme.
+DEPENDENCY_RELATIONS_DESCRIPTION = """Get dependency relations for a word or lexeme.
 
 The route looks up dependency relations where the requested value occurs as either the head or the dependent. Each
 relation row identifies the head, dependency relation, dependent, part-of-speech tags, optional dependent prefix, and
-source ids that can be passed to `/word_picture/sentences`.
+source ids that can be passed to `/dependency_relations/sentences`.
 
 The statistical measures included in each row are controlled by `measures`. `freq` is the absolute relation frequency,
 `freq_relative` is the relation frequency per million tokens, `mi` is lexicographer's mutual information, and `rmi` is
 relative MI.
 
-By default `/word_picture` returns overall relation statistics. Set `include_time=true` to also include time-sliced data
-in `relations_time`; use `/word_picture/time` when you only want the time-sliced view.
+By default `/dependency_relations` returns overall relation statistics. Set `include_time=true` to also include
+time-sliced data in `relations_time`; use `/dependency_relations/time` when you only want the time-sliced view.
 
 ### Example
 
 Get dependency relations for the lexeme `ge..vb.1`:
 
-`/word_picture?term=ge..vb.1&term_type=lexeme&corpus=ROMI`
+`/dependency_relations?term=ge..vb.1&term_type=lexeme&corpus=ROMI`
 """
 
-WORD_PICTURE_TIME_DESCRIPTION = """Get word-picture dependency relations grouped by year or multi-year period.
+DEPENDENCY_RELATIONS_TIME_DESCRIPTION = """Get dependency relations grouped by year or multi-year period.
 
 The response groups rows in `relations_time` by period key. With `period_size=1`, keys are years such as `2018`; with
 larger periods, keys are ranges such as `2016-2018`. Undated material is grouped under an empty key.
@@ -107,16 +107,17 @@ inside each period; `max_scope=overall` first selects the top overall relations 
 those relations.
 """
 
-WORD_PICTURE_SENTENCES_DESCRIPTION = """Return KWIC sentences containing word-picture relation sources.
+DEPENDENCY_RELATIONS_SENTENCES_DESCRIPTION = """Return KWIC sentences containing dependency relation sources.
 
-Use the `source` ids returned by `/word_picture` to retrieve the corpus sentences where those relation instances occur.
-The sentence rows use the same KWIC structure as `/concordance`, with the relation span highlighted as the match.
+Use the `source` ids returned by `/dependency_relations` to retrieve the corpus sentences where those relation
+instances occur. The sentence rows use the same KWIC structure as `/concordance`, with the relation span highlighted as
+the match.
 """
 
-WORD_PICTURE_TIME_SENTENCES_DESCRIPTION = """Return KWIC sentences for time-sliced word-picture relation sources.
+DEPENDENCY_RELATIONS_TIME_SENTENCES_DESCRIPTION = """Return KWIC sentences for time-sliced dependency relation sources.
 
-This is the sentence lookup companion to `/word_picture/time`. It returns the same KWIC-style structure as
-`/word_picture/sentences`.
+This is the sentence lookup companion to `/dependency_relations/time`. It returns the same KWIC-style structure as
+`/dependency_relations/sentences`.
 """
 
 TermParam: TypeAlias = Annotated[
@@ -154,13 +155,13 @@ MaxResultsParam: TypeAlias = Annotated[
 ]
 
 RelationsSortParam: TypeAlias = Annotated[
-    WordPictureSort,
+    DependencyRelationsSort,
     Query(description="Measure used for sorting and for selecting rows when `max` applies."),
 ]
 
 RelationsIncludeTimeParam: TypeAlias = Annotated[
     bool,
-    Query(description="Whether `/word_picture` should include time-sliced results in `relations_time`."),
+    Query(description="Whether `/dependency_relations` should include time-sliced results in `relations_time`."),
 ]
 
 PeriodSizeParam: TypeAlias = Annotated[
@@ -257,7 +258,7 @@ RelationsDefaultContextParam: TypeAlias = Annotated[
 
 
 class RelationRow(BaseModel):
-    """A word-picture relation row."""
+    """A dependency relation row."""
 
     head: str = Field(..., description="Head word form or lexeme.", examples=["cat"])
     head_pos: str = Field(..., description="Part of speech for the head.", examples=["NN"])
@@ -268,8 +269,8 @@ class RelationRow(BaseModel):
     source: list[str] = Field(
         ...,
         description=(
-            "Source ids for retrieving example sentences. Use `/word_picture/sentences` for overall relation rows and "
-            "`/word_picture/time/sentences` for time-sliced relation rows."
+            "Source ids for retrieving example sentences. Use `/dependency_relations/sentences` for overall relation "
+            "rows and `/dependency_relations/time/sentences` for time-sliced relation rows."
         ),
         examples=[["ROMI:253662"]],
     )
@@ -295,7 +296,7 @@ class RelationsRange(BaseModel):
 
 
 class RelationsResponse(schemas.CommonResponse):
-    """Response model for `/word_picture` and `/word_picture/time` routes."""
+    """Response model for `/dependency_relations` and `/dependency_relations/time` routes."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -306,8 +307,8 @@ class RelationsResponse(schemas.CommonResponse):
     relations_time: dict[str, list[RelationRow]] | SkipJsonSchema[None] = Field(
         None,
         description=(
-            "Time-sliced relation rows keyed by year or period. Included when `include_time=true` on `/word_picture` "
-            "or when using `/word_picture/time`."
+            "Time-sliced relation rows keyed by year or period. Included when `include_time=true` on "
+            "`/dependency_relations` or when using `/dependency_relations/time`."
         ),
     )
     token_frequencies: dict[str, int] | SkipJsonSchema[None] = Field(
@@ -424,7 +425,7 @@ def _table_names(corpus: str, *, split: bool) -> dict[str, str]:
         corpus: Corpus identifier.
         split: If `True`, return the per-year (split) table names; otherwise overall tables.
     """
-    prefix = f"{settings.DB_WORD_PICTURE_TABLE}_{corpus.upper()}"
+    prefix = f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{corpus.upper()}"
     main_prefix = f"{prefix}{SPLIT_SUFFIX}" if split else prefix
     return {
         "strings": f"{prefix}_strings",  # Shared between split and overall
@@ -927,8 +928,8 @@ def _build_overall_only_relations(
     return [_relation_output(entry, measures) for entry in selected_entries]
 
 
-class _WordPictureAccumulator:
-    """Accumulator for word picture relation data across corpora.
+class _DependencyRelationsAccumulator:
+    """Accumulator for dependency relations relation data across corpora.
 
     This is only used together with the split (per-year) data.
     """
@@ -1421,14 +1422,14 @@ async def _fetch_overall_relation_rows(
 
 
 def _build_time_rows(
-    acc: "_WordPictureAccumulator",
+    acc: "_DependencyRelationsAccumulator",
     data_map: dict,
     keys: list[tuple] | None = None,
 ) -> list[dict[str, object]]:
     """Build per-year or per-period relation rows.
 
     Args:
-        acc: The word picture accumulator.
+        acc: The dependency relations accumulator.
         data_map: Mapping of keys to time-based data.
         keys: Optional list of keys to include.
 
@@ -1628,13 +1629,13 @@ async def _existing_tables(conn: AsyncConnection, pattern: str) -> set[str]:
     return {str(next(iter(row.values()))) for row in rows}
 
 
-async def _word_picture_impl(
+async def _dependency_relations_impl(
     ctx: CtxDep,
     corpora: list[str],
     term: str,
     term_type: TermType,
     min_freq: int | None,
-    sort_field: WordPictureSort,
+    sort_field: DependencyRelationsSort,
     max_results: int,
     include_split: bool,
     period_size: int,
@@ -1646,7 +1647,7 @@ async def _word_picture_impl(
     measures: Container[Measures],
     abort_signal: AbortSignal | None = None,
 ) -> AsyncIterator[dict]:
-    """Shared implementation for `/word_picture` and `/word_picture/time`.
+    """Shared implementation for `/dependency_relations` and `/dependency_relations/time`.
 
     Args:
         ctx: Common dependencies.
@@ -1713,15 +1714,19 @@ async def _word_picture_impl(
 
     async with ctx.db.async_connection() as conn:
         await conn.execute(text("SET @@session.long_query_time = 1000;"))
-        tables = await _existing_tables(conn, f"{settings.DB_WORD_PICTURE_TABLE}_%_head_rel")
+        tables = await _existing_tables(conn, f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_%_head_rel")
         table_suffix = f"{SPLIT_SUFFIX}_head_rel" if use_split_data else "_head_rel"
 
         # Filter out corpora which don't exist in database
-        corpora = [c for c in corpora if f"{settings.DB_WORD_PICTURE_TABLE}_{c.upper()}{table_suffix}" in tables]
+        corpora = [
+            c
+            for c in corpora
+            if f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{c.upper()}{table_suffix}" in tables
+        ]
         corpora_rest = [c for c in corpora if c not in cached_corpora]
 
         if not corpora:
-            yield {"error": "No word picture data available for the selected corpora."}
+            yield {"error": "No dependency relations data available for the selected corpora."}
             return
 
         if corpora_rest and ctx.common.incremental:
@@ -1812,7 +1817,7 @@ async def _word_picture_impl(
     total_corpus_size = sum(corpus_size_per_year.values())
 
     # Aggregate split rows for overall + time-sliced outputs
-    acc = _WordPictureAccumulator()
+    acc = _DependencyRelationsAccumulator()
     for corpus in corpora:
         if corpus_data := corpus_results.get(corpus):
             acc.add_corpus_rows(corpus, corpus_data)
@@ -1934,13 +1939,13 @@ async def _word_picture_impl(
 
 
 @router.get(
-    "/word_picture",
+    "/dependency_relations",
     response_model=None,
     responses=docs_response(RelationsResponse),
-    summary="Word Picture",
-    description=WORD_PICTURE_DESCRIPTION,
+    summary="Dependency Relations",
+    description=DEPENDENCY_RELATIONS_DESCRIPTION,
 )
-@router.post("/word_picture", response_model=None, include_in_schema=False)
+@router.post("/dependency_relations", response_model=None, include_in_schema=False)
 @api_handler
 async def relations(
     ctx: CtxDep,
@@ -1949,7 +1954,7 @@ async def relations(
     term_type: TermTypeParam = TermType.word,
     min_freq: MinFreqParam = None,
     max_results: MaxResultsParam = 15,
-    sort: RelationsSortParam = WordPictureSort.mi,
+    sort: RelationsSortParam = DependencyRelationsSort.mi,
     include_time: RelationsIncludeTimeParam = False,
     period_size: PeriodSizeParam = 1,
     period_align: PeriodAlignParam = PeriodAlign.newest,
@@ -1960,12 +1965,12 @@ async def relations(
     measures: MeasuresParam = tuple(Measures),
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
-    """Calculate word picture data.
+    """Calculate dependency relations data.
 
     Yields:
-        Word picture relation data.
+        Dependency relation data.
     """
-    async for item in _word_picture_impl(
+    async for item in _dependency_relations_impl(
         ctx=ctx,
         corpora=corpus,
         term=term,
@@ -1987,13 +1992,13 @@ async def relations(
 
 
 @router.get(
-    "/word_picture/time",
+    "/dependency_relations/time",
     response_model=None,
     responses=docs_response(RelationsResponse),
-    summary="Word Picture Over Time",
-    description=WORD_PICTURE_TIME_DESCRIPTION,
+    summary="Dependency Relations Over Time",
+    description=DEPENDENCY_RELATIONS_TIME_DESCRIPTION,
 )
-@router.post("/word_picture/time", response_model=None, include_in_schema=False)
+@router.post("/dependency_relations/time", response_model=None, include_in_schema=False)
 @api_handler
 async def relations_time(
     ctx: CtxDep,
@@ -2002,7 +2007,7 @@ async def relations_time(
     term_type: TermTypeParam = TermType.word,
     min_freq: MinFreqParam = None,
     max_results: MaxResultsParam = 15,
-    sort: RelationsSortParam = WordPictureSort.mi,
+    sort: RelationsSortParam = DependencyRelationsSort.mi,
     period_size: PeriodSizeParam = 1,
     period_align: PeriodAlignParam = PeriodAlign.newest,
     start_year: YearParam = None,
@@ -2012,12 +2017,12 @@ async def relations_time(
     measures: MeasuresParam = tuple(Measures),
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
-    """Calculate word picture data with time splits.
+    """Calculate dependency relations data with time splits.
 
     Yields:
-        Word picture relation data with time splits.
+        Dependency relation data with time splits.
     """
-    async for item in _word_picture_impl(
+    async for item in _dependency_relations_impl(
         ctx=ctx,
         corpora=corpus,
         term=term,
@@ -2071,12 +2076,12 @@ async def _relations_sentences_impl(
     sql_query_start_time = time.perf_counter()
     async with ctx.db.async_connection() as conn:
         await conn.execute(text("SET @@session.long_query_time = 1000;"))
-        tables = await _existing_tables(conn, f"{settings.DB_WORD_PICTURE_TABLE}_%{table_suffix}")
+        tables = await _existing_tables(conn, f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_%{table_suffix}")
         filtered_source = sorted(
             [
                 (corpus, ids)
                 for corpus, ids in source_map.items()
-                if f"{settings.DB_WORD_PICTURE_TABLE}_{corpus.upper()}{table_suffix}" in tables
+                if f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{corpus.upper()}{table_suffix}" in tables
             ]
         )
         if not filtered_source:
@@ -2087,7 +2092,7 @@ async def _relations_sentences_impl(
         counts: list[str] = []
         for corpus, ids in filtered_source:
             ids_list = "(" + ", ".join(f"{i:d}" for i in sorted(ids)) + ")"
-            corpus_table_sentences = f"{settings.DB_WORD_PICTURE_TABLE}_{corpus.upper()}{table_suffix}"
+            corpus_table_sentences = f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{corpus.upper()}{table_suffix}"
             selects.append(
                 f"""(
                     SELECT
@@ -2176,13 +2181,13 @@ async def _relations_sentences_impl(
 
 
 @router.get(
-    "/word_picture/sentences",
+    "/dependency_relations/sentences",
     response_model=None,
     responses=docs_response(RelationsSentencesResponse),
-    summary="Word Picture Sentences",
-    description=WORD_PICTURE_SENTENCES_DESCRIPTION,
+    summary="Dependency Relations Sentences",
+    description=DEPENDENCY_RELATIONS_SENTENCES_DESCRIPTION,
 )
-@router.post("/word_picture/sentences", response_model=None, include_in_schema=False)
+@router.post("/dependency_relations/sentences", response_model=None, include_in_schema=False)
 @api_handler
 async def relations_sentences(
     ctx: CtxDep,
@@ -2194,7 +2199,7 @@ async def relations_sentences(
     default_context: RelationsDefaultContextParam = "1 sentence",
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
-    """Find sentences containing relations from word picture source IDs.
+    """Find sentences containing relations from dependency relations source IDs.
 
     Args:
         ctx: Common dependencies.
@@ -2223,13 +2228,13 @@ async def relations_sentences(
 
 
 @router.get(
-    "/word_picture/time/sentences",
+    "/dependency_relations/time/sentences",
     response_model=None,
     responses=docs_response(RelationsSentencesResponse),
-    summary="Word Picture Time Sentences",
-    description=WORD_PICTURE_TIME_SENTENCES_DESCRIPTION,
+    summary="Dependency Relations Time Sentences",
+    description=DEPENDENCY_RELATIONS_TIME_SENTENCES_DESCRIPTION,
 )
-@router.post("/word_picture/time/sentences", response_model=None, include_in_schema=False)
+@router.post("/dependency_relations/time/sentences", response_model=None, include_in_schema=False)
 @api_handler
 async def relations_time_sentences(
     ctx: CtxDep,
@@ -2241,7 +2246,7 @@ async def relations_time_sentences(
     default_context: RelationsDefaultContextParam = "1 sentence",
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
-    """Find time-split sentences containing relations from word picture source IDs.
+    """Find time-split sentences containing relations from dependency relations source IDs.
 
     Args:
         ctx: Common dependencies.

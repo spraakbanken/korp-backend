@@ -1,6 +1,6 @@
 SET @@session.long_query_time = 1000;
-DROP TABLE IF EXISTS `temp_word_picture_TESTCORPUS2`;
-CREATE TABLE `temp_word_picture_TESTCORPUS2` (
+DROP TABLE IF EXISTS `temp_relations_TESTCORPUS2`;
+CREATE TABLE `temp_relations_TESTCORPUS2` (
    `id` int(11) NOT NULL DEFAULT 0,
    `head` int(11) NOT NULL DEFAULT 0,
    `rel` ENUM('SS', 'OBJ', 'ADV', 'AA', 'AT', 'ET', 'PA') NOT NULL DEFAULT 'SS',
@@ -14,49 +14,49 @@ CREATE TABLE `temp_word_picture_TESTCORPUS2` (
  INDEX `dep-wfdep-head-rel-freq-id` (`dep`, `wfdep`, `head`, `rel`, `freq`, `id`),
  INDEX `head-dep-bfhead-bfdep-rel-freq-id` (`head`, `dep`, `bfhead`, `bfdep`, `rel`, `freq`, `id`),
  INDEX `dep-head-bfhead-bfdep-rel-freq-id` (`dep`, `head`, `bfhead`, `bfdep`, `rel`, `freq`, `id`))  default charset = utf8mb4  row_format = compressed ;
-DROP TABLE IF EXISTS `temp_word_picture_TESTCORPUS2_strings`;
-CREATE TABLE `temp_word_picture_TESTCORPUS2_strings` (
+DROP TABLE IF EXISTS `temp_relations_TESTCORPUS2_strings`;
+CREATE TABLE `temp_relations_TESTCORPUS2_strings` (
    `id` int(11) NOT NULL DEFAULT 0,
    `string` varchar(100) NOT NULL DEFAULT '',
    `stringextra` varchar(32) NOT NULL DEFAULT '',
    `pos` varchar(5) NOT NULL DEFAULT '',
  PRIMARY KEY (`string`, `id`, `pos`, `stringextra`),
  INDEX `id-string-pos-stringextra` (`id`, `string`, `pos`, `stringextra`))  default charset = utf8mb4  collate = utf8mb4_bin  row_format = compressed ;
-DROP TABLE IF EXISTS `temp_word_picture_TESTCORPUS2_rel`;
-CREATE TABLE `temp_word_picture_TESTCORPUS2_rel` (
+DROP TABLE IF EXISTS `temp_relations_TESTCORPUS2_rel`;
+CREATE TABLE `temp_relations_TESTCORPUS2_rel` (
    `rel` ENUM('SS', 'OBJ', 'ADV', 'AA', 'AT', 'ET', 'PA') NOT NULL DEFAULT 'SS',
    `freq` int(11) NOT NULL DEFAULT 0,
  PRIMARY KEY (`rel`, `freq`))  default charset = utf8mb4  collate = utf8mb4_bin  row_format = compressed ;
-DROP TABLE IF EXISTS `temp_word_picture_TESTCORPUS2_head_rel`;
-CREATE TABLE `temp_word_picture_TESTCORPUS2_head_rel` (
+DROP TABLE IF EXISTS `temp_relations_TESTCORPUS2_head_rel`;
+CREATE TABLE `temp_relations_TESTCORPUS2_head_rel` (
    `head` int(11) NOT NULL DEFAULT 0,
    `rel` ENUM('SS', 'OBJ', 'ADV', 'AA', 'AT', 'ET', 'PA') NOT NULL DEFAULT 'SS',
    `freq` int(11) NOT NULL DEFAULT 0,
  PRIMARY KEY (`head`, `rel`, `freq`))  default charset = utf8mb4  collate = utf8mb4_bin  row_format = compressed ;
-DROP TABLE IF EXISTS `temp_word_picture_TESTCORPUS2_dep_rel`;
-CREATE TABLE `temp_word_picture_TESTCORPUS2_dep_rel` (
+DROP TABLE IF EXISTS `temp_relations_TESTCORPUS2_dep_rel`;
+CREATE TABLE `temp_relations_TESTCORPUS2_dep_rel` (
    `dep` int(11) NOT NULL DEFAULT 0,
    `rel` ENUM('SS', 'OBJ', 'ADV', 'AA', 'AT', 'ET', 'PA') NOT NULL DEFAULT 'SS',
    `freq` int(11) NOT NULL DEFAULT 0,
  PRIMARY KEY (`dep`, `rel`, `freq`))  default charset = utf8mb4  collate = utf8mb4_bin  row_format = compressed ;
-DROP TABLE IF EXISTS `temp_word_picture_TESTCORPUS2_sentences`;
-CREATE TABLE `temp_word_picture_TESTCORPUS2_sentences` (
+DROP TABLE IF EXISTS `temp_relations_TESTCORPUS2_sentences`;
+CREATE TABLE `temp_relations_TESTCORPUS2_sentences` (
    `id` int(11)  DEFAULT NULL,
    `sentence` varchar(64) NOT NULL DEFAULT '',
    `start` int(11)  DEFAULT NULL,
    `end` int(11)  DEFAULT NULL,
  INDEX `id` (`id`))  default charset = utf8mb4  collate = utf8mb4_bin  row_format = compressed ;
-ALTER TABLE `temp_word_picture_TESTCORPUS2` DISABLE KEYS;
-ALTER TABLE `temp_word_picture_TESTCORPUS2_strings` DISABLE KEYS;
-ALTER TABLE `temp_word_picture_TESTCORPUS2_rel` DISABLE KEYS;
-ALTER TABLE `temp_word_picture_TESTCORPUS2_head_rel` DISABLE KEYS;
-ALTER TABLE `temp_word_picture_TESTCORPUS2_dep_rel` DISABLE KEYS;
-ALTER TABLE `temp_word_picture_TESTCORPUS2_sentences` DISABLE KEYS;
+ALTER TABLE `temp_relations_TESTCORPUS2` DISABLE KEYS;
+ALTER TABLE `temp_relations_TESTCORPUS2_strings` DISABLE KEYS;
+ALTER TABLE `temp_relations_TESTCORPUS2_rel` DISABLE KEYS;
+ALTER TABLE `temp_relations_TESTCORPUS2_head_rel` DISABLE KEYS;
+ALTER TABLE `temp_relations_TESTCORPUS2_dep_rel` DISABLE KEYS;
+ALTER TABLE `temp_relations_TESTCORPUS2_sentences` DISABLE KEYS;
 SET FOREIGN_KEY_CHECKS = 0;
 SET UNIQUE_CHECKS = 0;
 SET AUTOCOMMIT = 0;
 SET NAMES utf8mb4;
-INSERT INTO `temp_word_picture_TESTCORPUS2_strings` (id, pos, string, stringextra) VALUES
+INSERT INTO `temp_relations_TESTCORPUS2_strings` (id, pos, string, stringextra) VALUES
 (1, '', '', ''),
 (0, 'VB', 'börja..vb.1', ''),
 (7, 'VB', 'börja..vb.2', ''),
@@ -88,7 +88,7 @@ INSERT INTO `temp_word_picture_TESTCORPUS2_strings` (id, pos, string, stringextr
 (16, 'VB', 'vara..vb.1', ''),
 (30, 'VB', 'är', ''),
 (18, 'VB', 'är', '');
-INSERT INTO `temp_word_picture_TESTCORPUS2` (bfdep, bfhead, dep, freq, head, id, rel, wfdep, wfhead) VALUES
+INSERT INTO `temp_relations_TESTCORPUS2` (bfdep, bfhead, dep, freq, head, id, rel, wfdep, wfhead) VALUES
 (0, 1, 2, 1, 0, 1, 'ADV', 1, 0),
 (1, 1, 3, 1, 0, 2, 'ADV', 0, 0),
 (1, 1, 1, 2, 0, 0, 'OBJ', 1, 0),
@@ -134,12 +134,12 @@ INSERT INTO `temp_word_picture_TESTCORPUS2` (bfdep, bfhead, dep, freq, head, id,
 (1, 0, 28, 1, 30, 43, 'ADV', 0, 1),
 (1, 0, 29, 1, 30, 44, 'ADV', 0, 1),
 (1, 0, 1, 2, 30, 41, 'OBJ', 0, 1);
-INSERT INTO `temp_word_picture_TESTCORPUS2_rel` (freq, rel) VALUES
+INSERT INTO `temp_relations_TESTCORPUS2_rel` (freq, rel) VALUES
 (6, 'ADV'),
 (3, 'ET'),
 (7, 'OBJ'),
 (5, 'SS');
-INSERT INTO `temp_word_picture_TESTCORPUS2_head_rel` (freq, head, rel) VALUES
+INSERT INTO `temp_relations_TESTCORPUS2_head_rel` (freq, head, rel) VALUES
 (1, 0, 'ADV'),
 (1, 0, 'OBJ'),
 (2, 0, 'SS'),
@@ -167,7 +167,7 @@ INSERT INTO `temp_word_picture_TESTCORPUS2_head_rel` (freq, head, rel) VALUES
 (3, 25, 'OBJ'),
 (3, 30, 'ADV'),
 (2, 30, 'OBJ');
-INSERT INTO `temp_word_picture_TESTCORPUS2_dep_rel` (dep, freq, rel) VALUES
+INSERT INTO `temp_relations_TESTCORPUS2_dep_rel` (dep, freq, rel) VALUES
 (1, 12, 'OBJ'),
 (2, 3, 'ADV'),
 (3, 3, 'ADV'),
@@ -186,7 +186,7 @@ INSERT INTO `temp_word_picture_TESTCORPUS2_dep_rel` (dep, freq, rel) VALUES
 (27, 1, 'ADV'),
 (28, 1, 'ADV'),
 (29, 1, 'ADV');
-INSERT INTO `temp_word_picture_TESTCORPUS2_sentences` (end, id, sentence, start) VALUES
+INSERT INTO `temp_relations_TESTCORPUS2_sentences` (end, id, sentence, start) VALUES
 (2, 0, '8f2', 2),
 (1, 1, '8f2', 2),
 (1, 2, '8f2', 2),
@@ -235,14 +235,14 @@ INSERT INTO `temp_word_picture_TESTCORPUS2_sentences` (end, id, sentence, start)
 (9, 42, '80d', 7),
 (9, 43, '80d', 7),
 (9, 44, '80d', 7);
-ALTER TABLE `temp_word_picture_TESTCORPUS2` ENABLE KEYS;
-ALTER TABLE `temp_word_picture_TESTCORPUS2_strings` ENABLE KEYS;
-ALTER TABLE `temp_word_picture_TESTCORPUS2_rel` ENABLE KEYS;
-ALTER TABLE `temp_word_picture_TESTCORPUS2_head_rel` ENABLE KEYS;
-ALTER TABLE `temp_word_picture_TESTCORPUS2_dep_rel` ENABLE KEYS;
-ALTER TABLE `temp_word_picture_TESTCORPUS2_sentences` ENABLE KEYS;
-DROP TABLE IF EXISTS `word_picture_TESTCORPUS2`, `word_picture_TESTCORPUS2_strings`, `word_picture_TESTCORPUS2_rel`, `word_picture_TESTCORPUS2_head_rel`, `word_picture_TESTCORPUS2_dep_rel`, `word_picture_TESTCORPUS2_sentences`;
-RENAME TABLE `temp_word_picture_TESTCORPUS2` TO `word_picture_TESTCORPUS2`, `temp_word_picture_TESTCORPUS2_strings` TO `word_picture_TESTCORPUS2_strings`, `temp_word_picture_TESTCORPUS2_rel` TO `word_picture_TESTCORPUS2_rel`, `temp_word_picture_TESTCORPUS2_head_rel` TO `word_picture_TESTCORPUS2_head_rel`, `temp_word_picture_TESTCORPUS2_dep_rel` TO `word_picture_TESTCORPUS2_dep_rel`, `temp_word_picture_TESTCORPUS2_sentences` TO `word_picture_TESTCORPUS2_sentences`;
+ALTER TABLE `temp_relations_TESTCORPUS2` ENABLE KEYS;
+ALTER TABLE `temp_relations_TESTCORPUS2_strings` ENABLE KEYS;
+ALTER TABLE `temp_relations_TESTCORPUS2_rel` ENABLE KEYS;
+ALTER TABLE `temp_relations_TESTCORPUS2_head_rel` ENABLE KEYS;
+ALTER TABLE `temp_relations_TESTCORPUS2_dep_rel` ENABLE KEYS;
+ALTER TABLE `temp_relations_TESTCORPUS2_sentences` ENABLE KEYS;
+DROP TABLE IF EXISTS `relations_TESTCORPUS2`, `relations_TESTCORPUS2_strings`, `relations_TESTCORPUS2_rel`, `relations_TESTCORPUS2_head_rel`, `relations_TESTCORPUS2_dep_rel`, `relations_TESTCORPUS2_sentences`;
+RENAME TABLE `temp_relations_TESTCORPUS2` TO `relations_TESTCORPUS2`, `temp_relations_TESTCORPUS2_strings` TO `relations_TESTCORPUS2_strings`, `temp_relations_TESTCORPUS2_rel` TO `relations_TESTCORPUS2_rel`, `temp_relations_TESTCORPUS2_head_rel` TO `relations_TESTCORPUS2_head_rel`, `temp_relations_TESTCORPUS2_dep_rel` TO `relations_TESTCORPUS2_dep_rel`, `temp_relations_TESTCORPUS2_sentences` TO `relations_TESTCORPUS2_sentences`;
 SET UNIQUE_CHECKS = 1;
 SET FOREIGN_KEY_CHECKS = 1;
 COMMIT;

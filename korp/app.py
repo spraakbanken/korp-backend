@@ -42,8 +42,14 @@ _API_DOCUMENTATION_STRUCTURE = [
         "routes": ["/count", "/count_all", "/count_time", "/timespan", "/log_likelihood", "/lexeme_counts"],
     },
     {
-        "name": "Word Relations",
-        "description": "Routes for querying word relations.",
+        "name": "Dependency Relations",
+        "description": "Routes for querying dependency relation statistics.",
+        "routes": [
+            "/dependency_relations",
+            "/dependency_relations/time",
+            "/dependency_relations/sentences",
+            "/dependency_relations/time/sentences",
+        ],
     },
     {
         "name": "Administration",
@@ -69,7 +75,7 @@ Use this API to:
 - discover available corpora and their annotations
 - run concordance queries and retrieve matching lines with annotations
 - count query matches, attribute values, and time distributions
-- query word relations when relation data is configured
+- query dependency relation statistics when relation data is configured
 - maintain server-side caches
 
 Available corpora, annotations, and optional features depend on the Korp installation you are using.

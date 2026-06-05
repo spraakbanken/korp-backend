@@ -6,12 +6,12 @@ from korp.api.routers import (
     concordance,
     corpus_config,
     count,
+    dependency_relations,
     info,
     lexeme_counts,
     log_likelihood,
     misc,
     timespan,
-    word_picture,
 )
 
 routers = [
@@ -20,10 +20,10 @@ routers = [
     concordance.router,
     corpus_config.router,
     count.router,
+    dependency_relations.router,
     info.router,
     lexeme_counts.router,
     log_likelihood.router,
     misc.router,
     timespan.router,
-    word_picture.router,
 ]

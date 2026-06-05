@@ -16,7 +16,7 @@ To use the basic features of the Korp backend you need the following:
 - [Python 3.11+](https://python.org/)
 - [Corpus Workbench](https://cwb.sourceforge.io/) (CWB) 3.4.12 or newer
 
-To use the additional features such as the Word Picture you also need:
+To use the additional features such as the Dependency Relations you also need:
 
 - [MariaDB](https://mariadb.org/) or [MySQL](https://www.mysql.com/)
 
@@ -83,7 +83,8 @@ The following variables need to be set for Korp to work:
 - `CWB_SCAN_EXECUTABLE`
 - `CWB_REGISTRY`
   
-If you are planning on using the Word Picture, Trend Diagram or other features that require database access, you also need to set the following variables:
+If you are planning on using the Dependency Relations, Trend Diagram or other features that require database access, you also
+need to set the following variables:
 
 - `DB_NAME`
 - `DB_USER & DB_PASSWORD`
@@ -179,7 +180,7 @@ Once this file is in place, Korp will be able to access this information.
 To use the basic concordance features of Korp there are no particular requirements
 regarding the markup of your corpora.
 
-To use the **Word Picture** functionality your corpus must adhere to the following format:
+To use the **Dependency Relations** functionality your corpus must adhere to the following format:
 
 - The structural annotation marking sentences must be named `sentence`.
 - Every sentence annotation must have an attribute named `id` with a value that is unique within the corpus.
@@ -196,17 +197,17 @@ A corpus dated 2006 would have the following values:
 
 ## Database tables
 
-This section describes the database tables needed to use the Word Picture, Lexeme Count and Trend Diagram features.
+This section describes the database tables needed to use the Dependency Relations, Lexeme Count and Trend Diagram features.
 If you don't need any of these features, you can skip this section.
 
-### Database tables for the Word Picture
+### Database tables for dependency relations
 
-The Word Picture data consists of head-relation-dependent triplets and frequencies. For every corpus, you need six
-database tables. The prefix of the table names (`word_picture` by default) can be configured using the
-`DB_WORD_PICTURE_TABLE` variable. The table structures are as follows:
+The dependency relation data consists of head-relation-dependent triplets and frequencies. For every corpus, you need six
+database tables. The prefix of the table names (`relations` by default) can be configured using the
+`DB_DEPENDENCY_RELATIONS_TABLE_PREFIX` variable. The table structures are as follows:
 
 ```text
-Table name: word_picture_CORPUSNAME  
+Table name: relations_CORPUSNAME  
 Charset:    UTF-8  
 
 Columns:  
@@ -227,7 +228,7 @@ Indexes:
     (dep, head, bfhead, bfdep, rel, freq, id)
 
 
-Table name: word_picture_CORPUSNAME_strings  
+Table name: relations_CORPUSNAME_strings  
 Charset:    UTF-8  
 
 Columns:  
@@ -241,7 +242,7 @@ Indexes:
     (id, string, pos, stringextra)
 
 
-Table name: word_picture_CORPUSNAME_rel  
+Table name: relations_CORPUSNAME_rel  
 Charset:    UTF-8  
 
 Columns:  
@@ -252,7 +253,7 @@ Indexes:
     (rel, freq)  
 
 
-Table name: word_picture_CORPUSNAME_head_rel  
+Table name: relations_CORPUSNAME_head_rel  
 Charset:    UTF-8  
 
 Columns:  
@@ -264,7 +265,7 @@ Indexes:
     (head, rel, freq)
 
 
-Table name: word_picture_CORPUSNAME_dep_rel  
+Table name: relations_CORPUSNAME_dep_rel  
 Charset:    UTF-8  
 
 Columns:  
@@ -276,11 +277,11 @@ Indexes:
     (dep, rel, freq)
 
 
-Table name: word_picture_CORPUSNAME_sentences  
+Table name: relations_CORPUSNAME_sentences  
 Charset:    UTF-8  
 
 Columns:  
-    id             int                  An ID from word_picture_CORPUSNAME
+    id             int                  An ID from relations_CORPUSNAME
     sentence       varchar(64)          A sentence ID (see the section about corpus structure above)  
     start          int                  The position of the first word of the relation in the sentence  
     end            int                  The position of the last word of the relation in the sentence  
@@ -289,7 +290,7 @@ Indexes:
     id
 ```
 
-In the main `word_picture_CORPUSNAME` table, each relation should be represented three times. Once with both dependent
+In the main `relations_CORPUSNAME` table, each relation should be represented three times. Once with both dependent
 and head as base forms, once with dependent as base form and head as word form, and once with dependent as
 word form and head as base form. This is to allow searching for both base forms and word forms, giving different
 results for different searched word forms, while the results are always displayed as base forms.

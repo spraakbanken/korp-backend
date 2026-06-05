@@ -300,7 +300,7 @@ Each file, whether SQL or TSV, should contain data only for one corpus, whose id
 directory) name.
 
 Data can be imported by specifying either the corpus id and type(s) of table(s) (one or more of `timedata`,
-`lexeme_counts` and `word_picture`) or the files containing data (globs can be used).
+`lexeme_counts` and `dependency_relations`) or the files containing data (globs can be used).
 
 The YAML files in [`data/db/tableinfo/`](data/db/tableinfo) contain table information specifying a mapping from (TSV)
 data files to database tables (and indirectly also the other way round). Each file contains a sequence of one or more
@@ -340,10 +340,10 @@ Currently, the table information files support the following file name and direc
 Here:
 
 - _corpus_ = corpus id (in lower case)
-- _tabletype_ = high-level table type: one of `lexeme_counts` (or `lexemes`), `timedata` and `word_picture`
+- _tabletype_ = high-level table type: one of `lexeme_counts` (or `lexemes`), `timedata` and `dependency_relations`
 - _tabletype\_detailed_ = more detailed table type (mainly for TSV files):
   - `lexeme_counts`: `lexeme_counts` (or `lexemes`) (the same as the high-level type)
   - `timedata`: `timedata` or `timedata_date`
-  - `word_picture`: `word_picture`, `word_picture_strings`, `word_picture_rel`, `word_picture_head_rel`,
-     `word_picture_dep_rel` or `word_picture_sentence`
+  - `dependency_relations`: `relations`, `relations_strings`, `relations_rel`, `relations_head_rel`,
+     `relations_dep_rel` or `relations_sentences`
 - _ext_ = file type extension: `tsv` or `sql`

@@ -53,8 +53,8 @@ class Settings(BaseSettings):
     # Database character set (use "utf8mb4" for full Unicode)
     DB_CHARSET: str = "utf8"
 
-    # Word Picture table prefix
-    DB_WORD_PICTURE_TABLE: str = "word_picture"
+    # Dependency relations table prefix
+    DB_DEPENDENCY_RELATIONS_TABLE_PREFIX: str = "relations"
 
     # Lexeme counts table name
     DB_LEXEME_COUNTS_TABLE: str = "lexeme_counts"

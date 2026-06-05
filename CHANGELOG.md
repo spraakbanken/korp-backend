@@ -13,7 +13,7 @@ and documentation.
 - Improved type hinting and documentation throughout the codebase.
 - Added support for client-side caching via HTTP Cache-Control headers.
 - Added tests (thanks to @janiemi for the contribution!).
-- Added a new `/relations_time` endpoint for retrieving Word Picture data over time.
+- Added a new `/dependency_relations/time` endpoint for retrieving dependency relation data over time.
 
 ### Changed
 
