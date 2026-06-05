@@ -39,7 +39,7 @@ _API_DOCUMENTATION_STRUCTURE = [
     {
         "name": "Statistics",
         "description": "Routes for retrieving various corpus statistics.",
-        "routes": ["/count", "/count_all", "/count_time", "/timespan", "/log_likelihood", "/lexeme_counts"],
+        "routes": ["/count", "/count_all", "/count_time", "/token_distribution", "/log_likelihood", "/lexeme_counts"],
     },
     {
         "name": "Dependency Relations",

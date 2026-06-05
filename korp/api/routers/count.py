@@ -24,7 +24,7 @@ from korp.dependencies import AbortDep, AbortSignal, CtxDep
 from korp.handler import api_handler
 from korp.memcached import CacheError, MemcachedSyncClient
 
-from . import info, timespan
+from . import info, token_distribution
 
 if TYPE_CHECKING:
     import anyio.abc
@@ -1235,7 +1235,7 @@ async def count_time(
                 yield {f"progress_{ns.progress_count}": c}
                 ns.progress_count += 1
 
-    corpus_timedata = await timespan.get_timespan(
+    corpus_timedata = await token_distribution.get_timespan(
         ctx=ctx,
         corpora=count_params.corpora,
         granularity=granularity,
@@ -1248,7 +1248,7 @@ async def count_time(
     search_timedata = []
     search_timedata_combined = []
     for total_row in total_rows:
-        temp = timespan.timespan_calculator(total_row, granularity=granularity, strategy=strategy)
+        temp = token_distribution.timespan_calculator(total_row, granularity=granularity, strategy=strategy)
         if per_corpus:
             search_timedata.append(temp["corpora"])
         if combined:

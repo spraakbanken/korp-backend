@@ -1,4 +1,4 @@
-"""Router for timespan information."""
+"""Router for token distribution information."""
 
 import bisect
 import functools
@@ -30,7 +30,7 @@ from korp.memcached import CacheError
 router = APIRouter(tags=["Statistics"])
 logger = getLogger(__name__)
 
-TIMESPAN_DESCRIPTION = f"""Show the distribution of corpus tokens over time.
+TOKEN_DISTRIBUTION_DESCRIPTION = f"""Show the distribution of corpus tokens over time.
 
 The route returns token counts grouped by time period. Use `granularity` to choose the period size: year, month, day,
 hour, minute, or second. The response can include per-corpus series, one combined series for all selected corpora, or
@@ -50,7 +50,7 @@ Use `date_from` and `date_to` together to limit the date range.
 
 Show yearly token distribution for a corpus:
 
-`/timespan?corpus=VIVILL&granularity=year`
+`/token_distribution?corpus=VIVILL&granularity=year`
 """
 
 DateFromParam: TypeAlias = Annotated[
@@ -78,8 +78,8 @@ DateToParam: TypeAlias = Annotated[
 ]
 
 
-class TimespanResponse(schemas.CommonResponse):
-    """Response model for `/timespan` route."""
+class TokenDistributionResponse(schemas.CommonResponse):
+    """Response model for `/token_distribution` route."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -163,15 +163,15 @@ def _adjust_date(date_str: str, granularity: GranularityValues, *, subtract: boo
 
 
 @router.get(
-    "/timespan",
+    "/token_distribution",
     response_model=None,
-    responses=docs_response(TimespanResponse),
-    summary="Distribution Over Time",
-    description=TIMESPAN_DESCRIPTION,
+    responses=docs_response(TokenDistributionResponse),
+    summary="Token Distribution",
+    description=TOKEN_DISTRIBUTION_DESCRIPTION,
 )
-@router.post("/timespan", response_model=None, include_in_schema=False)
+@router.post("/token_distribution", response_model=None, include_in_schema=False)
 @api_handler
-async def timespan(
+async def token_distribution(
     ctx: CtxDep,
     corpus: params.CorpusParam,
     granularity: params.GranularityParam = GranularityValues.year,
@@ -181,7 +181,7 @@ async def timespan(
     date_from: DateFromParam = None,
     date_to: DateToParam = None,
 ) -> AsyncIterator[dict]:
-    """Calculate timespan information for corpora.
+    """Calculate token distribution information for corpora.
 
     Args:
         ctx: The request context.
@@ -194,7 +194,7 @@ async def timespan(
         date_to: End date for filtering (inclusive).
 
     Yields:
-        A dictionary containing the timespan information.
+        A dictionary containing the token distribution information.
     """
     corpora = corpus or []
 
@@ -241,7 +241,7 @@ async def get_timespan(
         ValueError: If only one of date_from or date_to is provided.
     """
     if (date_from or date_to) and not (date_from and date_to):
-        raise ValueError("When using 'from' or 'to', both need to be specified.")
+        raise ValueError("When using 'date_from' or 'date_to', both need to be specified.")
     total_start = perf_counter()
     fetch_duration = 0.0
     cache_write_duration = 0.0

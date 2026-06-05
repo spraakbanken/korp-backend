@@ -24,7 +24,7 @@ from korp.dependencies import AbortDep, AbortSignal, CtxDep
 from korp.handler import api_handler, docs_response
 from korp.memcached import CacheError
 
-from . import concordance, timespan
+from . import concordance, token_distribution
 
 router = APIRouter(tags=["Dependency Relations"])
 
@@ -1785,7 +1785,7 @@ async def _dependency_relations_impl(
     # Everything past this point uses the accumulator for split/overall data
 
     # Get yearly size of corpora to be able to compute relative frequencies
-    corpus_timedata = await timespan.get_timespan(
+    corpus_timedata = await token_distribution.get_timespan(
         ctx,
         corpora,
         granularity=params.GranularityValues.year,
