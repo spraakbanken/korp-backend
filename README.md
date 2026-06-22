@@ -94,6 +94,13 @@ For caching to work you need to specify both a cache directory and a Memcached s
 - `CACHE_DIR`
 - `MEMCACHED_SERVER`
 
+For browser-based cross-origin access (CORS), configure explicitly per deployment:
+
+- `CORS_ALLOW_ORIGINS` (list of allowed origins; leave empty to disable cross-origin browser access)
+- `CORS_ALLOW_ORIGIN_REGEX` (optional regex alternative for origin matching)
+- `CORS_ALLOW_CREDENTIALS` (must be `false` if `CORS_ALLOW_ORIGINS` contains `"*"`)
+- `CORS_ALLOW_METHODS` and `CORS_ALLOW_HEADERS`
+
 Optional route-level rate limiting can be enabled with:
 
 - `RATE_LIMIT_ENABLED=true`

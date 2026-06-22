@@ -4,6 +4,7 @@ These settings can be overridden by environment variables or by creating a .env 
 the server.
 """
 
+import re
 from pathlib import Path
 from types import UnionType
 from typing import Any, Literal, get_args, get_origin
@@ -11,6 +12,23 @@ from typing import Any, Literal, get_args, get_origin
 import yaml
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_CORS_ORIGIN_REGEX_MATCH_ALL_EXAMPLES = (
+    "https://example.com",
+    "http://localhost:5173",
+    "https://sub.example.org:8443",
+    "null",
+)
+
+
+def _is_obvious_cors_origin_match_all_regex(pattern: str) -> bool:
+    """Return whether a CORS origin regex is an obvious match-all pattern."""
+    pattern = pattern.strip()
+    if not pattern:
+        return False
+
+    compiled = re.compile(pattern)
+    return all(compiled.fullmatch(origin) for origin in _CORS_ORIGIN_REGEX_MATCH_ALL_EXAMPLES)
 
 
 class Settings(BaseSettings):
@@ -80,6 +98,19 @@ class Settings(BaseSettings):
 
     # HTTP Cache-Control header max-age value (in hours)
     HTTP_CACHE_MAXAGE: int = 1
+
+    # CORS configuration for browser clients. Keep empty to disable cross-origin browser access.
+    CORS_ALLOW_ORIGINS: list[str] = []
+
+    # Optional regex for matching allowed origins. Can be used instead of explicit CORS_ALLOW_ORIGINS entries.
+    CORS_ALLOW_ORIGIN_REGEX: str | None = None
+
+    # If True, browsers may send credentials (cookies/authorization headers) in cross-origin requests
+    CORS_ALLOW_CREDENTIALS: bool = False
+
+    # Allowed methods and headers for CORS preflight handling
+    CORS_ALLOW_METHODS: list[str] = ["*"]
+    CORS_ALLOW_HEADERS: list[str] = ["*"]
 
     # Log requests that take longer than this many seconds to complete (0 = disable)
     REQUEST_SLOW_LOG_SECONDS: float = 0.0
@@ -168,6 +199,29 @@ class Settings(BaseSettings):
                 value = getattr(self, name)
                 if isinstance(value, Path):
                     setattr(self, name, value.expanduser())
+        return self
+
+    @model_validator(mode="after")
+    def _validate_cors_settings(self) -> "Settings":
+        """Validate CORS settings to avoid unsafe combinations.
+
+        Returns:
+            The validated settings instance.
+
+        Raises:
+            ValueError: If wildcard origins are combined with credentials.
+        """
+        if not self.CORS_ALLOW_CREDENTIALS:
+            return self
+
+        if "*" in self.CORS_ALLOW_ORIGINS:
+            msg = "CORS_ALLOW_ORIGINS cannot contain '*' when CORS_ALLOW_CREDENTIALS is true"
+            raise ValueError(msg)
+
+        if self.CORS_ALLOW_ORIGIN_REGEX and _is_obvious_cors_origin_match_all_regex(self.CORS_ALLOW_ORIGIN_REGEX):
+            msg = "CORS_ALLOW_ORIGIN_REGEX cannot match all origins when CORS_ALLOW_CREDENTIALS is true"
+            raise ValueError(msg)
+
         return self
 
     @staticmethod
