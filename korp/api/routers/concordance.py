@@ -37,8 +37,8 @@ router = APIRouter(tags=["Concordance"])
 CONCORDANCE_DESCRIPTION = """Search for concordance lines in one or more corpora.
 
 The route returns KWIC rows: each row contains the matching tokens, the requested left and right context, token
-annotations requested with `show`, optional structural annotations requested with `show_struct`, and the match position
-inside the returned context.
+annotations requested with `attributes`, optional structural annotations requested with `struct_attributes`, and the
+match position inside the returned context.
 
 Results are grouped by corpus and returned in `corpus_order`; sorting is also done within each corpus, not globally
 across all selected corpora. Use `offset` and `limit` for pagination. The response also includes total hit counts per
@@ -64,7 +64,7 @@ concordance data in the streamed JSON object.
 
 Query `SUC3` and return the first ten hits for `"och" [] [pos="NN"]`, including the `msd` and `lemma` annotations:
 
-`/concordance?corpus=SUC3&offset=0&limit=10&default_context=1+sentence&cqp="och"+[]+[pos="NN"]&show=msd,lemma`
+`/concordance?corpus=SUC3&offset=0&limit=10&default_context=1+sentence&cqp="och"+[]+[pos="NN"]&attributes=msd,lemma`
 """
 
 CONCORDANCE_SAMPLE_DESCRIPTION = """Do a random-sample concordance search.
@@ -137,7 +137,7 @@ RandomSeedParam: TypeAlias = Annotated[
     ),
 ]
 
-ShowParam: TypeAlias = Annotated[
+AttributesParam: TypeAlias = Annotated[
     Sequence[str],
     Query(
         description=(
@@ -149,7 +149,7 @@ ShowParam: TypeAlias = Annotated[
     BeforeValidator(utils.split_csv),
 ]
 
-ShowStructParam: TypeAlias = Annotated[
+StructAttributesParam: TypeAlias = Annotated[
     Sequence[str] | SkipJsonSchema[None],
     Query(
         description=(
@@ -227,7 +227,7 @@ class Token(BaseModel):
         None,
         description=(
             "Structural annotations whose span starts or ends at this token, included when structural attributes are "
-            "requested with `show` rather than `show_struct`."
+            "requested with `attributes` rather than `struct_attributes`."
         ),
         examples=[{"open": [{"sentence": {"id": "s1"}}], "close": ["sentence"]}],
     )
@@ -246,7 +246,7 @@ class KWICRow(BaseModel):
     )
     structs: dict[str, str | None] | SkipJsonSchema[None] = Field(
         None,
-        description="Structural attributes requested with `show_struct`.",
+        description="Structural attributes requested with `struct_attributes`.",
         examples=[{"text_author": "Söderberg, Hjalmar", "text_title": "Doktor Glas"}],
     )
     tokens: list[Token] = Field(
@@ -320,8 +320,8 @@ class ConcordanceParameters:
     cqp_query: list[str]
     start: int = 0
     end: int = 9
-    show: set[str] = dataclasses.field(default_factory=lambda: {"word"})
-    show_struct: set[str] = dataclasses.field(default_factory=set)
+    attributes: set[str] = dataclasses.field(default_factory=lambda: {"word"})
+    struct_attributes: set[str] = dataclasses.field(default_factory=set)
     cut: int | None = None
     sort: str | None = None
     random_seed: int | None = None
@@ -345,8 +345,8 @@ async def parse_parameters(
     cqp_query: list[str],
     offset: int,
     limit: int,
-    show: Sequence[str],
-    show_struct: Sequence[str] | None,
+    attributes: Sequence[str],
+    struct_attributes: Sequence[str] | None,
     cut: int | None = None,
     sort: str | None = None,
     random_seed: int | None = None,
@@ -368,8 +368,8 @@ async def parse_parameters(
         cqp_query: List of CQP query strings.
         offset: Number of rows to skip.
         limit: Maximum number of rows to return.
-        show: List of positional attributes to show in the results.
-        show_struct: List of structural attributes to show in the results.
+        attributes: List of positional attributes to include in the results.
+        struct_attributes: List of structural attributes to include in the results.
         cut: Maximum number of results to return per corpus. With this enabled, the total number of results will be
             incorrect.
         sort: Sorting method for the results.
@@ -393,10 +393,10 @@ async def parse_parameters(
     corpora = corpus or []
     await auth.check_authorization(corpora, ctx)
 
-    show_set = set(show)
-    show_set.add("word")  # Always include word
+    attributes_set = set(attributes)
+    attributes_set.add("word")  # Always include word
 
-    show_structs = set(show_struct) if show_struct else set()
+    struct_attributes_set = set(struct_attributes) if struct_attributes else set()
 
     if settings.MAX_KWIC_ROWS and limit > settings.MAX_KWIC_ROWS:
         raise ValueError(f"At most {settings.MAX_KWIC_ROWS} KWIC rows can be returned per call.")
@@ -443,8 +443,8 @@ async def parse_parameters(
         within=within_dict,
         start=offset,
         end=offset + limit - 1,
-        show=show_set,
-        show_struct=show_structs,
+        attributes=attributes_set,
+        struct_attributes=struct_attributes_set,
         cut=cut,
         sort=sort,
         random_seed=random_seed,
@@ -750,8 +750,8 @@ async def concordance_sample(
     ctx: CtxDep,
     corpus: params.CorpusParam,
     cqp_query: params.CQPParam,
-    show: ShowParam = ("word",),
-    show_struct: ShowStructParam = (),
+    attributes: AttributesParam = ("word",),
+    struct_attributes: StructAttributesParam = (),
     random_seed: RandomSeedParam = None,
     in_order: InOrderParam = True,
     within: params.WithinParam = None,
@@ -778,8 +778,8 @@ async def concordance_sample(
         cqp_query=cqp_query,
         offset=0,
         limit=1,
-        show=show,
-        show_struct=show_struct,
+        attributes=attributes,
+        struct_attributes=struct_attributes,
         cut=1,
         sort="random",
         random_seed=random_seed,
@@ -825,8 +825,8 @@ async def concordance(
     cqp_query: params.CQPParam,
     offset: OffsetParam = 0,
     limit: LimitParam = 10,
-    show: ShowParam = ("word",),
-    show_struct: ShowStructParam = None,
+    attributes: AttributesParam = ("word",),
+    struct_attributes: StructAttributesParam = None,
     cut: CutParam = None,
     sort: SortParam = None,
     random_seed: RandomSeedParam = None,
@@ -852,8 +852,8 @@ async def concordance(
         cqp_query=cqp_query,
         offset=offset,
         limit=limit,
-        show=show,
-        show_struct=show_struct,
+        attributes=attributes,
+        struct_attributes=struct_attributes,
         cut=cut,
         sort=sort,
         random_seed=random_seed,
@@ -906,10 +906,10 @@ def query_corpus(
         CQPError: If the CQP query fails.
     """
     cqp_query = concordance_params.cqp_query
-    show = concordance_params.show
+    attributes = concordance_params.attributes
     within = concordance_params.within[corpus]
     context = concordance_params.context[corpus]
-    show_structs = concordance_params.show_struct
+    struct_attributes = concordance_params.struct_attributes
     expand_prequeries = concordance_params.expand_prequeries
     free_search = not concordance_params.in_order
     cut = concordance_params.cut
@@ -963,7 +963,7 @@ def query_corpus(
     # CQP optimization is currently always enabled
     optimize = True
 
-    show = show.copy()  # To not edit the original
+    attributes = attributes.copy()  # To not edit the original
 
     cqpparams = {"within": within, "cut": cut}
 
@@ -992,7 +992,7 @@ def query_corpus(
 
         cqp_query = cqp_final
         corpus = linked[0]
-        show.add(linked[1].lower())
+        attributes.add(linked[1].lower())
 
     # Sorting
     if sort == "left":
@@ -1067,15 +1067,15 @@ def query_corpus(
             cmd.append(f"cut {start} {end};")
             cmd += cqp.make_query(cqp.make_cqp(f"({' | '.join(set(tokens))})", **cqpparams))
 
-        cmd.append(f"show +{' +'.join(show)};")
+        cmd.append(f"show +{' +'.join(attributes)};")
         if len(context) == 1:
             cmd.append(f"set Context {context[0]};")
         else:
             cmd.append(f"set LeftContext {context[0]};")
             cmd.append(f"set RightContext {context[1]};")
         cmd.append(f"set LeftKWICDelim '{cqp.LEFT_DELIM} '; set RightKWICDelim ' {cqp.RIGHT_DELIM}';")
-        if show_structs:
-            cmd.append(f"set PrintStructures '{', '.join(show_structs)}';")
+        if struct_attributes:
+            cmd.append(f"set PrintStructures '{', '.join(struct_attributes)}';")
         cmd.append("set ExternalSort yes;")
         cmd += sortcmd
         if free_search and retcode == cqp.QueryOptimizeResult.SUCCESS:
@@ -1304,14 +1304,14 @@ def query_parse_lines(
     Returns:
         List of KWIC row dictionaries.
     """
-    show = concordance_params.show
-    show_structs = concordance_params.show_struct
+    attributes = concordance_params.attributes
+    struct_attributes = concordance_params.struct_attributes
     free_search = not concordance_params.in_order
 
     # Filter out unavailable attributes
-    p_attrs = [attr for attr in attrs["p"] if attr in show]
-    s_attrs = {attr for attr in attrs["s"] if attr in show}
-    ls_attrs = {attr for attr in attrs["s"] if attr in show_structs}
+    p_attrs = [attr for attr in attrs["p"] if attr in attributes]
+    s_attrs = {attr for attr in attrs["s"] if attr in attributes}
+    ls_attrs = {attr for attr in attrs["s"] if attr in struct_attributes}
 
     last_line_span: tuple[int, int] | tuple[()] = ()
     kwic: list[dict] = []

@@ -229,7 +229,7 @@ RelationsLimitParam: TypeAlias = Annotated[
     Query(description="Maximum number of sentence rows to return.", ge=1, examples=[10]),
 ]
 
-RelationsShowParam: TypeAlias = Annotated[
+RelationsAttributesParam: TypeAlias = Annotated[
     str,
     Query(
         description="Comma-separated list of positional attributes to include on each returned token.",
@@ -237,7 +237,7 @@ RelationsShowParam: TypeAlias = Annotated[
     ),
 ]
 
-RelationsShowStructParam: TypeAlias = Annotated[
+RelationsStructAttributesParam: TypeAlias = Annotated[
     str,
     Query(
         description=(
@@ -2059,8 +2059,8 @@ async def _relations_sentences_impl(
     source: list[str],
     offset: int,
     limit: int,
-    show: str,
-    show_struct: str,
+    attributes: str,
+    struct_attributes: str,
     default_context: str,
     yearly: bool,
     abort_signal: AbortSignal | None = None,
@@ -2069,8 +2069,8 @@ async def _relations_sentences_impl(
     await auth.check_authorization(source_map.keys(), ctx)
 
     table_suffix = f"{SPLIT_SUFFIX}_sentences" if yearly else "_sentences"
-    shown = show or "word"
-    shown_structs = set(utils.split_csv(show_struct))
+    shown_attributes = attributes or "word"
+    shown_struct_attributes = set(utils.split_csv(struct_attributes))
     debug: dict[str, Any] = {}
 
     sql_query_start_time = time.perf_counter()
@@ -2144,8 +2144,8 @@ async def _relations_sentences_impl(
             cqp_query=[cqp],
             offset=0,
             limit=limit,
-            show=utils.split_csv(shown),
-            show_struct=["sentence_id", *shown_structs],
+            attributes=utils.split_csv(shown_attributes),
+            struct_attributes=["sentence_id", *shown_struct_attributes],
             default_context=default_context,
         )
         result_temp = await utils.async_generator_to_dict(
@@ -2194,8 +2194,8 @@ async def relations_sentences(
     source: SourceParam,
     offset: RelationsOffsetParam = 0,
     limit: RelationsLimitParam = 10,
-    show: RelationsShowParam = "word",
-    show_struct: RelationsShowStructParam = "",
+    attributes: RelationsAttributesParam = "word",
+    struct_attributes: RelationsStructAttributesParam = "",
     default_context: RelationsDefaultContextParam = "1 sentence",
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
@@ -2206,8 +2206,8 @@ async def relations_sentences(
         source: List of source IDs in the format `CORPUS:ID`.
         offset: Number of sentence rows to skip.
         limit: Maximum number of sentence rows to return.
-        show: Comma-separated list of token fields to include in results.
-        show_struct: Comma-separated list of structural attributes to include.
+        attributes: Comma-separated list of token fields to include in results.
+        struct_attributes: Comma-separated list of structural attributes to include.
         default_context: Default context size for query results (e.g., "1 sentence").
         abort_signal: Optional signal for aborting long-running operations.
 
@@ -2219,8 +2219,8 @@ async def relations_sentences(
         source=source,
         offset=offset,
         limit=limit,
-        show=show,
-        show_struct=show_struct,
+        attributes=attributes,
+        struct_attributes=struct_attributes,
         default_context=default_context,
         yearly=False,
         abort_signal=abort_signal,
@@ -2241,8 +2241,8 @@ async def relations_time_sentences(
     source: SourceParam,
     offset: RelationsOffsetParam = 0,
     limit: RelationsLimitParam = 10,
-    show: RelationsShowParam = "word",
-    show_struct: RelationsShowStructParam = "",
+    attributes: RelationsAttributesParam = "word",
+    struct_attributes: RelationsStructAttributesParam = "",
     default_context: RelationsDefaultContextParam = "1 sentence",
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
@@ -2253,8 +2253,8 @@ async def relations_time_sentences(
         source: List of source IDs in the format `CORPUS:ID`.
         offset: Number of sentence rows to skip.
         limit: Maximum number of sentence rows to return.
-        show: Comma-separated list of token fields to include in results.
-        show_struct: Comma-separated list of structural attributes to include.
+        attributes: Comma-separated list of token fields to include in results.
+        struct_attributes: Comma-separated list of structural attributes to include.
         default_context: Default context size for query results (e.g., "1 sentence").
         abort_signal: Optional signal for aborting long-running operations.
 
@@ -2266,8 +2266,8 @@ async def relations_time_sentences(
         source=source,
         offset=offset,
         limit=limit,
-        show=show,
-        show_struct=show_struct,
+        attributes=attributes,
+        struct_attributes=struct_attributes,
         default_context=default_context,
         yearly=True,
         abort_signal=abort_signal,
