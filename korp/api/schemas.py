@@ -12,7 +12,7 @@ class CommonResponse(BaseModel):
     debug: dict[str, Any] | SkipJsonSchema[None] = Field(
         None, description="Debug information, included only if debug mode is enabled."
     )
-    time: float = Field(..., description="Time taken to process the request in seconds.", examples=[0.123])
+    elapsed: float = Field(..., description="Time taken to process the request in seconds.", examples=[0.123])
     error: str | dict[str, Any] | SkipJsonSchema[None] = Field(
         None, description="Error message or details, included only if an error occurred."
     )

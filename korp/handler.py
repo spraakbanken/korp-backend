@@ -466,7 +466,7 @@ def api_handler(
                         yield (json.dumps(item)[1:-1] + ",\n").encode("utf-8")
 
                     # Always close JSON for connected clients
-                    yield (json.dumps({"time": time.perf_counter() - start})[1:] + "\n").encode("utf-8")
+                    yield (json.dumps({"elapsed": time.perf_counter() - start})[1:] + "\n").encode("utf-8")
                     finished = True
 
                 except asyncio.CancelledError:
@@ -528,7 +528,7 @@ def api_handler(
                         if isinstance(item, dict):
                             result_obj.update(item)
 
-                    result_obj["time"] = time.perf_counter() - start
+                    result_obj["elapsed"] = time.perf_counter() - start
                     indent = common.indent if common.indent > 0 else None
                     yield json.dumps(result_obj, indent=indent).encode("utf-8")
                     finished = True

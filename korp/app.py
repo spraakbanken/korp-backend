@@ -351,7 +351,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         schema = original_openapi()
 
         # Reorder response properties
-        common_keys = ("time", "debug", "error")
+        common_keys = ("elapsed", "debug", "error")
         comps = schema.get("components", {}).get("schemas", {})
         for s in comps.values():
             props = s.get("properties")
