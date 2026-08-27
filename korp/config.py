@@ -154,7 +154,7 @@ class Settings(BaseSettings):
     # with or without leading slash.
     RATE_LIMITS: dict[str, str] = {}
 
-    # Max number of rows from count command to cache
+    # Max number of rows from the frequency command to cache
     CACHE_MAX_STATS: int = 50
 
     # Max size in bytes per cached query data file (0 = no limit)

@@ -24,15 +24,15 @@ from korp.dependencies import CtxDep
 from korp.handler import api_handler
 from korp.memcached import CacheError
 
-from . import count as count_route
+from . import frequencies as frequencies_router
 
 router = APIRouter(tags=["Corpus Information"])
 
 ATTRIBUTE_VALUES_DESCRIPTION = """List the values available for one or more corpus attributes.
 
 The route can be used for positional attributes such as `word`, `lemma`, or `pos`, and for structural attributes such
-as `text_author` or `text_title`. It is similar to `/count_all`, but the result is organized as a lookup of attribute
-values instead of frequency rows, and it supports hierarchical attribute expressions.
+as `text_author` or `text_title`. It is similar to `/frequencies/corpus`, but the result is organized as a lookup of
+attribute values instead of frequency rows, and it supports hierarchical attribute expressions.
 
 Use `attr` to request one or more attributes. A value can be a single attribute, such as `text_author`, or a hierarchy
 using `>`, such as `text_author>text_title`. Hierarchical expressions produce nested objects, which are useful for
@@ -186,11 +186,11 @@ async def attribute_values(
         send, receive = anyio.create_memory_object_stream(0)
 
         async def _worker(corpus: str, attr: str, send_channel: anyio.abc.ObjectSendStream) -> None:
-            """Worker function to run count query in thread."""
+            """Worker function to run a frequency query in a thread."""
             async with send_channel:  # Closes the channel when done
                 lines, _nr_hits, _corpus_size = await anyio.to_thread.run_sync(  # type: ignore
                     partial(  # Use partial to be able to pass keyword arguments
-                        count_route.count_query_worker_simple,
+                        frequencies_router.simple_frequency_query_worker,
                         ctx=ctx,
                         corpus=corpus,
                         cqp_query=[],

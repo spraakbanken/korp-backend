@@ -1,4 +1,4 @@
-"""Routes for counting word/attribute occurrences in corpora."""
+"""Routes for calculating word/attribute frequencies in corpora."""
 
 import dataclasses
 import itertools
@@ -38,7 +38,7 @@ TIMETO = "text_timeto"
 
 router = APIRouter(tags=["Statistics"])
 
-COUNT_DESCRIPTION = """Calculate frequencies for one or more attributes in the result of a CQP query.
+FREQUENCIES_DESCRIPTION = """Calculate frequencies for one or more attributes in the result of a CQP query.
 
 The response contains absolute counts and relative frequencies. Relative frequencies are expressed as hits per one
 million tokens.
@@ -55,17 +55,17 @@ When `incremental=true`, progress keys such as `progress_corpora` and `progress_
 statistics in the streamed JSON object.
 """
 
-COUNT_ALL_DESCRIPTION = """Calculate frequencies for all tokens in the selected corpora, grouped by the requested
-attributes.
+CORPUS_FREQUENCIES_DESCRIPTION = """Calculate frequencies for all tokens in the selected corpora, grouped by the
+requested attributes.
 
 This is the optimized variant to use when no CQP query is needed, for example when listing all part-of-speech values or
-all word forms in a corpus. It uses the same grouping and formatting parameters as `/count`, except it does not accept
-`cqp` or `subcqp`.
+all word forms in a corpus. It uses the same grouping and formatting parameters as `/frequencies`, except it does not
+accept `cqp` or `subcqp`.
 
 If neither `group_by` nor `group_by_struct` is supplied, the route groups by `word`.
 """
 
-COUNT_TIME_DESCRIPTION = f"""Calculate the frequency of a query over time.
+FREQUENCIES_TIME_DESCRIPTION = f"""Calculate the frequency of a query over time.
 
 The response contains absolute counts and relative frequencies per time period. Relative frequencies are expressed as
 hits per one million tokens for the corresponding time period.
@@ -182,8 +182,8 @@ class FrequencySums(BaseModel):
     relative: float = Field(..., description="Relative frequency sum.", examples=[13.765536])
 
 
-class CountRow(BaseModel):
-    """A grouped count row."""
+class FrequencyRow(BaseModel):
+    """A grouped frequency row."""
 
     value: dict[str, str | list[str]] = Field(
         ...,
@@ -197,29 +197,29 @@ class CountRow(BaseModel):
     relative: float = Field(..., description="Relative frequency per one million tokens.", examples=[13.765536])
 
 
-class CountStatistics(BaseModel):
-    """Statistics for one query or subquery."""
+class FrequencyStatistics(BaseModel):
+    """Frequency statistics for one query or subquery."""
 
-    rows: list[CountRow] = Field(..., description="Grouped frequency rows.")
+    rows: list[FrequencyRow] = Field(..., description="Grouped frequency rows.")
     sums: FrequencySums = Field(..., description="Frequency sums over all returned rows.")
     cqp: str | SkipJsonSchema[None] = Field(
         None, description="Subquery CQP string. Included only for `subcqp` results."
     )
 
 
-class CountResponse(schemas.CommonResponse):
-    """Response model for `/count` route."""
+class FrequenciesResponse(schemas.CommonResponse):
+    """Response model for `/frequencies` route."""
 
     model_config = ConfigDict(extra="allow")
 
-    corpora: dict[str, CountStatistics | list[CountStatistics]] = Field(
+    corpora: dict[str, FrequencyStatistics | list[FrequencyStatistics]] = Field(
         ...,
         description=(
             "Statistics per corpus. Values are arrays when `subcqp` is used; otherwise each value is one statistics "
             "object."
         ),
     )
-    combined: CountStatistics | list[CountStatistics] = Field(
+    combined: FrequencyStatistics | list[FrequencyStatistics] = Field(
         ...,
         description=(
             "Combined statistics for all corpora. This is an array when `subcqp` is used; otherwise it is one "
@@ -236,13 +236,13 @@ class CountResponse(schemas.CommonResponse):
     )
 
 
-class CountAllResponse(schemas.CommonResponse):
-    """Response model for `/count_all` route."""
+class CorpusFrequenciesResponse(schemas.CommonResponse):
+    """Response model for `/frequencies/corpus` route."""
 
     model_config = ConfigDict(extra="allow")
 
-    corpora: dict[str, CountStatistics] = Field(..., description="Statistics per corpus.")
-    combined: CountStatistics = Field(..., description="Combined statistics for all corpora.")
+    corpora: dict[str, FrequencyStatistics] = Field(..., description="Statistics per corpus.")
+    combined: FrequencyStatistics = Field(..., description="Combined statistics for all corpora.")
     count: int = Field(
         ..., description="Total number of distinct grouped values before response slicing.", examples=[241]
     )
@@ -278,8 +278,8 @@ class TimeStatistics(BaseModel):
     )
 
 
-class CountTimeResponse(schemas.CommonResponse):
-    """Response model for `/count_time` route."""
+class FrequenciesTimeResponse(schemas.CommonResponse):
+    """Response model for `/frequencies/time` route."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -305,8 +305,8 @@ class CountTimeResponse(schemas.CommonResponse):
 
 
 @dataclass
-class CountParameters:
-    """Parameters for count query, parsed and validated."""
+class FrequencyParameters:
+    """Parameters for a frequency query, parsed and validated."""
 
     corpora: list[str]
     cqp_query: list[str | list[str]]
@@ -325,7 +325,7 @@ class CountParameters:
     cut: int | None = None
 
 
-async def parse_parameters(
+async def parse_frequency_parameters(
     ctx: CtxDep,
     corpus: list[str],
     cqp_query: list[str] | None,
@@ -344,11 +344,11 @@ async def parse_parameters(
     expand_prequeries: bool,
     offset: int,
     limit: int,
-) -> CountParameters:
-    """Parse and validate parameters for count query.
+) -> FrequencyParameters:
+    """Parse and validate parameters for a frequency query.
 
     Returns:
-        A CountParameters instance with parsed parameters.
+        A FrequencyParameters instance with parsed parameters.
 
     Raises:
         ValueError: If any parameter is invalid.
@@ -395,7 +395,7 @@ async def parse_parameters(
     if cqp_combined == ["[]"]:
         simple = True
 
-    return CountParameters(
+    return FrequencyParameters(
         corpora=corpus,
         cqp_query=cqp_combined,
         subcqp=subcqp,
@@ -543,7 +543,7 @@ def _rows_to_list(rows: dict, group_by: list[tuple[str, bool]]) -> list[dict]:
     return [{"value": {key[0]: ngram[i] for i, key in enumerate(group_by)}, **vals} for ngram, vals in rows.items()]
 
 
-def _finalize_count_results(
+def _finalize_frequency_results(
     result: dict[str, Any],
     total_stats: list[dict],
     corpora: list[str],
@@ -554,7 +554,7 @@ def _finalize_count_results(
     start: int,
     end: int,
 ) -> None:
-    """Finalize count results by calculating relative frequencies and formatting output.
+    """Finalize frequency results by calculating relative frequencies and formatting output.
 
     Args:
         result: Result dictionary to update in place.
@@ -605,48 +605,48 @@ def _finalize_count_results(
         total_stats[query_no]["rows"] = _rows_to_list(total_stats[query_no]["rows"], group_by)
 
 
-async def perform_count(
-    count_params: CountParameters,
+async def perform_frequency_query(
+    frequency_params: FrequencyParameters,
     ctx: CtxDep,
     abort_signal: AbortSignal | None,
 ) -> AsyncGenerator[dict]:
-    """Perform the count query based on the given parameters.
+    """Perform the frequency query based on the given parameters.
 
     This is a helper function called by route handlers.
 
     Args:
-        count_params: Parsed count query parameters.
+        frequency_params: Parsed frequency query parameters.
         ctx: The request context.
         abort_signal: Event to signal abortion of the query.
 
     Yields:
-        Count results as dictionaries.
+        Frequency results as dictionaries.
 
     Raises:
         ValueError: If there is an error parsing the results.
     """
     incremental = ctx.common.incremental
-    corpora = count_params.corpora
-    cqp_combined = count_params.cqp_query
-    subcqp = count_params.subcqp
-    group_by = count_params.group_by
-    within = count_params.within
-    ignore_case = count_params.ignore_case
-    simple = count_params.simple
-    relative_to_struct = count_params.relative_to_struct
-    split = count_params.split
-    strip_pointer = count_params.strip_pointer
-    top = count_params.top
-    expand_prequeries = count_params.expand_prequeries
-    start = count_params.start
-    end = count_params.end
+    corpora = frequency_params.corpora
+    cqp_combined = frequency_params.cqp_query
+    subcqp = frequency_params.subcqp
+    group_by = frequency_params.group_by
+    within = frequency_params.within
+    ignore_case = frequency_params.ignore_case
+    simple = frequency_params.simple
+    relative_to_struct = frequency_params.relative_to_struct
+    split = frequency_params.split
+    strip_pointer = frequency_params.strip_pointer
+    top = frequency_params.top
+    expand_prequeries = frequency_params.expand_prequeries
+    start = frequency_params.start
+    end = frequency_params.end
 
     result: dict[str, Any] = {"corpora": {}}
     debug = {}
     zero_hits: set[str] = set()
     read_from_cache = 0
-    count_state = utils.Namespace()
-    count_state.total_size = 0
+    frequency_state = utils.Namespace()
+    frequency_state.total_size = 0
 
     if ctx.common.cache:
         # Use cache to skip corpora with zero hits
@@ -664,7 +664,7 @@ async def perform_count(
             read_from_cache += 1
             if nr_hits == 0:
                 zero_hits.add(memcached_keys[key])
-                count_state.total_size += cached_size[key][1]
+                frequency_state.total_size += cached_size[key][1]
 
         if ctx.common.debug:
             debug["cache_coverage"] = f"{read_from_cache}/{len(corpora)}"
@@ -674,17 +674,19 @@ async def perform_count(
         for _ in range(len(subcqp) + 1)
     ]
 
-    # If relative_to_struct is used, perform a separate count to get frequencies for calculating relative numbers
+    # If relative_to_struct is used, perform a separate frequency query to calculate relative numbers
     relative_to_freqs = {}
     if relative_to_struct:
-        relative_parameters = CountParameters(
+        relative_parameters = FrequencyParameters(
             cqp_query=["[]"],
             corpora=corpora,
             group_by=relative_to_struct,  # Group by struct
             split=split,
         )
 
-        relative_to_result = await utils.async_generator_to_dict(perform_count(relative_parameters, ctx, abort_signal))
+        relative_to_result = await utils.async_generator_to_dict(
+            perform_frequency_query(relative_parameters, ctx, abort_signal)
+        )
         relative_to_freqs = {"combined": {}, "corpora": defaultdict(dict)}
 
         for row in relative_to_result["combined"]["rows"]:
@@ -694,9 +696,9 @@ async def perform_count(
             for row in relative_to_result["corpora"][c]["rows"]:
                 relative_to_freqs["corpora"][c][tuple(v for k, v in sorted(row["value"].items()))] = row["absolute"]
 
-    count_function = count_query_worker if not simple else count_query_worker_simple
+    frequency_worker = frequency_query_worker if not simple else simple_frequency_query_worker
 
-    count_state.progress_count = 0
+    frequency_state.progress_count = 0
     if incremental:
         # Initial yield to indicate which corpora will be processed
         yield {"progress_corpora": [c for c in corpora if c not in zero_hits]}
@@ -717,7 +719,7 @@ async def perform_count(
     send, receive = anyio.create_memory_object_stream(0)
 
     async def _worker(corpus: str, send_channel: anyio.abc.ObjectSendStream) -> None:
-        """Worker function to run count query in thread.
+        """Worker function to run a frequency query in a thread.
 
         Args:
             corpus: The corpus to query.
@@ -732,7 +734,7 @@ async def perform_count(
             try:
                 lines, nr_hits, corpus_size = await anyio.to_thread.run_sync(  # type: ignore
                     partial(  # Use partial to be able to pass keyword arguments
-                        count_function,
+                        frequency_worker,
                         ctx=ctx,
                         corpus=corpus,
                         cqp_query=cqp_combined,
@@ -763,7 +765,7 @@ async def perform_count(
                 tg.cancel_scope.cancel()
                 return
 
-            count_state.total_size += corpus_size
+            frequency_state.total_size += corpus_size
             corpus_stats = [
                 {
                     "rows": defaultdict(lambda: {"absolute": 0, "relative": 0.0}),
@@ -810,22 +812,22 @@ async def perform_count(
             result["corpora"][c] = corpus_stats
 
             if incremental:
-                yield {f"progress_{count_state.progress_count}": c}
-                count_state.progress_count += 1
+                yield {f"progress_{frequency_state.progress_count}": c}
+                frequency_state.progress_count += 1
 
     result["count"] = len(total_stats[0]["rows"])
 
     if abort_signal and abort_signal.is_set():
         return
 
-    _finalize_count_results(
+    _finalize_frequency_results(
         result=result,
         total_stats=total_stats,
         corpora=corpora,
         group_by=group_by,
         subcqp=subcqp,
         relative_to_struct=relative_to_struct,
-        total_size=count_state.total_size,
+        total_size=frequency_state.total_size,
         start=start,
         end=end,
     )
@@ -844,15 +846,15 @@ async def perform_count(
 
 
 @router.get(
-    "/count",
+    "/frequencies",
     response_model=None,
-    responses=handler.docs_response(CountResponse),
+    responses=handler.docs_response(FrequenciesResponse),
     summary="Statistics",
-    description=COUNT_DESCRIPTION,
+    description=FREQUENCIES_DESCRIPTION,
 )
-@router.post("/count", response_model=None, include_in_schema=False)
+@router.post("/frequencies", response_model=None, include_in_schema=False)
 @api_handler
-async def count(
+async def frequencies(
     ctx: CtxDep,
     corpus: params.CorpusParam,
     cqp_query: params.CQPParam,
@@ -877,7 +879,7 @@ async def count(
     Yields:
         Count results as dictionaries.
     """
-    count_params = await parse_parameters(
+    frequency_params = await parse_frequency_parameters(
         ctx=ctx,
         corpus=corpus,
         cqp_query=cqp_query,
@@ -898,20 +900,20 @@ async def count(
         limit=limit,
     )
 
-    async for item in perform_count(count_params, ctx, abort_signal):
+    async for item in perform_frequency_query(frequency_params, ctx, abort_signal):
         yield item
 
 
 @router.get(
-    "/count_all",
+    "/frequencies/corpus",
     response_model=None,
-    responses=handler.docs_response(CountAllResponse),
+    responses=handler.docs_response(CorpusFrequenciesResponse),
     summary="Complete Statistics",
-    description=COUNT_ALL_DESCRIPTION,
+    description=CORPUS_FREQUENCIES_DESCRIPTION,
 )
-@router.post("/count_all", response_model=None, include_in_schema=False)
+@router.post("/frequencies/corpus", response_model=None, include_in_schema=False)
 @api_handler
-async def count_all(
+async def corpus_frequencies(
     ctx: CtxDep,
     corpus: params.CorpusParam,
     group_by: GroupByParam = None,
@@ -929,12 +931,12 @@ async def count_all(
     expand_prequeries: params.ExpandPrequeriesParam = True,
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
-    """Like `/count` but for every single value of the given attributes.
+    """Like `/frequencies` but for every single value of the given attributes.
 
     Yields:
         Count results as dictionaries.
     """
-    count_params = await parse_parameters(
+    frequency_params = await parse_frequency_parameters(
         ctx=ctx,
         corpus=corpus,
         cqp_query=["[]"],
@@ -955,7 +957,7 @@ async def count_all(
         limit=limit,
     )
 
-    async for item in perform_count(count_params, ctx, abort_signal):
+    async for item in perform_frequency_query(frequency_params, ctx, abort_signal):
         yield item
 
 
@@ -984,15 +986,15 @@ DateToParam: TypeAlias = Annotated[
 
 
 @router.get(
-    "/count_time",
+    "/frequencies/time",
     response_model=None,
-    responses=handler.docs_response(CountTimeResponse),
+    responses=handler.docs_response(FrequenciesTimeResponse),
     summary="Statistics Over Time",
-    description=COUNT_TIME_DESCRIPTION,
+    description=FREQUENCIES_TIME_DESCRIPTION,
 )
-@router.post("/count_time", response_model=None, include_in_schema=False)
+@router.post("/frequencies/time", response_model=None, include_in_schema=False)
 @api_handler
-async def count_time(
+async def frequencies_time(
     ctx: CtxDep,
     corpus: params.CorpusParam,
     cqp_query: params.CQPParam,
@@ -1024,7 +1026,7 @@ async def count_time(
     Raises:
         ValueError: If parameters are invalid or if the date range is too large for the selected granularity.
     """
-    count_params = await parse_parameters(
+    frequency_params = await parse_frequency_parameters(
         ctx=ctx,
         corpus=corpus,
         cqp_query=cqp_query,
@@ -1058,11 +1060,11 @@ async def count_time(
     if per_corpus:
         result["corpora"] = {}
     if ctx.common.debug:
-        result["debug"] = {"cqp": count_params.cqp_query}
+        result["debug"] = {"cqp": frequency_params.cqp_query}
 
     # Get date range of selected corpora
-    corpus_data = await info.get_corpus_info(ctx=ctx, corpora=count_params.corpora, no_combined_cache=True)
-    corpora_copy = count_params.corpora.copy()
+    corpus_data = await info.get_corpus_info(ctx=ctx, corpora=frequency_params.corpora, no_combined_cache=True)
+    corpora_copy = frequency_params.corpora.copy()
 
     def _parse_corpus_date(date_str: str) -> datetime:
         return utils.strptime(re.sub(r"\D", "", date_str))
@@ -1082,7 +1084,7 @@ async def count_time(
                 last_date = _parse_corpus_date(last_date)
 
                 if not (first_date <= dt and last_date >= df):
-                    count_params.corpora.remove(c)
+                    frequency_params.corpora.remove(c)
     else:
         # If no date range was provided, use whole date range of the selected corpora
         for c in corpus_data["corpora"]:
@@ -1112,7 +1114,8 @@ async def count_time(
 
         if dt > (df + add):
             raise ValueError(
-                "The date range is too large for the selected granularity. Use 'to' and 'from' to limit the range."
+                "The date range is too large for the selected granularity. Use 'date_from' and 'date_to' to limit "
+                "the range."
             )
 
     if granularity in {granularity.hour, granularity.minute, granularity.second}:
@@ -1122,39 +1125,39 @@ async def count_time(
 
     if per_corpus:
         # Add zero values for the corpora we removed because of the selected date span
-        for c in set(corpora_copy).difference(set(count_params.corpora)):
+        for c in set(corpora_copy).difference(set(frequency_params.corpora)):
             result["corpora"][c] = [
                 {"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
-                for _ in range(len(count_params.subcqp) + 1)
+                for _ in range(len(frequency_params.subcqp) + 1)
             ]
             for i, c2 in enumerate(result["corpora"][c][1:]):
-                c2["cqp"] = count_params.subcqp[i]
+                c2["cqp"] = frequency_params.subcqp[i]
 
-            if not count_params.subcqp:
+            if not frequency_params.subcqp:
                 result["corpora"][c] = result["corpora"][c][0]
 
     # Add zero values for the combined results if no corpora are within the selected date span
-    if combined and not count_params.corpora:
+    if combined and not frequency_params.corpora:
         result["combined"] = [
             {"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
-            for _ in range(len(count_params.subcqp) + 1)
+            for _ in range(len(frequency_params.subcqp) + 1)
         ]
         for i, c in enumerate(result["combined"][1:]):
-            c["cqp"] = count_params.subcqp[i]
+            c["cqp"] = frequency_params.subcqp[i]
 
-        if not count_params.subcqp:
+        if not frequency_params.subcqp:
             result["combined"] = result["combined"][0]
 
         yield result
         return
 
     ns = utils.Namespace()
-    total_rows = [[] for _ in range(len(count_params.subcqp) + 1)]
+    total_rows = [[] for _ in range(len(frequency_params.subcqp) + 1)]
     ns.total_size = 0
 
     ns.progress_count = 0
     if incremental:
-        yield {"progress_corpora": count_params.corpora}
+        yield {"progress_corpora": frequency_params.corpora}
 
     limiter = CapacityLimiter(settings.PARALLEL_THREADS)
     send, receive = anyio.create_memory_object_stream(0)
@@ -1175,12 +1178,12 @@ async def count_time(
             try:
                 lines, _, corpus_size = await anyio.to_thread.run_sync(  # type: ignore
                     partial(  # Use partial to be able to pass keyword arguments
-                        count_query_worker,
+                        frequency_query_worker,
                         corpus=corpus,
-                        cqp_query=count_params.cqp_query,
+                        cqp_query=frequency_params.cqp_query,
                         group_by=group_by,
-                        within=count_params.within[corpus],
-                        expand_prequeries=count_params.expand_prequeries,
+                        within=frequency_params.within[corpus],
+                        expand_prequeries=frequency_params.expand_prequeries,
                         use_cache=ctx.common.cache,
                         cache_max=settings.CACHE_MAX_STATS,
                         abort_signal=abort_signal,
@@ -1190,7 +1193,7 @@ async def count_time(
                 )
             except Exception as e:
                 if f"Can't find attribute ``{DATEFROM}''" in str(e):
-                    # Corpus lacks date attributes required for count_time; treat as no rows
+                    # Corpus lacks date attributes required for frequency time series; treat as no rows
                     await send_channel.send((corpus, (), 0))
                     return
                 raise cqp.CQPError(str(e)) from e
@@ -1198,7 +1201,7 @@ async def count_time(
             await send_channel.send((corpus, lines, corpus_size))
 
     async with anyio.create_task_group() as tg:
-        for c in count_params.corpora:
+        for c in frequency_params.corpora:
             tg.start_soon(_worker, c, send.clone())
 
         await send.aclose()  # Close the original send channel
@@ -1237,7 +1240,7 @@ async def count_time(
 
     corpus_timedata = await token_distribution.get_timespan(
         ctx=ctx,
-        corpora=count_params.corpora,
+        corpora=frequency_params.corpora,
         granularity=granularity,
         date_from=date_from,
         date_to=date_to,
@@ -1255,10 +1258,10 @@ async def count_time(
             search_timedata_combined.append(temp["combined"])
 
     if per_corpus:
-        for c in count_params.corpora:
+        for c in frequency_params.corpora:
             corpus_stats = [
                 {"absolute": defaultdict(int), "relative": defaultdict(float), "sums": {"absolute": 0, "relative": 0.0}}
-                for _ in range(len(count_params.subcqp) + 1)
+                for _ in range(len(frequency_params.subcqp) + 1)
             ]
 
             basedates = {
@@ -1283,15 +1286,15 @@ async def count_time(
                         corpus_stats[i]["sums"]["absolute"] += count
                         corpus_stats[i]["sums"]["relative"] += count / corpus_date_size * RELATIVE_MULTIPLIER
 
-                if count_params.subcqp and i > 0:
-                    corpus_stats[i]["cqp"] = count_params.subcqp[i - 1]
+                if frequency_params.subcqp and i > 0:
+                    corpus_stats[i]["cqp"] = frequency_params.subcqp[i - 1]
 
             result["corpora"][c] = corpus_stats if len(corpus_stats) > 1 else corpus_stats[0]
 
     if combined:
         total_stats = [
             {"absolute": defaultdict(int), "relative": defaultdict(float), "sums": {"absolute": 0, "relative": 0.0}}
-            for _ in range(len(count_params.subcqp) + 1)
+            for _ in range(len(frequency_params.subcqp) + 1)
         ]
 
         basedates = {
@@ -1322,8 +1325,8 @@ async def count_time(
                 if ns.total_size > 0
                 else 0.0
             )
-            if count_params.subcqp and i > 0:
-                total_stats[i]["cqp"] = count_params.subcqp[i - 1]
+            if frequency_params.subcqp and i > 0:
+                total_stats[i]["cqp"] = frequency_params.subcqp[i - 1]
 
         result["combined"] = total_stats if len(total_stats) > 1 else total_stats[0]
 
@@ -1331,14 +1334,14 @@ async def count_time(
 
 
 @dataclass
-class _CountCacheKeys:
-    """Cache keys for count query results."""
+class _FrequencyCacheKeys:
+    """Cache keys for frequency query results."""
 
     data_key: str
     size_key: str
 
 
-def _get_count_cache_keys(
+def _get_frequency_cache_keys(
     corpus: str,
     cqp_query: list[str | list[str]],
     group_by: list[tuple[str, bool]],
@@ -1346,8 +1349,8 @@ def _get_count_cache_keys(
     ignore_case: Collection[str],
     expand_prequeries: bool,
     mc: MemcachedSyncClient,
-) -> _CountCacheKeys:
-    """Generate cache keys for count query.
+) -> _FrequencyCacheKeys:
+    """Generate cache keys for a frequency query.
 
     Args:
         corpus: The corpus name.
@@ -1359,22 +1362,22 @@ def _get_count_cache_keys(
         mc: The memcached client to use for generating cache prefix.
 
     Returns:
-        A _CountCacheKeys instance with data and size cache keys.
+        A _FrequencyCacheKeys instance with data and size cache keys.
     """
     checksum = utils.get_hash((cqp_query, group_by, within, sorted(ignore_case), expand_prequeries))
     prefix = caching.cache_prefix_sync(mc, corpus)
-    return _CountCacheKeys(
+    return _FrequencyCacheKeys(
         data_key=f"{prefix}:count_data_{checksum}",
         size_key=f"{prefix}:count_size_{checksum}",
     )
 
 
-def _check_count_cache(
-    cache_keys: _CountCacheKeys,
+def _check_frequency_cache(
+    cache_keys: _FrequencyCacheKeys,
     zero_hit_result: Iterable[str],
     mc: MemcachedSyncClient,
 ) -> tuple[Iterable[str], int, int] | None:
-    """Check cache for count query results.
+    """Check cache for frequency query results.
 
     Args:
         cache_keys: The cache keys to check.
@@ -1399,15 +1402,15 @@ def _check_count_cache(
     return None
 
 
-def _save_count_cache(
-    cache_keys: _CountCacheKeys,
+def _save_frequency_cache(
+    cache_keys: _FrequencyCacheKeys,
     lines: Iterable[str],
     nr_hits: int,
     corpus_size: int,
     cache_max: int,
     mc: MemcachedSyncClient,
 ) -> tuple[str, ...]:
-    """Save count query results to cache.
+    """Save frequency query results to cache.
 
     Args:
         cache_keys: The cache keys to use.
@@ -1434,7 +1437,7 @@ def _save_count_cache(
     return tuple(lines_list)
 
 
-def count_query_worker(
+def frequency_query_worker(
     ctx: CtxDep,
     corpus: str,
     cqp_query: list[str | list[str]],
@@ -1473,13 +1476,13 @@ def count_query_worker(
         subcqp = None
         base_cqp = cast(list[str], cqp_query)
 
-    cache_keys: _CountCacheKeys | None = None
+    cache_keys: _FrequencyCacheKeys | None = None
     if use_cache and ctx.cache:
-        cache_keys = _get_count_cache_keys(
+        cache_keys = _get_frequency_cache_keys(
             corpus, cqp_query, group_by, within, ignore_case, expand_prequeries, ctx.cache.sync
         )
         zero_hit_result = [cqp.END_OF_LINE] * len(subcqp) if subcqp else []
-        cached = _check_count_cache(cache_keys, zero_hit_result, ctx.cache.sync)
+        cached = _check_frequency_cache(cache_keys, zero_hit_result, ctx.cache.sync)
         if cached is not None:
             return cached
 
@@ -1556,12 +1559,12 @@ def count_query_worker(
             break
 
     if cache_keys is not None:
-        lines = _save_count_cache(cache_keys, lines, nr_hits, corpus_size, cache_max, ctx.cache.sync)
+        lines = _save_frequency_cache(cache_keys, lines, nr_hits, corpus_size, cache_max, ctx.cache.sync)
 
     return lines, nr_hits, corpus_size
 
 
-def count_query_worker_simple(
+def simple_frequency_query_worker(
     ctx: CtxDep,
     corpus: str,
     cqp_query: list[str | list[str]],
@@ -1596,12 +1599,12 @@ def count_query_worker_simple(
             - The number of hits in the corpus.
             - The size of the corpus.
     """
-    cache_keys: _CountCacheKeys | None = None
+    cache_keys: _FrequencyCacheKeys | None = None
     if use_cache and ctx.cache:
-        cache_keys = _get_count_cache_keys(
+        cache_keys = _get_frequency_cache_keys(
             corpus, cqp_query, group_by, within, ignore_case, expand_prequeries, ctx.cache.sync
         )
-        cached = _check_count_cache(cache_keys, [], ctx.cache.sync)
+        cached = _check_frequency_cache(cache_keys, [], ctx.cache.sync)
         if cached is not None:
             return cached
 
@@ -1631,7 +1634,7 @@ def count_query_worker_simple(
             lines.append(f"{c} {v}")
 
     if cache_keys is not None:
-        lines = _save_count_cache(cache_keys, lines, nr_hits, nr_hits, cache_max, ctx.cache.sync)
+        lines = _save_frequency_cache(cache_keys, lines, nr_hits, nr_hits, cache_max, ctx.cache.sync)
 
     # Corpus size equals number of hits since we count all tokens
     return lines, nr_hits, nr_hits

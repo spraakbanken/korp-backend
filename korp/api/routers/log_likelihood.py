@@ -15,7 +15,7 @@ from korp.api import params, schemas
 from korp.dependencies import AbortDep, CtxDep
 from korp.handler import api_handler, docs_response
 
-from . import count
+from . import frequencies
 
 router = APIRouter(tags=["Statistics"])
 
@@ -37,8 +37,8 @@ Each result row contains the grouped value, its log-likelihood score, and the ab
 Use `max_results` to limit how many values to return from each side of the comparison. For example, `max_results=10` can
 return up to ten set-1-prominent values and ten set-2-prominent values. Use `max_results=0` for no limit.
 
-Most grouping and value-normalization parameters are shared with `/count`, including `group_by`, `group_by_struct`,
-`ignore_case`, `split`, `strip_pointer`, `top`, `within`, and `default_within`.
+Most grouping and value-normalization parameters are shared with `/frequencies`, including `group_by`,
+`group_by_struct`, `ignore_case`, `split`, `strip_pointer`, `top`, `within`, and `default_within`.
 
 ### Example
 
@@ -136,18 +136,18 @@ async def log_likelihood(
     set1_corpus: Set1CorpusParam,
     set2_corpus: Set2CorpusParam,
     max_results: MaxResultsParam = 15,
-    group_by: count.GroupByParam = None,
-    group_by_struct: count.GroupByStructParam = None,
+    group_by: frequencies.GroupByParam = None,
+    group_by_struct: frequencies.GroupByStructParam = None,
     within: params.WithinParam = None,
     default_within: params.DefaultWithinParam = None,
     # cut: int | None = None,
-    offset: count.OffsetParam = 0,
-    limit: count.LimitParam = 0,
-    ignore_case: count.IgnoreCaseParam = None,
-    relative_to_struct: count.RelativeToStructParam = None,
+    offset: frequencies.OffsetParam = 0,
+    limit: frequencies.LimitParam = 0,
+    ignore_case: frequencies.IgnoreCaseParam = None,
+    relative_to_struct: frequencies.RelativeToStructParam = None,
     split: params.SplitParam = None,
-    strip_pointer: count.StripPointerParam = None,
-    top: count.TopParam = None,
+    strip_pointer: frequencies.StripPointerParam = None,
+    top: frequencies.TopParam = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
     abort_signal: AbortDep = None,
 ) -> AsyncGenerator[dict]:
@@ -156,8 +156,8 @@ async def log_likelihood(
     Yields:
         A dictionary with log-likelihood results.
     """
-    # Handle parameters common to count
-    params = await count.parse_parameters(
+    # Handle parameters common to frequency queries
+    frequency_params = await frequencies.parse_frequency_parameters(
         ctx=ctx,
         corpus=[],
         cqp_query=[],
@@ -188,7 +188,7 @@ async def log_likelihood(
     same_cqp = set1_cqp == set2_cqp
 
     def _make_freq_key(value: dict) -> tuple[tuple[str, tuple[str, ...]], ...]:
-        """Create a hashable frequency key from a count result row's value dict.
+        """Create a hashable frequency key from a frequency result row's value dict.
 
         Args:
             value: A dict mapping attribute names to their values.
@@ -287,35 +287,41 @@ async def log_likelihood(
 
     # If same CQP for both sets, handle as one query for better performance
     if same_cqp:
-        params.cqp_query = [set1_cqp]
-        params.corpora = list(corpora)
-        count_result = await utils.async_generator_to_dict(count.perform_count(params, ctx, abort_signal))
+        frequency_params.cqp_query = [set1_cqp]
+        frequency_params.corpora = list(corpora)
+        frequency_result = await utils.async_generator_to_dict(
+            frequencies.perform_frequency_query(frequency_params, ctx, abort_signal)
+        )
 
         sets = [{"total": 0, "freq": defaultdict(int)}, {"total": 0, "freq": defaultdict(int)}]
         for i, cset in enumerate((set1_corpora, set2_corpora)):
             for corpus in cset:
-                sets[i]["total"] += count_result["corpora"][corpus]["sums"]["absolute"]
+                sets[i]["total"] += frequency_result["corpora"][corpus]["sums"]["absolute"]
                 if len(cset) == 1:
                     sets[i]["freq"] = {
-                        _make_freq_key(x["value"]): x["absolute"] for x in count_result["corpora"][corpus]["rows"]
+                        _make_freq_key(x["value"]): x["absolute"] for x in frequency_result["corpora"][corpus]["rows"]
                     }
                 else:
-                    for x in count_result["corpora"][corpus]["rows"]:
+                    for x in frequency_result["corpora"][corpus]["rows"]:
                         sets[i]["freq"][_make_freq_key(x["value"])] += x["absolute"]
 
     else:
-        params_2 = dataclasses.replace(params)
-        params.corpora = list(set1_corpora)
-        params.cqp_query = [set1_cqp]
-        params_2.corpora = list(set2_corpora)
-        params_2.cqp_query = [set2_cqp]
-        count_result_1, count_result_2 = await asyncio.gather(
-            utils.async_generator_to_dict(count.perform_count(params, ctx, abort_signal)),
-            utils.async_generator_to_dict(count.perform_count(params_2, ctx, abort_signal)),
+        frequency_params_2 = dataclasses.replace(frequency_params)
+        frequency_params.corpora = list(set1_corpora)
+        frequency_params.cqp_query = [set1_cqp]
+        frequency_params_2.corpora = list(set2_corpora)
+        frequency_params_2.cqp_query = [set2_cqp]
+        frequency_result_1, frequency_result_2 = await asyncio.gather(
+            utils.async_generator_to_dict(
+                frequencies.perform_frequency_query(frequency_params, ctx, abort_signal)
+            ),
+            utils.async_generator_to_dict(
+                frequencies.perform_frequency_query(frequency_params_2, ctx, abort_signal)
+            ),
         )
 
         sets = [{}, {}]
-        for i, res in enumerate((count_result_1, count_result_2)):
+        for i, res in enumerate((frequency_result_1, frequency_result_2)):
             sets[i]["total"] = res["combined"]["sums"]["absolute"]
             sets[i]["freq"] = {_make_freq_key(row["value"]): row["absolute"] for row in res["combined"]["rows"]}
 

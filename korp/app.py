@@ -39,7 +39,14 @@ _API_DOCUMENTATION_STRUCTURE = [
     {
         "name": "Statistics",
         "description": "Routes for retrieving various corpus statistics.",
-        "routes": ["/count", "/count_all", "/count_time", "/token_distribution", "/log_likelihood", "/lexeme_counts"],
+        "routes": [
+            "/frequencies",
+            "/frequencies/corpus",
+            "/frequencies/time",
+            "/token_distribution",
+            "/log_likelihood",
+            "/lexeme_counts",
+        ],
     },
     {
         "name": "Dependency Relations",
@@ -74,7 +81,7 @@ Use this API to:
 
 - discover available corpora and their annotations
 - run concordance queries and retrieve matching lines with annotations
-- count query matches, attribute values, and time distributions
+- frequency query matches, attribute values, and time distributions
 - query dependency relation statistics when relation data is configured
 - maintain server-side caches
 
