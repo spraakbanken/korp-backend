@@ -34,8 +34,8 @@ The sign of each score shows which set the value is relatively more prominent in
 Each result row contains the grouped value, its log-likelihood score, and the absolute frequencies used from each set.
 `average` is the average absolute log-likelihood score before the result list is split by sign and limited.
 
-Use `max` to limit how many values to return from each side of the comparison. For example, `max=10` can return up to
-ten set-1-prominent values and ten set-2-prominent values. Use `max=0` for no limit.
+Use `max_results` to limit how many values to return from each side of the comparison. For example, `max_results=10` can
+return up to ten set-1-prominent values and ten set-2-prominent values. Use `max_results=0` for no limit.
 
 Most grouping and value-normalization parameters are shared with `/count`, including `group_by`, `group_by_struct`,
 `ignore_case`, `split`, `strip_pointer`, `top`, `within`, and `default_within`.
@@ -44,7 +44,7 @@ Most grouping and value-normalization parameters are shared with `/count`, inclu
 
 Compare nouns in two corpora and return up to ten values from each side:
 
-`/log_likelihood?set1_cqp=[pos="NN"]&set2_cqp=[pos="NN"]&group_by=word&max=10&set1_corpus=ROMI&set2_corpus=GP2012`
+`/log_likelihood?set1_cqp=[pos="NN"]&set2_cqp=[pos="NN"]&group_by=word&max_results=10&set1_corpus=ROMI&set2_corpus=GP2012`
 """
 
 Set1CQPParam: TypeAlias = Annotated[
@@ -81,7 +81,6 @@ MaxResultsParam: TypeAlias = Annotated[
     int,
     Query(
         description=("Maximum number of results to return from each side of the comparison. Use 0 for no limit."),
-        alias="max",
         ge=0,
         examples=[15],
     ),
