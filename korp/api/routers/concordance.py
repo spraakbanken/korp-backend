@@ -64,7 +64,7 @@ concordance data in the streamed JSON object.
 
 Query `SUC3` and return the first ten hits for `"och" [] [pos="NN"]`, including the `msd` and `lemma` annotations:
 
-`/concordance?corpus=SUC3&offset=0&limit=10&default_context=1+sentence&cqp="och"+[]+[pos="NN"]&attributes=msd,lemma`
+`/concordance?corpora=SUC3&offset=0&limit=10&default_context=1+sentence&cqp="och"+[]+[pos="NN"]&attributes=msd,lemma`
 """
 
 CONCORDANCE_SAMPLE_DESCRIPTION = """Do a random-sample concordance search.
@@ -342,7 +342,7 @@ def _end_from_offset_limit(offset: int, limit: int) -> int:
 
 async def parse_parameters(
     ctx: CtxDep,
-    corpus: list[str],
+    corpora: list[str],
     cqp_query: list[str],
     offset: int,
     limit: int,
@@ -365,7 +365,7 @@ async def parse_parameters(
 
     Args:
         ctx: The request context.
-        corpus: List of corpora to query.
+        corpora: List of corpora to query.
         cqp_query: List of CQP query strings.
         offset: Number of rows to skip.
         limit: Maximum number of rows to return.
@@ -391,7 +391,7 @@ async def parse_parameters(
     Raises:
         ValueError: If any of the parameters are invalid.
     """
-    corpora = corpus or []
+    corpora = corpora or []
     await auth.check_authorization(corpora, ctx)
 
     attributes_set = set(attributes)
@@ -749,7 +749,7 @@ async def perform_query(
 @api_handler
 async def concordance_sample(
     ctx: CtxDep,
-    corpus: params.CorpusParam,
+    corpora: params.CorporaParam,
     cqp_query: params.CQPParam,
     attributes: AttributesParam = ("word",),
     struct_attributes: StructAttributesParam = (),
@@ -775,7 +775,7 @@ async def concordance_sample(
     """
     concordance_params = await parse_parameters(
         ctx=ctx,
-        corpus=corpus,
+        corpora=corpora,
         cqp_query=cqp_query,
         offset=0,
         limit=1,
@@ -822,7 +822,7 @@ async def concordance_sample(
 @api_handler
 async def concordance(
     ctx: CtxDep,
-    corpus: params.CorpusParam,
+    corpora: params.CorporaParam,
     cqp_query: params.CQPParam,
     offset: OffsetParam = 0,
     limit: LimitParam = 10,
@@ -849,7 +849,7 @@ async def concordance(
     """
     concordance_params = await parse_parameters(
         ctx=ctx,
-        corpus=corpus,
+        corpora=corpora,
         cqp_query=cqp_query,
         offset=offset,
         limit=limit,

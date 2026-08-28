@@ -206,18 +206,18 @@ async def info(
 @api_handler
 async def corpus_info(
     ctx: CtxDep,
-    corpus: params.CorpusParam,
+    corpora: params.CorporaParam,
 ) -> AsyncIterator[dict]:
     """Get information about a specific corpus or corpora.
 
     Args:
         ctx: The request context.
-        corpus: Comma-separated list of corpora.
+        corpora: Comma-separated list of corpora.
 
     Yields:
         Information about the specified corpus or corpora.
     """
-    yield await get_corpus_info(ctx, corpus)
+    yield await get_corpus_info(ctx, corpora)
 
 
 async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bool = False) -> dict:

@@ -9,7 +9,7 @@ from pydantic.json_schema import SkipJsonSchema
 
 from korp import utils
 
-CorpusParam: TypeAlias = Annotated[
+CorporaParam: TypeAlias = Annotated[
     list[str],
     Query(
         description=(

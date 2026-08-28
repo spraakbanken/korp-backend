@@ -19,7 +19,7 @@ router = APIRouter(tags=["Statistics"])
 LEXEME_COUNT_DESCRIPTION = """Return absolute frequencies for one or more lexemes.
 
 The response contains a `lexeme_counts` object where each returned lexeme is a key and the value is the total frequency
-in the selected corpora. If `corpus` is omitted, counts are summed over all corpora present in the lexeme counts table.
+in the selected corpora. If `corpora` is omitted, counts are summed over all corpora present in the lexeme counts table.
 
 Only exact lexeme lookups are supported. Lexemes that are not found are omitted from the response rather than returned
 with `0`.
@@ -28,10 +28,10 @@ with `0`.
 
 Get the number of occurrences of two lexemes in one corpus:
 
-`/lexeme_counts?lexeme=ge..vb.1,ta..vb.1&corpus=ROMI`
+`/lexeme_counts?lexeme=ge..vb.1,ta..vb.1&corpora=ROMI`
 """
 
-CorpusParamOptional: TypeAlias = Annotated[
+CorporaParamOptional: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
         description=(
@@ -76,19 +76,19 @@ class LexemeCountResponse(schemas.CommonResponse):
 async def lexeme_counts(
     ctx: CtxDep,
     lexeme: LexemeParam,
-    corpus: CorpusParamOptional = None,
+    corpora: CorporaParamOptional = None,
 ) -> AsyncGenerator[dict]:
     """Return lexeme statistics per corpus.
 
     Args:
         ctx: Request context.
         lexeme: Lexeme or multiple lexemes separated by the query delimiter.
-        corpus: Corpus or multiple corpora separated by the query delimiter.
+        corpora: Comma-separated list of corpora.
 
     Yields:
         A dictionary with lexeme counts.
     """
-    corpora = corpus or []
+    corpora = corpora or []
     await auth.check_authorization(corpora, ctx)
 
     bind_params: dict[str, str] = {}

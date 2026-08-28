@@ -50,7 +50,7 @@ before the final result in the streamed JSON object.
 
 Get all authors and their titles with token counts:
 
-`/attribute_values?corpus=ROMI&attributes=text_author>text_title&include_counts=true`
+`/attribute_values?corpora=ROMI&attributes=text_author>text_title&include_counts=true`
 """
 
 AttrParam: TypeAlias = Annotated[
@@ -129,7 +129,7 @@ class AttrValuesResponse(schemas.CommonResponse):
 @api_handler
 async def attribute_values(
     ctx: CtxDep,
-    corpus: params.CorpusParam,
+    corpora: params.CorporaParam,
     attributes: AttrParam,
     include_counts: IncludeCountsParam = False,
     per_corpus: params.PerCorpusParam = True,
@@ -140,7 +140,7 @@ async def attribute_values(
 
     Args:
         ctx: Request context.
-        corpus: Comma-separated list of corpora.
+        corpora: Comma-separated list of corpora.
         attributes: Comma-separated list of CWB attribute names or attribute hierarchies.
         include_counts: Whether to include counts for each attribute value.
         per_corpus: Whether to include per-corpus results.
@@ -152,7 +152,7 @@ async def attribute_values(
     """
     incremental = ctx.common.incremental
 
-    await auth.check_authorization(corpus, ctx)
+    await auth.check_authorization(corpora, ctx)
 
     split = split or []
     split_set = set(split)
@@ -162,7 +162,7 @@ async def attribute_values(
 
     if ctx.common.cache:
         all_cache = True
-        for c in corpus:
+        for c in corpora:
             cache_prefixes[c] = await caching.cache_prefix(ctx.cache, c)
             for attribute in attributes:
                 checksum = utils.get_hash((c, attribute, split, include_counts))
@@ -181,7 +181,7 @@ async def attribute_values(
     if not all_cache:
         progress_count = 0
         if incremental:
-            yield {"progress_corpora": list(corpus)}
+            yield {"progress_corpora": list(corpora)}
 
         limiter = CapacityLimiter(settings.PARALLEL_THREADS)
         send, receive = anyio.create_memory_object_stream(0)
@@ -203,7 +203,7 @@ async def attribute_values(
                 await send_channel.send((corpus, attr, lines))
 
         async with anyio.create_task_group() as tg:
-            for c in corpus:
+            for c in corpora:
                 for attribute in attributes:
                     if (c, attribute) not in from_cache:
                         tg.start_soon(_worker, c, attribute, send.clone())
@@ -274,7 +274,7 @@ async def attribute_values(
         del result["combined"]
 
     if ctx.common.cache and not all_cache:
-        for c in corpus:
+        for c in corpora:
             if c not in cache_prefixes:
                 cache_prefixes[c] = await caching.cache_prefix(ctx.cache, c)
             for attribute in attributes:

@@ -15,7 +15,7 @@ def corpus_info(get_json: Callable, corpora: list[str]) -> Callable[[list[str]],
             "/corpora/info",
             params={
                 "cache": "false",
-                "corpus": ",".join(corpus.upper() for corpus in corpus_list),
+                "corpora": ",".join(corpus.upper() for corpus in corpus_list),
             },
         )
 

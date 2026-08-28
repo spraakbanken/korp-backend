@@ -44,7 +44,7 @@ Most grouping and value-normalization parameters are shared with `/frequencies`,
 
 Compare nouns in two corpora and return up to ten values from each side:
 
-`/log_likelihood?set1_cqp=[pos="NN"]&set2_cqp=[pos="NN"]&group_by=word&max_results=10&set1_corpus=ROMI&set2_corpus=GP2012`
+`/log_likelihood?set1_cqp=[pos="NN"]&set2_cqp=[pos="NN"]&group_by=word&max_results=10&set1_corpora=ROMI&set2_corpora=GP2012`
 """
 
 Set1CQPParam: TypeAlias = Annotated[
@@ -63,14 +63,14 @@ Set2CQPParam: TypeAlias = Annotated[
     ),
 ]
 
-Set1CorpusParam: TypeAlias = Annotated[
+Set1CorporaParam: TypeAlias = Annotated[
     list[str],
     Query(description="Comma-separated list of corpora for set 1.", examples=[["ROMI,SUC3"]]),
     BeforeValidator(utils.split_csv),
     AfterValidator(lambda v: [x.upper() for x in v]),
 ]
 
-Set2CorpusParam: TypeAlias = Annotated[
+Set2CorporaParam: TypeAlias = Annotated[
     list[str],
     Query(description="Comma-separated list of corpora for set 2.", examples=[["GP2012"]]),
     BeforeValidator(utils.split_csv),
@@ -133,8 +133,8 @@ async def log_likelihood(
     ctx: CtxDep,
     set1_cqp: Set1CQPParam,
     set2_cqp: Set2CQPParam,
-    set1_corpus: Set1CorpusParam,
-    set2_corpus: Set2CorpusParam,
+    set1_corpora: Set1CorporaParam,
+    set2_corpora: Set2CorporaParam,
     max_results: MaxResultsParam = 15,
     group_by: frequencies.GroupByParam = None,
     group_by_struct: frequencies.GroupByStructParam = None,
@@ -159,7 +159,7 @@ async def log_likelihood(
     # Handle parameters common to frequency queries
     frequency_params = await frequencies.parse_frequency_parameters(
         ctx=ctx,
-        corpus=[],
+        corpora=[],
         cqp_query=[],
         subcqp=None,
         group_by=group_by,
@@ -179,10 +179,10 @@ async def log_likelihood(
     )
 
     # Handle parameters specific to log-likelihood
-    set1_corpora = set(set1_corpus)
-    set2_corpora = set(set2_corpus)
+    set1_corpora_set = set(set1_corpora)
+    set2_corpora_set = set(set2_corpora)
 
-    corpora = set1_corpora.union(set2_corpora)
+    corpora = set1_corpora_set.union(set2_corpora_set)
     await auth.check_authorization(corpora, ctx)
 
     same_cqp = set1_cqp == set2_cqp

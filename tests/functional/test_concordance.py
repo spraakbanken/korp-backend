@@ -16,7 +16,7 @@ def concordance_testcorpus(get_json: Callable, corpora: list[str]) -> Callable[.
 
     def _concordance_testcorpus(cqp: str, params: dict | None = None, config: dict | None = None) -> dict:
         query = {
-            "corpus": "testcorpus",
+            "corpora": "testcorpus",
             "cqp": cqp,
             "cache": "false",
         }
@@ -32,7 +32,7 @@ def concordance_sample_testcorpus(get_json: Callable, corpora: list[str]) -> Cal
 
     def _concordance_sample_testcorpus(cqp: str, params: dict | None = None, config: dict | None = None) -> dict:
         query = {
-            "corpus": "testcorpus",
+            "corpora": "testcorpus",
             "cqp": cqp,
             "cache": "false",
         }

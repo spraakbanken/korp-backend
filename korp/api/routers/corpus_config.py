@@ -34,8 +34,8 @@ CORPUS_CONFIG_DESCRIPTION = """Return the corpus configuration used by the Korp 
 Builds a JSON configuration describing corpora, shared annotation definitions, available modes, optional folder/grouping
 metadata, and configuration warnings.
 
-If `corpus` is omitted, the route includes the corpora that belong to the selected `mode`. If `corpus` is provided, only
-the specified corpora are included.
+If `corpora` is omitted, the route includes the corpora that belong to the selected `mode`. If `corpora` is provided,
+only the specified corpora are included.
 
 Hidden modes are omitted from the returned `modes` list unless the hidden mode is requested directly.
 
@@ -45,7 +45,7 @@ Any extra fields in the mode or corpus configuration YAML files are included in 
 Label: TypeAlias = str | dict[str, str]
 
 
-CorpusParam: TypeAlias = Annotated[
+CorporaParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
         description=(
@@ -137,7 +137,7 @@ async def corpus_config(
             examples=["default"],
         ),
     ] = "default",
-    corpus: CorpusParam = None,
+    corpora: CorporaParam = None,
 ) -> AsyncIterator[dict]:
     """Get corpus configuration for a given mode or list of corpora. To be used by the Korp frontend.
 
@@ -146,7 +146,7 @@ async def corpus_config(
     Args:
         ctx: Request context.
         mode: Mode to get configuration for.
-        corpus: Comma-separated list of corpora to include in configuration. If specified, overrides the mode's corpus
+        corpora: Comma-separated list of corpora to include in configuration. If specified, overrides the mode's corpus
             list.
 
     Yields:
@@ -156,7 +156,7 @@ async def corpus_config(
         NameError: If the specified mode does not exist.
         RuntimeError: If corpus configuration directory is not set in settings.
     """
-    corpora = corpus or []
+    corpora = corpora or []
     cache_checksum = utils.get_hash((mode, sorted(corpora), settings.LAB_MODE))
     cache = ctx.cache
 

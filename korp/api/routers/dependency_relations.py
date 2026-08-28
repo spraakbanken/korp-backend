@@ -94,7 +94,7 @@ time-sliced data in `relations_time`; use `/dependency_relations/time` when you 
 
 Get dependency relations for the lexeme `ge..vb.1`:
 
-`/dependency_relations?term=ge..vb.1&term_type=lexeme&corpus=ROMI`
+`/dependency_relations?term=ge..vb.1&term_type=lexeme&corpora=ROMI`
 """
 
 DEPENDENCY_RELATIONS_TIME_DESCRIPTION = """Get dependency relations grouped by year or multi-year period.
@@ -1952,7 +1952,7 @@ async def _dependency_relations_impl(
 @api_handler
 async def relations(
     ctx: CtxDep,
-    corpus: params.CorpusParam,
+    corpora: params.CorporaParam,
     term: TermParam,
     term_type: TermTypeParam = TermType.word,
     min_freq: MinFreqParam = None,
@@ -1975,7 +1975,7 @@ async def relations(
     """
     async for item in _dependency_relations_impl(
         ctx=ctx,
-        corpora=corpus,
+        corpora=corpora,
         term=term,
         term_type=term_type,
         min_freq=min_freq,
@@ -2005,7 +2005,7 @@ async def relations(
 @api_handler
 async def relations_time(
     ctx: CtxDep,
-    corpus: params.CorpusParam,
+    corpora: params.CorporaParam,
     term: TermParam,
     term_type: TermTypeParam = TermType.word,
     min_freq: MinFreqParam = None,
@@ -2027,7 +2027,7 @@ async def relations_time(
     """
     async for item in _dependency_relations_impl(
         ctx=ctx,
-        corpora=corpus,
+        corpora=corpora,
         term=term,
         term_type=term_type,
         min_freq=min_freq,
@@ -2143,7 +2143,7 @@ async def _relations_sentences_impl(
         cqp = '<sentence_id="{}"> []* </sentence_id> within sentence'.format("|".join(set(sids.keys())))
         concordance_params = await concordance.parse_parameters(
             ctx=ctx,
-            corpus=[corpus],
+            corpora=[corpus],
             cqp_query=[cqp],
             offset=0,
             limit=limit,

@@ -20,7 +20,7 @@ def dependency_relations_testcorpus(get_json: Callable, database_tables: Callabl
         word: str, corpora: list[str] | str, params: dict | None = None, config: dict | None = None
     ) -> dict:
         query_params = {
-            "corpus": make_liststr(corpora),
+            "corpora": make_liststr(corpora),
             "term": word,
             "cache": "false",
             "measures": "freq,mi",

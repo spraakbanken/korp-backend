@@ -330,7 +330,7 @@ class FrequencyParameters:
 
 async def parse_frequency_parameters(
     ctx: CtxDep,
-    corpus: list[str],
+    corpora: list[str],
     cqp_query: list[str] | None,
     subcqp: list[str] | None,
     group_by: list[str] | None,
@@ -356,7 +356,7 @@ async def parse_frequency_parameters(
     Raises:
         ValueError: If any parameter is invalid.
     """
-    await auth.check_authorization(corpus, ctx)
+    await auth.check_authorization(corpora, ctx)
 
     group_by = sorted(set(group_by)) if group_by else []
     group_by_struct = sorted(set(group_by_struct)) if group_by_struct else []
@@ -389,7 +389,7 @@ async def parse_frequency_parameters(
     if cqp_query:
         cqp_combined.extend(cqp_query)
 
-    if len(cqp_combined) > 1 and expand_prequeries and not all(within_dict[c] for c in corpus):
+    if len(cqp_combined) > 1 and expand_prequeries and not all(within_dict[c] for c in corpora):
         raise ValueError("Multiple CQP queries requires 'within' or 'expand_prequeries=false'")
 
     if subcqp:
@@ -399,7 +399,7 @@ async def parse_frequency_parameters(
         simple = True
 
     return FrequencyParameters(
-        corpora=corpus,
+        corpora=corpora,
         cqp_query=cqp_combined,
         subcqp=subcqp,
         group_by=group_by_combined,
@@ -859,7 +859,7 @@ async def perform_frequency_query(
 @api_handler
 async def frequencies(
     ctx: CtxDep,
-    corpus: params.CorpusParam,
+    corpora: params.CorporaParam,
     cqp_query: params.CQPParam,
     subcqp: SubCQPParam = None,
     group_by: GroupByParam = None,
@@ -884,7 +884,7 @@ async def frequencies(
     """
     frequency_params = await parse_frequency_parameters(
         ctx=ctx,
-        corpus=corpus,
+        corpora=corpora,
         cqp_query=cqp_query,
         subcqp=subcqp,
         group_by=group_by,
@@ -918,7 +918,7 @@ async def frequencies(
 @api_handler
 async def corpus_frequencies(
     ctx: CtxDep,
-    corpus: params.CorpusParam,
+    corpora: params.CorporaParam,
     group_by: GroupByParam = None,
     group_by_struct: GroupByStructParam = None,
     within: params.WithinParam = None,
@@ -941,7 +941,7 @@ async def corpus_frequencies(
     """
     frequency_params = await parse_frequency_parameters(
         ctx=ctx,
-        corpus=corpus,
+        corpora=corpora,
         cqp_query=["[]"],
         subcqp=None,
         group_by=group_by,
@@ -999,7 +999,7 @@ DateToParam: TypeAlias = Annotated[
 @api_handler
 async def frequencies_time(
     ctx: CtxDep,
-    corpus: params.CorpusParam,
+    corpora: params.CorporaParam,
     cqp_query: params.CQPParam,
     subcqp: SubCQPParam = None,
     within: params.WithinParam = None,
@@ -1031,7 +1031,7 @@ async def frequencies_time(
     """
     frequency_params = await parse_frequency_parameters(
         ctx=ctx,
-        corpus=corpus,
+        corpora=corpora,
         cqp_query=cqp_query,
         subcqp=subcqp,
         group_by=None,

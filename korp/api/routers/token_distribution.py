@@ -50,7 +50,7 @@ Use `date_from` and `date_to` together to limit the date range.
 
 Show yearly token distribution for a corpus:
 
-`/token_distribution?corpus=VIVILL&granularity=year`
+`/token_distribution?corpora=VIVILL&granularity=year`
 """
 
 DateFromParam: TypeAlias = Annotated[
@@ -173,7 +173,7 @@ def _adjust_date(date_str: str, granularity: GranularityValues, *, subtract: boo
 @api_handler
 async def token_distribution(
     ctx: CtxDep,
-    corpus: params.CorpusParam,
+    corpora: params.CorporaParam,
     granularity: params.GranularityParam = GranularityValues.year,
     combined: params.CombinedParam = True,
     per_corpus: params.PerCorpusParam = True,
@@ -185,7 +185,7 @@ async def token_distribution(
 
     Args:
         ctx: The request context.
-        corpus: Comma-separated list of corpora.
+        corpora: Comma-separated list of corpora.
         granularity: Granularity of result.
         combined: Whether to include combined results.
         per_corpus: Whether to include results per corpus.
@@ -196,7 +196,7 @@ async def token_distribution(
     Yields:
         A dictionary containing the token distribution information.
     """
-    corpora = corpus or []
+    corpora = corpora or []
 
     yield await get_timespan(
         ctx,

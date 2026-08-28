@@ -18,7 +18,7 @@ def token_distribution(get_json: Callable, database_tables: Callable) -> Callabl
 
     def _token_distribution(corpora: list[str] | str, params: dict | None = None, config: dict | None = None) -> dict:
         query_params = {
-            "corpus": make_liststr(corpora),
+            "corpora": make_liststr(corpora),
             "cache": "false",
         }
         database_tables(corpora, "timedata")

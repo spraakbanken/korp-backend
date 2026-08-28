@@ -21,7 +21,7 @@ def lexeme_counts(get_json: Callable, database_tables: Callable) -> Callable:
         lexeme: str, corpora: list[str], params: dict | None = None, config: dict | None = None
     ) -> dict:
         query_params = {
-            "corpus": make_liststr(corpora),
+            "corpora": make_liststr(corpora),
             "lexeme": lexeme,
             "cache": "false",
         }
