@@ -187,7 +187,7 @@ LimitParam: TypeAlias = Annotated[
     Query(description="Maximum number of matching rows to return.", ge=1, examples=[10]),
 ]
 
-CutParam: TypeAlias = Annotated[
+MaxHitsPerCorpusParam: TypeAlias = Annotated[
     int | SkipJsonSchema[None],
     Query(
         description=(
@@ -278,7 +278,8 @@ class ConcordanceResponse(schemas.CommonResponse):
         ...,
         description=(
             "Compact hit-distribution data for this query. Submit this value as the `query_data` parameter when "
-            "requesting another page with the same corpus, CQP, `within`, `cut`, and `in_order` settings."
+            "requesting another page with the same corpus, CQP, `within`, `max_hits_per_corpus`, and `in_order` "
+            "settings."
         ),
         examples=[
             "eJwdxsERgCAMBMCWwnEY0Ap8OM7YAUlI_yXouK-tUV0NBKw0j8wNQ4tQJ9kXxupZWqX5RLJ0CafICvONYRE4nvs6d3T--QZ9AbXiFqk="
@@ -323,7 +324,7 @@ class ConcordanceParameters:
     end: int = 9
     attributes: set[str] = dataclasses.field(default_factory=lambda: {"word"})
     struct_attributes: set[str] = dataclasses.field(default_factory=set)
-    cut: int | None = None
+    max_hits_per_corpus: int | None = None
     sort: str | None = None
     random_seed: int | None = None
     in_order: bool = True
@@ -348,7 +349,7 @@ async def parse_parameters(
     limit: int,
     attributes: Sequence[str],
     struct_attributes: Sequence[str] | None,
-    cut: int | None = None,
+    max_hits_per_corpus: int | None = None,
     sort: str | None = None,
     random_seed: int | None = None,
     in_order: bool = True,
@@ -371,8 +372,8 @@ async def parse_parameters(
         limit: Maximum number of rows to return.
         attributes: List of CWB attributes to include with the token results.
         struct_attributes: List of structural CWB attributes to include in the results.
-        cut: Maximum number of results to return per corpus. With this enabled, the total number of results will be
-            incorrect.
+        max_hits_per_corpus: Maximum number of results to return per corpus. With this enabled, the total number of
+            results will be incorrect.
         sort: Sorting method for the results.
         random_seed: Random seed for random sorting.
         in_order: Whether to perform an in-order search.
@@ -446,7 +447,7 @@ async def parse_parameters(
         end=offset + limit - 1,
         attributes=attributes_set,
         struct_attributes=struct_attributes_set,
-        cut=cut,
+        max_hits_per_corpus=max_hits_per_corpus,
         sort=sort,
         random_seed=random_seed,
         in_order=in_order,
@@ -478,7 +479,7 @@ async def perform_query(
     corpora = concordance_parameters.corpora
     cqp_query = concordance_parameters.cqp_query
     within = concordance_parameters.within
-    cut = concordance_parameters.cut
+    max_hits_per_corpus = concordance_parameters.max_hits_per_corpus
     expand_prequeries = concordance_parameters.expand_prequeries
     query_data = concordance_parameters.query_data
     start = concordance_parameters.start
@@ -487,7 +488,9 @@ async def perform_query(
     result: dict[str, Any] = {"kwic": []}
 
     # Checksum for whole query, used to verify query_data from the client
-    checksum = utils.get_hash((sorted(corpora), cqp_query, sorted(within.items()), cut, expand_prequeries, free_search))
+    checksum = utils.get_hash(
+        (sorted(corpora), cqp_query, sorted(within.items()), max_hits_per_corpus, expand_prequeries, free_search)
+    )
 
     debug = {}
     if ctx.common.debug:
@@ -523,7 +526,9 @@ async def perform_query(
         memcached_keys = {}
         cache_prefixes = await caching.cache_prefix(ctx.cache, [corpus.split("|")[0] for corpus in corpora])
         for corpus in corpora:
-            corpus_checksum = utils.get_hash((cqp_query, within[corpus], cut, expand_prequeries, free_search))
+            corpus_checksum = utils.get_hash(
+                (cqp_query, within[corpus], max_hits_per_corpus, expand_prequeries, free_search)
+            )
             memcached_keys[f"{cache_prefixes[corpus.split('|')[0]]}:concordance_size_{corpus_checksum}"] = corpus
 
         cached_corpus_hits = await ctx.cache.get_many(memcached_keys.keys())
@@ -781,7 +786,7 @@ async def concordance_sample(
         limit=1,
         attributes=attributes,
         struct_attributes=struct_attributes,
-        cut=1,
+        max_hits_per_corpus=1,
         sort="random",
         random_seed=random_seed,
         in_order=in_order,
@@ -828,7 +833,7 @@ async def concordance(
     limit: LimitParam = 10,
     attributes: AttributesParam = ("word",),
     struct_attributes: StructAttributesParam = None,
-    cut: CutParam = None,
+    max_hits_per_corpus: MaxHitsPerCorpusParam = None,
     sort: SortParam = None,
     random_seed: RandomSeedParam = None,
     in_order: InOrderParam = True,
@@ -855,7 +860,7 @@ async def concordance(
         limit=limit,
         attributes=attributes,
         struct_attributes=struct_attributes,
-        cut=cut,
+        max_hits_per_corpus=max_hits_per_corpus,
         sort=sort,
         random_seed=random_seed,
         in_order=in_order,
@@ -913,7 +918,7 @@ def query_corpus(
     struct_attributes = concordance_params.struct_attributes
     expand_prequeries = concordance_params.expand_prequeries
     free_search = not concordance_params.in_order
-    cut = concordance_params.cut
+    max_hits_per_corpus = concordance_params.max_hits_per_corpus
     sort = concordance_params.sort
     random_seed = concordance_params.random_seed
 
@@ -936,7 +941,7 @@ def query_corpus(
         assert cache_dir is not None
 
         # Calculate checksum (needs to contain all arguments that may influence the results)
-        checksum_data = (cqp_query, within, cut, expand_prequeries, free_search)
+        checksum_data = (cqp_query, within, max_hits_per_corpus, expand_prequeries, free_search)
 
         checksum = utils.get_hash(checksum_data)
         unique_id = str(uuid.uuid4())
@@ -966,7 +971,7 @@ def query_corpus(
 
     attributes = attributes.copy()  # To not edit the original
 
-    cqpparams = {"within": within, "cut": cut}
+    cqpparams = {"within": within, "cut": max_hits_per_corpus}
 
     # Handle aligned corpora
     if "|" in corpus:
