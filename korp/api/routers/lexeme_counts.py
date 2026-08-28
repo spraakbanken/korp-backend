@@ -28,7 +28,7 @@ with `0`.
 
 Get the number of occurrences of two lexemes in one corpus:
 
-`/lexeme_counts?lexeme=ge..vb.1,ta..vb.1&corpora=ROMI`
+`/lexeme_counts?lexemes=ge..vb.1,ta..vb.1&corpora=ROMI`
 """
 
 CorporaParamOptional: TypeAlias = Annotated[
@@ -44,7 +44,7 @@ CorporaParamOptional: TypeAlias = Annotated[
     AfterValidator(lambda v: [x.upper() for x in v]),
 ]
 
-LexemeParam: TypeAlias = Annotated[
+LexemesParam: TypeAlias = Annotated[
     list[str],
     Query(
         description="Comma-separated list of lexemes to look up.",
@@ -75,14 +75,14 @@ class LexemeCountResponse(schemas.CommonResponse):
 @api_handler
 async def lexeme_counts(
     ctx: CtxDep,
-    lexeme: LexemeParam,
+    lexemes: LexemesParam,
     corpora: CorporaParamOptional = None,
 ) -> AsyncGenerator[dict]:
     """Return lexeme statistics per corpus.
 
     Args:
         ctx: Request context.
-        lexeme: Lexeme or multiple lexemes separated by the query delimiter.
+        lexemes: Comma-separated list of lexemes.
         corpora: Comma-separated list of corpora.
 
     Yields:
@@ -92,9 +92,9 @@ async def lexeme_counts(
     await auth.check_authorization(corpora, ctx)
 
     bind_params: dict[str, str] = {}
-    lexeme_placeholders = ", ".join(f":lexeme_{i}" for i in range(len(lexeme)))
-    for i, l in enumerate(lexeme):
-        bind_params[f"lexeme_{i}"] = l
+    lexeme_placeholders = ", ".join(f":lexeme_{i}" for i in range(len(lexemes)))
+    for i, lexeme in enumerate(lexemes):
+        bind_params[f"lexeme_{i}"] = lexeme
 
     corpora_sql = ""
     if corpora:

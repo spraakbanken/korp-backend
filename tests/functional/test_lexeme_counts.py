@@ -11,18 +11,18 @@ from tests.testutils import make_liststr
 def lexeme_counts(get_json: Callable, database_tables: Callable) -> Callable:
     """Return function returning JSON response for `/lexeme_counts` to corpora.
 
-    The returned function takes as its parameters a lexeme, a corpus or a list of corpora, possible additional request
+    The returned function takes as its parameters lexemes, a corpus or a list of corpora, possible additional request
     parameters and Korp configuration parameters. It returns the JSON response for `/lexeme_counts` to the specified
     corpora with the given parameters (and cache=false). It imports the lexeme_counts database data for the given
     corpora.
     """
 
     def _lexeme_counts(
-        lexeme: str, corpora: list[str], params: dict | None = None, config: dict | None = None
+        lexemes: str, corpora: list[str], params: dict | None = None, config: dict | None = None
     ) -> dict:
         query_params = {
             "corpora": make_liststr(corpora),
-            "lexeme": lexeme,
+            "lexemes": lexemes,
             "cache": "false",
         }
         database_tables(corpora, "lexeme_counts")

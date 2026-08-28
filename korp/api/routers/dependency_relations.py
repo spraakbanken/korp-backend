@@ -109,9 +109,9 @@ those relations.
 
 DEPENDENCY_RELATIONS_SENTENCES_DESCRIPTION = """Return KWIC sentences containing dependency relation sources.
 
-Use the `source` ids returned by `/dependency_relations` to retrieve the corpus sentences where those relation
-instances occur. The sentence rows use the same KWIC structure as `/concordance`, with the relation span highlighted as
-the match.
+Use the `source` ids returned by `/dependency_relations` as the comma-separated `sources` parameter to retrieve the
+corpus sentences where those relation instances occur. The sentence rows use the same KWIC structure as `/concordance`,
+with the relation span highlighted as the match.
 """
 
 DEPENDENCY_RELATIONS_TIME_SENTENCES_DESCRIPTION = """Return KWIC sentences for time-sliced dependency relation sources.
@@ -1617,7 +1617,7 @@ def _limit_rows_per_bucket(
     return limited
 
 
-SourceParam: TypeAlias = Annotated[
+SourcesParam: TypeAlias = Annotated[
     list[str],
     Query(
         description="Source ids in the format `CORPUS:ID`, repeated or comma-separated.",
@@ -2046,20 +2046,20 @@ async def relations_time(
         yield item
 
 
-def _parse_source(source: list[str]) -> dict[str, set[int]]:
+def _parse_sources(sources: list[str]) -> dict[str, set[int]]:
     parsed: dict[str, set[int]] = defaultdict(set)
-    for item in source:
+    for item in sources:
         try:
             corpus, relation_id = item.split(":", 1)
             parsed[corpus.upper()].add(int(relation_id))
         except ValueError as exc:
-            raise ValueError("Malformed value for key 'source'. Expected 'CORPUS:ID'.") from exc
+            raise ValueError("Malformed value for key 'sources'. Expected 'CORPUS:ID'.") from exc
     return parsed
 
 
 async def _relations_sentences_impl(
     ctx: CtxDep,
-    source: list[str],
+    sources: list[str],
     offset: int,
     limit: int,
     attributes: str,
@@ -2068,7 +2068,7 @@ async def _relations_sentences_impl(
     yearly: bool,
     abort_signal: AbortSignal | None = None,
 ) -> dict[str, Any]:
-    source_map = _parse_source(source)
+    source_map = _parse_sources(sources)
     await auth.check_authorization(source_map.keys(), ctx)
 
     table_suffix = f"{SPLIT_SUFFIX}_sentences" if yearly else "_sentences"
@@ -2194,7 +2194,7 @@ async def _relations_sentences_impl(
 @api_handler
 async def relations_sentences(
     ctx: CtxDep,
-    source: SourceParam,
+    sources: SourcesParam,
     offset: RelationsOffsetParam = 0,
     limit: RelationsLimitParam = 10,
     attributes: RelationsAttributesParam = "word",
@@ -2206,7 +2206,7 @@ async def relations_sentences(
 
     Args:
         ctx: Common dependencies.
-        source: List of source IDs in the format `CORPUS:ID`.
+        sources: Comma-separated list of source IDs in the format `CORPUS:ID`.
         offset: Number of sentence rows to skip.
         limit: Maximum number of sentence rows to return.
         attributes: Comma-separated list of CWB attributes to include with the token results.
@@ -2219,7 +2219,7 @@ async def relations_sentences(
     """
     yield await _relations_sentences_impl(
         ctx=ctx,
-        source=source,
+        sources=sources,
         offset=offset,
         limit=limit,
         attributes=attributes,
@@ -2241,7 +2241,7 @@ async def relations_sentences(
 @api_handler
 async def relations_time_sentences(
     ctx: CtxDep,
-    source: SourceParam,
+    sources: SourcesParam,
     offset: RelationsOffsetParam = 0,
     limit: RelationsLimitParam = 10,
     attributes: RelationsAttributesParam = "word",
@@ -2253,7 +2253,7 @@ async def relations_time_sentences(
 
     Args:
         ctx: Common dependencies.
-        source: List of source IDs in the format `CORPUS:ID`.
+        sources: Comma-separated list of source IDs in the format `CORPUS:ID`.
         offset: Number of sentence rows to skip.
         limit: Maximum number of sentence rows to return.
         attributes: Comma-separated list of CWB attributes to include with the token results.
@@ -2266,7 +2266,7 @@ async def relations_time_sentences(
     """
     yield await _relations_sentences_impl(
         ctx=ctx,
-        source=source,
+        sources=sources,
         offset=offset,
         limit=limit,
         attributes=attributes,
