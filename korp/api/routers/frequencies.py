@@ -156,7 +156,7 @@ RelativeToStructParam: TypeAlias = Annotated[
     BeforeValidator(utils.split_csv),
 ]
 
-StripPointerParam: TypeAlias = Annotated[
+StripPointerSuffixParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
         description="Comma-separated list of CWB attributes whose multi-word pointer suffixes should be stripped.",
@@ -165,7 +165,7 @@ StripPointerParam: TypeAlias = Annotated[
     BeforeValidator(utils.split_csv),
 ]
 
-TopParam: TypeAlias = Annotated[
+MaxValuesPerSetParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
         description=(
@@ -320,8 +320,8 @@ class FrequencyParameters:
     simple: bool = False
     relative_to_struct: list[tuple[str, bool]] = dataclasses.field(default_factory=list)
     split: set[str] = dataclasses.field(default_factory=set)
-    strip_pointer: set[str] = dataclasses.field(default_factory=set)
-    top: dict[str, int] = dataclasses.field(default_factory=dict)
+    strip_pointer_suffix: set[str] = dataclasses.field(default_factory=set)
+    max_values_per_set: dict[str, int] = dataclasses.field(default_factory=dict)
     expand_prequeries: bool = True
     start: int = 0
     end: int = -1
@@ -341,8 +341,8 @@ async def parse_frequency_parameters(
     ignore_case: list[str] | None,
     relative_to_struct: list[str] | None,
     split: list[str] | None,
-    strip_pointer: list[str] | None,
-    top: list[str] | None,
+    strip_pointer_suffix: list[str] | None,
+    max_values_per_set: list[str] | None,
     simple: bool,
     expand_prequeries: bool,
     offset: int,
@@ -376,13 +376,13 @@ async def parse_frequency_parameters(
 
     relative_to = [(r, True) for r in relative_to_structs]
 
-    tops = {}
-    if top:
-        for t in top:
+    max_values = {}
+    if max_values_per_set:
+        for t in max_values_per_set:
             if ":" in t:
-                tops[t.split(":")[0]] = int(t.split(":")[1])
+                max_values[t.split(":")[0]] = int(t.split(":")[1])
             else:
-                tops[t] = 1
+                max_values[t] = 1
 
     subcqp = subcqp or []
     cqp_combined: list[str | list[str]] = []
@@ -408,8 +408,8 @@ async def parse_frequency_parameters(
         simple=simple,
         relative_to_struct=relative_to,
         split=set(split) if split else set(),
-        strip_pointer=set(strip_pointer) if strip_pointer else set(),
-        top=tops,
+        strip_pointer_suffix=set(strip_pointer_suffix) if strip_pointer_suffix else set(),
+        max_values_per_set=max_values,
         expand_prequeries=expand_prequeries,
         start=offset,
         end=-1 if limit == 0 else offset + limit - 1,
@@ -417,7 +417,7 @@ async def parse_frequency_parameters(
     )
 
 
-def _strip_pointer(tok: str) -> str:
+def _strip_pointer_suffix(tok: str) -> str:
     """Strip multi-word pointer suffix from a token.
 
     Args:
@@ -437,8 +437,8 @@ def _parse_ngram_groups(
     ngram_groups: list[str],
     group_by: list[tuple[str, bool]],
     split: set[str],
-    strip_pointer: set[str],
-    top: dict[str, int],
+    strip_pointer_suffix: set[str],
+    max_values_per_set: dict[str, int],
 ) -> list[tuple[tuple[str, ...], ...]]:
     """Parse ngram groups into expanded ngram tuples.
 
@@ -446,8 +446,8 @@ def _parse_ngram_groups(
         ngram_groups: Raw ngram group strings from count output.
         group_by: List of (attribute, is_struct) tuples.
         split: Attributes to split on.
-        strip_pointer: Attributes to strip pointers from.
-        top: Dict of attribute to top-N limit.
+        strip_pointer_suffix: Attributes to strip pointer suffixes from.
+        max_values_per_set: Dict of attribute to maximum values per set.
 
     Returns:
         List of ngram tuple collections, one per group.
@@ -455,24 +455,24 @@ def _parse_ngram_groups(
     all_ngrams = []
 
     for i, ngram in enumerate(ngram_groups):
-        strip_ptrs = group_by[i][0] in strip_pointer
+        strip_pointer_suffixes = group_by[i][0] in strip_pointer_suffix
 
         # Split value sets and treat each value as a hit
         if group_by[i][0] in split:
             tokens = [t + "|" for t in ngram.split("| ")]  # We can't split on just space due to spaces in annotations
             tokens[-1] = tokens[-1][:-1]
-            if group_by[i][0] in top:
+            if group_by[i][0] in max_values_per_set:
                 split_tokens = [
-                    [x for x in token.split("|") if x][: top[group_by[i][0]]] if token != "|" else [""]
+                    [x for x in token.split("|") if x][: max_values_per_set[group_by[i][0]]] if token != "|" else [""]
                     for token in tokens
                 ]
             else:
                 split_tokens = [[x for x in token.split("|") if x] if token != "|" else [""] for token in tokens]
 
             # Strip multi-word pointers if requested
-            if strip_ptrs:
+            if strip_pointer_suffixes:
                 for j in range(len(split_tokens)):
-                    split_tokens[j] = [_strip_pointer(t) for t in split_tokens[j]]
+                    split_tokens[j] = [_strip_pointer_suffix(t) for t in split_tokens[j]]
 
             ngrams = tuple(itertools.product(*split_tokens))
         else:
@@ -638,8 +638,8 @@ async def perform_frequency_query(
     simple = frequency_params.simple
     relative_to_struct = frequency_params.relative_to_struct
     split = frequency_params.split
-    strip_pointer = frequency_params.strip_pointer
-    top = frequency_params.top
+    strip_pointer_suffix = frequency_params.strip_pointer_suffix
+    max_values_per_set = frequency_params.max_values_per_set
     expand_prequeries = frequency_params.expand_prequeries
     start = frequency_params.start
     end = frequency_params.end
@@ -796,7 +796,9 @@ async def perform_frequency_query(
                         "attribute containing tabs, which is not supported."
                     )
 
-                all_ngrams = _parse_ngram_groups(ngram_groups, group_by, split, strip_pointer, top)
+                all_ngrams = _parse_ngram_groups(
+                    ngram_groups, group_by, split, strip_pointer_suffix, max_values_per_set
+                )
                 cross = list(itertools.product(*all_ngrams))
 
                 _accumulate_ngram_stats(
@@ -872,8 +874,8 @@ async def frequencies(
     ignore_case: IgnoreCaseParam = None,
     relative_to_struct: RelativeToStructParam = None,
     split: params.SplitParam = None,
-    strip_pointer: StripPointerParam = None,
-    top: TopParam = None,
+    strip_pointer_suffix: StripPointerSuffixParam = None,
+    max_values_per_set: MaxValuesPerSetParam = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
@@ -895,8 +897,8 @@ async def frequencies(
         ignore_case=ignore_case,
         relative_to_struct=relative_to_struct,
         split=split,
-        strip_pointer=strip_pointer,
-        top=top,
+        strip_pointer_suffix=strip_pointer_suffix,
+        max_values_per_set=max_values_per_set,
         simple=False,
         expand_prequeries=expand_prequeries,
         offset=offset,
@@ -929,8 +931,8 @@ async def corpus_frequencies(
     ignore_case: IgnoreCaseParam = None,
     relative_to_struct: RelativeToStructParam = None,
     split: params.SplitParam = None,
-    strip_pointer: StripPointerParam = None,
-    top: TopParam = None,
+    strip_pointer_suffix: StripPointerSuffixParam = None,
+    max_values_per_set: MaxValuesPerSetParam = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
@@ -952,8 +954,8 @@ async def corpus_frequencies(
         ignore_case=ignore_case,
         relative_to_struct=relative_to_struct,
         split=split,
-        strip_pointer=strip_pointer,
-        top=top,
+        strip_pointer_suffix=strip_pointer_suffix,
+        max_values_per_set=max_values_per_set,
         simple=True,
         expand_prequeries=expand_prequeries,
         offset=offset,
@@ -1010,8 +1012,8 @@ async def frequencies_time(
     ignore_case: IgnoreCaseParam = None,
     relative_to_struct: RelativeToStructParam = None,
     split: params.SplitParam = None,
-    strip_pointer: StripPointerParam = None,
-    top: TopParam = None,
+    strip_pointer_suffix: StripPointerSuffixParam = None,
+    max_values_per_set: MaxValuesPerSetParam = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
     granularity: params.GranularityParam = params.GranularityValues.year,
     date_from: DateFromParam = None,
@@ -1042,8 +1044,8 @@ async def frequencies_time(
         ignore_case=ignore_case,
         relative_to_struct=relative_to_struct,
         split=split,
-        strip_pointer=strip_pointer,
-        top=top,
+        strip_pointer_suffix=strip_pointer_suffix,
+        max_values_per_set=max_values_per_set,
         simple=True,
         expand_prequeries=expand_prequeries,
         offset=offset,

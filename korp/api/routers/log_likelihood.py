@@ -38,7 +38,8 @@ Use `max_results` to limit how many values to return from each side of the compa
 return up to ten set-1-prominent values and ten set-2-prominent values. Use `max_results=0` for no limit.
 
 Most grouping and value-normalization parameters are shared with `/frequencies`, including `group_by`,
-`group_by_struct`, `ignore_case`, `split`, `strip_pointer`, `top`, `within`, and `default_within`.
+`group_by_struct`, `ignore_case`, `split`, `strip_pointer_suffix`, `max_values_per_set`, `within`, and
+`default_within`.
 
 ### Example
 
@@ -146,8 +147,8 @@ async def log_likelihood(
     ignore_case: frequencies.IgnoreCaseParam = None,
     relative_to_struct: frequencies.RelativeToStructParam = None,
     split: params.SplitParam = None,
-    strip_pointer: frequencies.StripPointerParam = None,
-    top: frequencies.TopParam = None,
+    strip_pointer_suffix: frequencies.StripPointerSuffixParam = None,
+    max_values_per_set: frequencies.MaxValuesPerSetParam = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
     abort_signal: AbortDep = None,
 ) -> AsyncGenerator[dict]:
@@ -170,8 +171,8 @@ async def log_likelihood(
         ignore_case=ignore_case,
         relative_to_struct=relative_to_struct,
         split=split,
-        strip_pointer=strip_pointer,
-        top=top,
+        strip_pointer_suffix=strip_pointer_suffix,
+        max_values_per_set=max_values_per_set,
         simple=False,
         expand_prequeries=expand_prequeries,
         offset=offset,
