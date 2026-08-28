@@ -192,7 +192,7 @@ YearParam: TypeAlias = Annotated[
     ),
 ]
 
-OverallParam: TypeAlias = Annotated[
+IncludeOverallParam: TypeAlias = Annotated[
     bool,
     Query(description="Whether to include overall relation rows in `relations` in addition to time-sliced data."),
 ]
@@ -1963,7 +1963,7 @@ async def relations(
     period_align: PeriodAlignParam = PeriodAlign.newest,
     start_year: YearParam = None,
     end_year: YearParam = None,
-    overall: OverallParam = True,
+    include_overall: IncludeOverallParam = True,
     max_scope: MaxScopeParam = MaxScope.per_period,
     measures: MeasuresParam = tuple(Measures),
     abort_signal: AbortDep = None,
@@ -1986,7 +1986,7 @@ async def relations(
         period_align=period_align,
         start_year=start_year,
         end_year=end_year,
-        include_overall=overall,
+        include_overall=include_overall,
         max_scope=max_scope,
         measures=measures,
         abort_signal=abort_signal,
@@ -2015,7 +2015,7 @@ async def relations_time(
     period_align: PeriodAlignParam = PeriodAlign.newest,
     start_year: YearParam = None,
     end_year: YearParam = None,
-    overall: OverallParam = False,
+    include_overall: IncludeOverallParam = False,
     max_scope: MaxScopeParam = MaxScope.per_period,
     measures: MeasuresParam = tuple(Measures),
     abort_signal: AbortDep = None,
@@ -2038,7 +2038,7 @@ async def relations_time(
         period_align=period_align,
         start_year=start_year,
         end_year=end_year,
-        include_overall=overall,
+        include_overall=include_overall,
         max_scope=max_scope,
         measures=measures,
         abort_signal=abort_signal,
