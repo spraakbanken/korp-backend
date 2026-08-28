@@ -165,7 +165,8 @@ The API documentation is available at the `/docs` endpoint when the server is ru
 ## Adding corpora
 
 Korp works as a layer on top of Corpus Workbench for most corpus search functionality. See the [CWB corpus encoding tutorial](http://cwb.sourceforge.net/files/CWB_Encoding_Tutorial.pdf) for information regarding encoding corpora.
-Note that Korp requires your corpora to be encoded in UTF-8. Values of structural attributes may not contain tab characters.
+Note that Korp requires your corpora to be encoded in UTF-8. Values of structural CWB attributes may not contain tab
+characters.
 Once CWB is aware of your corpora they will be accessible through the Korp API.
 
 ### Adding additional info about the corpus
@@ -184,8 +185,8 @@ Once this file is in place, Korp will be able to access this information.
 
 ### Corpus structure requirements
 
-To use the basic concordance features of Korp there are no particular requirements
-regarding the markup of your corpora.
+To use the basic concordance features of Korp there are no particular requirements regarding the markup or annotations
+of your corpora.
 
 To use the **Dependency Relations** functionality your corpus must adhere to the following format:
 
@@ -193,7 +194,7 @@ To use the **Dependency Relations** functionality your corpus must adhere to the
 - Every sentence annotation must have an attribute named `id` with a value that is unique within the corpus.
 
 To use the **Trend Diagram** functionality, your corpus needs to be annotated with date information using
-the following four structural attributes: `text_datefrom`, `text_timefrom`, `text_dateto`, `text_timeto`.
+the following four structural CWB attributes: `text_datefrom`, `text_timefrom`, `text_dateto`, `text_timeto`.
 The date format should be *YYYYMMDD*, and the time format *hhmmss*.
 A corpus dated 2006 would have the following values:
 
@@ -393,7 +394,7 @@ The corpus configuration used by the Korp frontend is served by the backend. In 
 - The **modes** directory contains one YAML file per mode in Korp.
 - The **corpora** directory contains one YAML file per corpus.
 - The **attributes** directory contains two subdirectories: **positional** and **structural**, containing optional
-  attribute presets referred to by the corpus configurations.
+  annotation presets referred to by the corpus configurations.
 
 For some inspiration, you can look at the  [config files](https://github.com/spraakbanken/korp-config) used by the Korp
 instance at Språkbanken Text.
@@ -514,16 +515,17 @@ correspond to a corpus ID in lowercase, followed by `.yaml`, e.g. `mycorpus.yaml
       value: 1 paragraph
   ```
 
-- **attribute_filters**: A list of structural attributes on which the user will be able to filter the search results,
+- **attribute_filters**: A list of structural annotations (CWB structural attributes) on which the user will be able to
+  filter the search results,
   using menus in both simple and extended search.
-- **pos_attributes** and **struct_attributes**: Lists of positional and structural attributes. Every item in each list
-  should be an object with one key. The key should be the ID of the attribute, e.g. `msd` for positional attributes or
-  `text_title` for structural. The value should be either 1) an object with a complete attribute definition, or 2) a
-  string referring to an attribute preset containing such a definition, e.g. `msd` to refer to
+- **pos_attributes** and **struct_attributes**: Lists of positional and structural annotation definitions. Every item in
+  each list should be an object with one key. The key should be the CWB attribute name, e.g. `msd` for a positional
+  annotation or `text_title` for a structural annotation. The value should be either 1) an object with a complete
+  annotation definition, or 2) a string referring to an annotation preset containing such a definition, e.g. `msd` to refer to
   `attributes/positional/msd.yaml`. With option 1, you may also refer to a preset by using the key
-  `preset` and then extend/override that preset. The attribute definition is what tells the Korp frontend how to handle
-  each attribute, like how it should be presented in the sidebar and what interface widget to use in extended search.
-  For more information about what options are available for attribute definitions, see the [Korp frontend
+  `preset` and then extend/override that preset. The annotation definition tells the Korp frontend how to handle the
+  annotation, such as how it should be presented in the sidebar and what interface widget to use in extended search.
+  For more information about the available annotation-definition options, see the [Korp frontend
   documentation](https://github.com/spraakbanken/korp-frontend/blob/master/doc/frontend_devel.md#attribute-settings).
   Example:
 
@@ -548,6 +550,6 @@ correspond to a corpus ID in lowercase, followed by `.yaml`, e.g. `mycorpus.yaml
 - **limited_access**: Set to `true` to indicate that this corpus requires the user to be logged in and having the right
   permissions.
 
-### Attribute Presets
+### Annotation presets
 
 See **pos_attributes** and **struct_attributes** above.

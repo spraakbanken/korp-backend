@@ -232,7 +232,10 @@ RelationsLimitParam: TypeAlias = Annotated[
 RelationsAttributesParam: TypeAlias = Annotated[
     str,
     Query(
-        description="Comma-separated list of positional attributes to include on each returned token.",
+        description=(
+            "Comma-separated list of CWB attributes to include with each returned token. Positional attributes "
+            "represent token annotations; structural attributes are returned as inline structural annotations."
+        ),
         examples=["word,lemma,pos"],
     ),
 ]
@@ -241,8 +244,8 @@ RelationsStructAttributesParam: TypeAlias = Annotated[
     str,
     Query(
         description=(
-            "Comma-separated list of structural attributes to include for each KWIC row. `sentence_id` is included by "
-            "default."
+            "Comma-separated list of structural CWB attributes (usually sentence or document annotations) to include "
+            "for each KWIC row. `sentence_id` is included by default."
         ),
         examples=["text_title,text_author"],
     ),
@@ -2206,8 +2209,8 @@ async def relations_sentences(
         source: List of source IDs in the format `CORPUS:ID`.
         offset: Number of sentence rows to skip.
         limit: Maximum number of sentence rows to return.
-        attributes: Comma-separated list of token fields to include in results.
-        struct_attributes: Comma-separated list of structural attributes to include.
+        attributes: Comma-separated list of CWB attributes to include with the token results.
+        struct_attributes: Comma-separated list of structural CWB attributes to include.
         default_context: Default context size for query results (e.g., "1 sentence").
         abort_signal: Optional signal for aborting long-running operations.
 
@@ -2253,8 +2256,8 @@ async def relations_time_sentences(
         source: List of source IDs in the format `CORPUS:ID`.
         offset: Number of sentence rows to skip.
         limit: Maximum number of sentence rows to return.
-        attributes: Comma-separated list of token fields to include in results.
-        struct_attributes: Comma-separated list of structural attributes to include.
+        attributes: Comma-separated list of CWB attributes to include with the token results.
+        struct_attributes: Comma-separated list of structural CWB attributes to include.
         default_context: Default context size for query results (e.g., "1 sentence").
         abort_signal: Optional signal for aborting long-running operations.
 

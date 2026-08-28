@@ -1,4 +1,4 @@
-"""Routes for calculating word/attribute frequencies in corpora."""
+"""Routes for calculating word and annotation frequencies in corpora."""
 
 import dataclasses
 import itertools
@@ -38,14 +38,16 @@ TIMETO = "text_timeto"
 
 router = APIRouter(tags=["Statistics"])
 
-FREQUENCIES_DESCRIPTION = """Calculate frequencies for one or more attributes in the result of a CQP query.
+FREQUENCIES_DESCRIPTION = """Calculate frequencies for one or more CWB attributes (annotations) in the result of a
+CQP query.
 
 The response contains absolute counts and relative frequencies. Relative frequencies are expressed as hits per one
 million tokens.
 
-Use `group_by` for positional attributes and `group_by_struct` for structural attributes. If neither is supplied, the
-route groups by `word`. To count the value of a specific token in a multi-token query, mark that token as the CQP target
-with `@`, for example `[pos = "JJ"] @[pos = "NN"]`.
+Use `group_by` for positional CWB attributes (token annotations) and `group_by_struct` for structural CWB
+attributes (usually sentence or document annotations). If neither is supplied, the route groups by `word`. To count
+the value of a specific token in a multi-token query, mark that token as the CQP target with `@`, for example
+`[pos = "JJ"] @[pos = "NN"]`.
 
 Repeat the `cqp` parameter to run prequeries in sequence. Repeat the `subcqp` parameter to add subqueries over the final
 main-query result. When subqueries are used, `combined` and each entry in `corpora` become arrays: the first item is the
@@ -56,7 +58,7 @@ statistics in the streamed JSON object.
 """
 
 CORPUS_FREQUENCIES_DESCRIPTION = """Calculate frequencies for all tokens in the selected corpora, grouped by the
-requested attributes.
+requested CWB attributes (annotations).
 
 This is the optimized variant to use when no CQP query is needed, for example when listing all part-of-speech values or
 all word forms in a corpus. It uses the same grouping and formatting parameters as `/frequencies`, except it does not
@@ -87,8 +89,8 @@ GroupByParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
         description=(
-            "Comma-separated list of positional attributes to group results by. Defaults to `word` if neither "
-            "`group_by` nor `group_by_struct` is supplied."
+            "Comma-separated list of positional CWB attributes (token annotations) to group results by. "
+            "Defaults to `word` if neither `group_by` nor `group_by_struct` is supplied."
         ),
         examples=[["word"], ["pos,lemma"]],
     ),
@@ -99,8 +101,8 @@ GroupByStructParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
         description=(
-            "Comma-separated list of structural attributes to group results by. The value at the first token of the "
-            "match is used."
+            "Comma-separated list of structural CWB attributes (usually sentence or document annotations) to group "
+            "results by. The value at the first token of the match is used."
         ),
         examples=[["text_author"], ["text_author,text_title"]],
     ),
@@ -124,7 +126,7 @@ LimitParam: TypeAlias = Annotated[
 IgnoreCaseParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
-        description="Comma-separated list of attributes whose values should be lowercased before counting.",
+        description="Comma-separated list of CWB attributes whose values should be lowercased before counting.",
         examples=[["word"], ["word,lemma"]],
     ),
     BeforeValidator(utils.split_csv),
@@ -145,7 +147,8 @@ RelativeToStructParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
         description=(
-            "Structural attributes to use as the denominator for relative frequencies instead of total corpus size. "
+            "Structural CWB attributes to use as the denominator for relative frequencies instead of total corpus "
+            "size. "
             "Every value must also be included in `group_by_struct`."
         ),
         examples=[["text_author"]],
@@ -156,7 +159,7 @@ RelativeToStructParam: TypeAlias = Annotated[
 StripPointerParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
-        description="Comma-separated list of attributes whose multi-word pointer suffixes should be stripped.",
+        description="Comma-separated list of CWB attributes whose multi-word pointer suffixes should be stripped.",
         examples=[["sense"]],
     ),
     BeforeValidator(utils.split_csv),
@@ -166,7 +169,7 @@ TopParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
         description=(
-            "Comma-separated list of attributes for which only the first N values in a set should be counted. "
+            "Comma-separated list of CWB attributes for which only the first N values in a set should be counted. "
             "Use `attr:n`; if `:n` is omitted, N defaults to 1. Usually used together with `split`."
         ),
         examples=[["sense:3"], ["sense:3,lemma"]],
@@ -188,8 +191,8 @@ class FrequencyRow(BaseModel):
     value: dict[str, str | list[str]] = Field(
         ...,
         description=(
-            "Grouped attribute values. Positional attributes are arrays with one value per token in the match; "
-            "structural attributes normally contain one value."
+            "Grouped CWB attribute values. Positional values are arrays with one value per token in the match; "
+            "structural values normally contain one value."
         ),
         examples=[{"word": ["run"], "pos": ["VB"]}, {"text_author": ["Söderberg, Hjalmar"]}],
     )
@@ -874,7 +877,7 @@ async def frequencies(
     expand_prequeries: params.ExpandPrequeriesParam = True,
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
-    """Perform a CQP query and return a count of the given words/attributes.
+    """Perform a CQP query and return a count of the given words/CWB attributes.
 
     Yields:
         Count results as dictionaries.
@@ -931,7 +934,7 @@ async def corpus_frequencies(
     expand_prequeries: params.ExpandPrequeriesParam = True,
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
-    """Like `/frequencies` but for every single value of the given attributes.
+    """Like `/frequencies` but for every single value of the given CWB attributes.
 
     Yields:
         Count results as dictionaries.
@@ -1355,9 +1358,9 @@ def _get_frequency_cache_keys(
     Args:
         corpus: The corpus name.
         cqp_query: The CQP query.
-        group_by: Attributes to group by.
+        group_by: CWB attributes to group by.
         within: The within context.
-        ignore_case: Attributes to ignore case for.
+        ignore_case: CWB attributes to ignore case for.
         expand_prequeries: Whether to expand prequeries.
         mc: The memcached client to use for generating cache prefix.
 
@@ -1449,15 +1452,15 @@ def frequency_query_worker(
     cache_max: int = 0,
     abort_signal: AbortSignal | None = None,
 ) -> tuple[Iterable[str], int, int]:
-    """Worker for counting word/attribute occurrences in a corpus.
+    """Worker for counting word and CWB attribute occurrences in a corpus.
 
     Args:
         ctx: The request context.
         corpus: The corpus to query.
         cqp_query: The CQP query or list of queries.
-        group_by: List of tuples specifying attributes to group by and whether the attribute is a structural one.
+        group_by: List of tuples specifying CWB attributes to group by and whether each is structural.
         within: The structural context to limit the search to.
-        ignore_case: Set of attributes to ignore case for.
+        ignore_case: Set of CWB attributes to ignore case for.
         expand_prequeries: Whether to expand pre-queries to the full 'within' context.
         use_cache: Whether to use caching for the query results.
         cache_max: Maximum number of lines to cache.
@@ -1576,7 +1579,7 @@ def simple_frequency_query_worker(
     cache_max: int = 0,
     abort_signal: AbortSignal | None = None,
 ) -> tuple[Iterable[str], int, int]:
-    """Perform a simple count query for all values of the given attributes.
+    """Perform a simple count query for all values of the given CWB attributes.
 
     This is used for simple statistics queries where we can use cwb-scan-corpus. Currently, the CQP query is ignored,
     and all tokens in the corpus are counted.
@@ -1585,9 +1588,9 @@ def simple_frequency_query_worker(
         ctx: The request context.
         corpus: The corpus to query.
         cqp_query: The CQP query or list of queries.
-        group_by: List of tuples specifying attributes to group by and whether the attribute is a structural one.
+        group_by: List of tuples specifying CWB attributes to group by and whether each is structural.
         within: The structural context to limit the search to. Unused in simple count queries.
-        ignore_case: Collection of attributes to ignore case for.
+        ignore_case: Collection of CWB attributes to ignore case for.
         expand_prequeries: Whether to expand pre-queries to the full 'within' context. Unused in simple count queries.
         use_cache: Whether to use caching for the query results.
         cache_max: Maximum number of lines to cache.

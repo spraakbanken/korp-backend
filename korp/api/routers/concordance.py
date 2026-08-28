@@ -37,8 +37,8 @@ router = APIRouter(tags=["Concordance"])
 CONCORDANCE_DESCRIPTION = """Search for concordance lines in one or more corpora.
 
 The route returns KWIC rows: each row contains the matching tokens, the requested left and right context, token
-annotations requested with `attributes`, optional structural annotations requested with `struct_attributes`, and the
-match position inside the returned context.
+annotations selected through positional CWB attributes in `attributes`, optional structural annotations selected through
+`struct_attributes`, and the match position inside the returned context.
 
 Results are grouped by corpus and returned in `corpus_order`; sorting is also done within each corpus, not globally
 across all selected corpora. Use `offset` and `limit` for pagination. The response also includes total hit counts per
@@ -141,8 +141,9 @@ AttributesParam: TypeAlias = Annotated[
     Sequence[str],
     Query(
         description=(
-            "Comma-separated list of positional attributes to include on each returned token. `word` is always "
-            "included, even when it is not listed."
+            "Comma-separated list of CWB attributes to include with each returned token. Positional attributes "
+            "represent token annotations; structural attributes requested here are returned as inline structural "
+            "annotations. `word` is always included, even when it is not listed."
         ),
         examples=[["word"], ["msd,lemma"]],
     ),
@@ -153,8 +154,8 @@ StructAttributesParam: TypeAlias = Annotated[
     Sequence[str] | SkipJsonSchema[None],
     Query(
         description=(
-            "Comma-separated list of structural attributes to include for each KWIC row. These are returned in the "
-            "row-level `structs` object when available."
+            "Comma-separated list of structural CWB attributes (usually sentence or document annotations) to include "
+            "for each KWIC row. These are returned in the row-level `structs` object when available."
         ),
         examples=[["text_author,text_title"]],
     ),
@@ -171,7 +172,7 @@ SortParam: TypeAlias = Annotated[
         "- `right` - Sort by right context\n"
         "- `random` - Random order\n"
         "- Any positional attribute - Sort by given attribute\n\n"
-        "It is not possible to sort by structural attributes.\n\n"
+        "It is not possible to sort by structural CWB attributes.\n\n"
         "By default, results are returned in corpus order."
     ),
 ]
@@ -226,8 +227,8 @@ class Token(BaseModel):
     structs: dict[str, Any] | SkipJsonSchema[None] = Field(
         None,
         description=(
-            "Structural annotations whose span starts or ends at this token, included when structural attributes are "
-            "requested with `attributes` rather than `struct_attributes`."
+            "Structural annotations whose span starts or ends at this token, included when the corresponding "
+            "structural CWB attributes are requested with `attributes` rather than `struct_attributes`."
         ),
         examples=[{"open": [{"sentence": {"id": "s1"}}], "close": ["sentence"]}],
     )
@@ -246,7 +247,7 @@ class KWICRow(BaseModel):
     )
     structs: dict[str, str | None] | SkipJsonSchema[None] = Field(
         None,
-        description="Structural attributes requested with `struct_attributes`.",
+        description="Structural annotations requested with `struct_attributes`.",
         examples=[{"text_author": "Söderberg, Hjalmar", "text_title": "Doktor Glas"}],
     )
     tokens: list[Token] = Field(
@@ -368,8 +369,8 @@ async def parse_parameters(
         cqp_query: List of CQP query strings.
         offset: Number of rows to skip.
         limit: Maximum number of rows to return.
-        attributes: List of positional attributes to include in the results.
-        struct_attributes: List of structural attributes to include in the results.
+        attributes: List of CWB attributes to include with the token results.
+        struct_attributes: List of structural CWB attributes to include in the results.
         cut: Maximum number of results to return per corpus. With this enabled, the total number of results will be
             incorrect.
         sort: Sorting method for the results.
@@ -1145,7 +1146,7 @@ def _parse_line_structs(line: str, ls_attrs: set[str]) -> tuple[dict[str, str | 
 
     Args:
         line: The line content after the header.
-        ls_attrs: Set of structural attributes to extract.
+        ls_attrs: Set of structural CWB attributes to extract.
 
     Returns:
         A tuple of (linestructs dict, remaining line content).
@@ -1202,8 +1203,8 @@ def _parse_tokens(
 
     Args:
         words: List of space-separated words from the concordance line.
-        p_attrs: List of positional attributes to extract.
-        s_attrs: Set of structural attributes to recognize.
+        p_attrs: List of positional CWB attributes to extract.
+        s_attrs: Set of structural CWB attributes to recognize.
 
     Returns:
         A tuple of (tokens list, match dict with 'start' and 'end' keys).
@@ -1298,7 +1299,7 @@ def query_parse_lines(
         concordance_params: Parsed concordance parameters.
         corpus: Name of the corpus being queried.
         lines: Iterable of raw concordance lines from CWB.
-        attrs: Dictionary of available attributes by type.
+        attrs: Dictionary of available CWB attributes by type.
         abort_signal: Optional signal to abort processing.
 
     Returns:

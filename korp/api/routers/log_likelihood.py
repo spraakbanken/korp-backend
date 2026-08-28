@@ -21,9 +21,9 @@ router = APIRouter(tags=["Statistics"])
 
 LOGLIKE_DESCRIPTION = """Compare two searches with log-likelihood.
 
-The route first counts the requested attribute values in two sets, then calculates a log-likelihood score for each
+The route first counts the requested CWB attribute values in two sets, then calculates a log-likelihood score for each
 value. By default, values are grouped by `word`; use `group_by` and `group_by_struct` to compare other positional or
-structural attributes.
+structural CWB attributes.
 
 The sign of each score shows which set the value is relatively more prominent in:
 
@@ -191,7 +191,7 @@ async def log_likelihood(
         """Create a hashable frequency key from a frequency result row's value dict.
 
         Args:
-            value: A dict mapping attribute names to their values.
+            value: A dict mapping CWB attribute names to their values.
 
         Returns:
             A sorted tuple of (attr_name, values_tuple) pairs.

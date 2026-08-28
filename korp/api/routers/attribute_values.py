@@ -1,4 +1,4 @@
-"""Attribute values route."""
+"""Route for listing CWB attribute values."""
 
 import itertools
 from collections import defaultdict
@@ -28,18 +28,19 @@ from . import frequencies as frequencies_router
 
 router = APIRouter(tags=["Corpus Information"])
 
-ATTRIBUTE_VALUES_DESCRIPTION = """List the values available for one or more corpus attributes.
+ATTRIBUTE_VALUES_DESCRIPTION = """List the values available for one or more CWB attributes.
 
-The route can be used for positional attributes such as `word`, `lemma`, or `pos`, and for structural attributes such
-as `text_author` or `text_title`. It is similar to `/frequencies/corpus`, but the result is organized as a lookup of
-attribute values instead of frequency rows, and it supports hierarchical attribute expressions.
+The route can be used for positional CWB attributes (i.e. token annotations) such as `word`, `lemma`, or `pos`, and
+for structural CWB attributes (usually sentence or document annotations) such as `text_author` or `text_title`. It is
+similar to `/frequencies/corpus`, but the result is organized as a lookup of attribute values instead of frequency rows,
+and it supports hierarchical attribute expressions.
 
-Use `attr` to request one or more attributes. A value can be a single attribute, such as `text_author`, or a hierarchy
-using `>`, such as `text_author>text_title`. Hierarchical expressions produce nested objects, which are useful for
-building dependent filters: for example, authors as top-level keys and their titles as child values.
+Use `attr` to request one or more CWB attribute names. A value can be a single attribute, such as `text_author`, or a
+hierarchy using `>`, such as `text_author>text_title`. Hierarchical expressions produce nested objects, which are useful
+for building dependent filters: for example, authors as top-level keys and their titles as child values.
 
 By default the result contains value lists. When `include_counts=true`, leaf values are token counts instead. Use
-`split` for set-valued attributes whose values should be split on `|` before being included in the result.
+`split` for set-valued CWB attributes whose values should be split on `|` before being included in the result.
 
 Use `combined` and `per_corpus` to choose whether to include merged values across all selected corpora, per-corpus
 values, or both. When `incremental=true`, progress keys such as `progress_corpora` and `progress_0` may be included
@@ -56,8 +57,8 @@ AttrParam: TypeAlias = Annotated[
     list[str],
     Query(
         description=(
-            "Comma-separated list of attributes or attribute hierarchies. Use `>` to request nested values, for "
-            "example `text_author>text_title`."
+            "Comma-separated list of CWB attribute names or attribute hierarchies. Use `>` to request nested values, "
+            "for example `text_author>text_title`."
         ),
         examples=[["text_author"], ["text_author>text_title"], ["pos,lemma"]],
     ),
@@ -67,7 +68,7 @@ AttrParam: TypeAlias = Annotated[
 AttrValuesSplitParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
-        description="Comma-separated list of set-valued attributes to split on `|` before collecting values.",
+        description="Comma-separated list of set-valued CWB attributes to split on `|` before collecting values.",
         examples=[["text_topic"], ["sense,lemma"]],
     ),
     BeforeValidator(utils.split_csv),
@@ -94,7 +95,7 @@ class AttrValuesResponse(schemas.CommonResponse):
     corpora: dict[str, AttributeValuesData] | SkipJsonSchema[None] = Field(
         None,
         description=(
-            "Per-corpus attribute values, keyed by corpus id. Omitted when `per_corpus=false`. Within each corpus, "
+            "Per-corpus CWB attribute values, keyed by corpus id. Omitted when `per_corpus=false`. Within each corpus, "
             "keys are the requested `attr` expressions."
         ),
         examples=[{"ROMI": {"text_author": ["Söderberg, Hjalmar"], "pos": {"NN": 1250, "VB": 341}}}],
@@ -102,7 +103,7 @@ class AttrValuesResponse(schemas.CommonResponse):
     combined: AttributeValuesData | SkipJsonSchema[None] = Field(
         None,
         description=(
-            "Attribute values merged across all selected corpora. Omitted when `combined=false`. Keys are the "
+            "CWB attribute values merged across all selected corpora. Omitted when `combined=false`. Keys are the "
             "requested `attr` expressions."
         ),
         examples=[{"text_author>text_title": {"Söderberg, Hjalmar": {"Doktor Glas": 12345}}}],
@@ -135,19 +136,19 @@ async def attribute_values(
     combined: params.CombinedParam = True,
     split: AttrValuesSplitParam = None,
 ) -> AsyncIterator[dict]:
-    """Get all available values for one or more corpus attributes.
+    """Get all available values for one or more corpus annotations.
 
     Args:
         ctx: Request context.
         corpus: Comma-separated list of corpora.
-        attr: Comma-separated list of attributes or attribute hierarchies.
+        attr: Comma-separated list of CWB attribute names or attribute hierarchies.
         include_counts: Whether to include counts for each attribute value.
         per_corpus: Whether to include per-corpus results.
         combined: Whether to include combined results across corpora.
-        split: Comma-separated list of attributes to split values for.
+        split: Comma-separated list of CWB attributes to split values for.
 
     Yields:
-        Attribute values (and counts, if requested) for the specified corpora and attributes.
+        CWB attribute values (and counts, if requested) for the specified corpora and annotations.
     """
     incremental = ctx.common.incremental
 
@@ -298,7 +299,7 @@ async def attribute_values(
 
 
 def _merge_into(target: dict, source: dict) -> None:
-    """Merge source attribute value dict into target in place.
+    """Merge a source annotation-value dictionary into a target in place.
 
     Args:
         target: Target dict (modified in-place).

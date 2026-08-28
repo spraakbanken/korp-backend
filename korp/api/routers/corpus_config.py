@@ -31,7 +31,7 @@ router = APIRouter(tags=["Corpus Information"])
 
 CORPUS_CONFIG_DESCRIPTION = """Return the corpus configuration used by the Korp frontend.
 
-Builds a JSON configuration describing corpora, shared attribute definitions, available modes, optional folder/grouping
+Builds a JSON configuration describing corpora, shared annotation definitions, available modes, optional folder/grouping
 metadata, and configuration warnings.
 
 If `corpus` is omitted, the route includes the corpora that belong to the selected `mode`. If `corpus` is provided, only
@@ -95,8 +95,8 @@ class CorpusConfigResponse(schemas.CommonResponse):
     attributes: dict[str, dict[str, dict[str, Any]]] | SkipJsonSchema[None] = Field(
         None,
         description=(
-            "Shared attribute definitions grouped by attribute kind, for example `pos_attributes`, "
-            "`struct_attributes`, and `custom_attributes`."
+            "Shared annotation definitions grouped by annotation kind (`pos_attributes`, `struct_attributes`, and "
+            "`custom_attributes`)."
         ),
     )
     modes: list[ModeSummary] = Field(
@@ -114,7 +114,7 @@ class CorpusConfigResponse(schemas.CommonResponse):
     )
     warnings: list[str] | SkipJsonSchema[None] = Field(
         None,
-        description="Configuration warnings, such as missing attribute presets or missing corpus config files.",
+        description="Configuration warnings, such as missing annotation presets or missing corpus config files.",
     )
 
 

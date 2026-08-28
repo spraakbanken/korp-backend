@@ -24,8 +24,9 @@ server, and the subset of those corpora that require authorization.
 
 CORPUS_INFO_DESCRIPTION = """Fetch Corpus Workbench metadata for one or more corpora.
 
-For each requested corpus, the response contains the positional, structural, and alignment attributes reported by CQP,
-together with key-value metadata from CQP's `info` command and the corpus `.info` file. Common metadata keys include
+For each requested corpus, the response contains the positional, structural, and alignment CWB attributes reported by
+CQP. These are the encoded fields used to expose corpus data, including annotations. The response also includes
+key-value metadata from CQP's `info` command and the corpus `.info` file. Common metadata keys include
 `Size`, `Sentences`, `Charset`, `FirstDate`, `LastDate`, and `Updated`, but installations may expose additional keys.
 
 The `total_size` and `total_sentences` fields sum the corresponding values for the requested corpora.
@@ -52,15 +53,25 @@ class InfoResponse(schemas.CommonResponse):
 
 
 class CorpusAttributes(BaseModel):
-    """CWB attributes available in a corpus."""
+    """CWB attribute names available in a corpus."""
 
-    p: list[str] = Field(..., description="Positional attributes.", examples=[["word", "lemma", "pos"]])
+    p: list[str] = Field(
+        ...,
+        description="Names of positional CWB attributes, i.e. token-level annotations.",
+        examples=[["word", "lemma", "pos"]],
+    )
     s: list[str] = Field(
         ...,
-        description="Structural attributes.",
+        description=(
+            "Names of structural CWB attributes, usually sentence-, text-, or document-level annotations."
+        ),
         examples=[["text", "text_id", "sentence", "sentence_id"]],
     )
-    a: list[str] = Field(..., description="Alignment attributes for linked corpora.", examples=[["link_n"]])
+    a: list[str] = Field(
+        ...,
+        description="Names of alignment CWB attributes for linked corpora.",
+        examples=[["link_n"]],
+    )
 
 
 class CorpusWorkbenchInfo(BaseModel):
@@ -109,7 +120,7 @@ class CorpusWorkbenchInfo(BaseModel):
 class CorpusInfoData(BaseModel):
     """Information for a single corpus."""
 
-    attrs: CorpusAttributes = Field(..., description="CWB attributes available in the corpus.")
+    attrs: CorpusAttributes = Field(..., description="CWB attribute names available in the corpus.")
     info: CorpusWorkbenchInfo = Field(..., description="Corpus metadata from CQP and the corpus `.info` file.")
 
 

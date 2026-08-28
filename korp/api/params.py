@@ -168,7 +168,7 @@ SplitParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
         description=(
-            "Comma-separated list of set-valued attributes whose values should be split on `|` before counting. "
+            "Comma-separated list of set-valued CWB attributes whose values should be split on `|` before counting. "
             "Each split value is treated as a separate value in the result."
         ),
         examples=[["sense"], ["text_topic,sense"]],

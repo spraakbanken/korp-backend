@@ -28,7 +28,7 @@ logger = getLogger(__name__)
 _API_DOCUMENTATION_STRUCTURE = [
     {
         "name": "Corpus Information",
-        "description": "Routes for retrieving information about corpora and their attributes.",
+        "description": "Routes for retrieving corpus metadata and configuration.",
         "routes": ["/info", "/corpora/info", "/attribute_values", "/corpora/config"],
     },
     {
@@ -81,7 +81,7 @@ Use this API to:
 
 - discover available corpora and their annotations
 - run concordance queries and retrieve matching lines with annotations
-- frequency query matches, attribute values, and time distributions
+- frequency query matches, annotation values, and time distributions
 - query dependency relation statistics when relation data is configured
 - maintain server-side caches
 
