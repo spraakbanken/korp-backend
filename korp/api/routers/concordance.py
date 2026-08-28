@@ -42,8 +42,8 @@ annotations selected through positional CWB attributes in `attributes`, optional
 
 Results are grouped by corpus and returned in `corpus_order`; sorting is also done within each corpus, not globally
 across all selected corpora. Use `offset` and `limit` for pagination. The response also includes total hit counts per
-corpus and a `query_data` value that can be sent back with later pages of the same query to avoid recalculating hit
-distribution across corpora.
+corpus and a `pagination_state` value that can be sent back with later pages of the same query to avoid recalculating
+hit distribution across corpora.
 
 Repeat the `cqp` parameter to run multiple queries in sequence, where each query is executed on the result of the
 previous one. When multiple `cqp` parameters are used with the default `expand_prequeries=true`, the query also needs
@@ -77,8 +77,8 @@ The search is always sorted randomly, so the `sort` parameter from `/concordance
 `random_seed` when you need reproducible sampling for the same corpus data and query parameters.
 
 The response always contains a `kwic` list. Since the route stops at the first sampled hit, it does not return `hits`,
-`corpus_hits`, or `query_data`; those fields would only describe the capped per-corpus sample query, not the full set of
-selected corpora.
+`corpus_hits`, or `pagination_state`; those fields would only describe the capped per-corpus sample query, not the full
+set of selected corpora.
 """
 
 LeftContextParam: TypeAlias = Annotated[
@@ -116,11 +116,11 @@ InOrderParam: TypeAlias = Annotated[
     ),
 ]
 
-QueryDataParam: TypeAlias = Annotated[
+PaginationStateParam: TypeAlias = Annotated[
     str | None,
     Query(
         description=(
-            "The `query_data` value returned by an earlier page of the same query. Pass it back unchanged when "
+            "The `pagination_state` value returned by an earlier page of the same query. Pass it back unchanged when "
             "requesting later pages to reuse cached hit-distribution data across corpora."
         )
     ),
@@ -274,10 +274,10 @@ class ConcordanceResponse(schemas.CommonResponse):
         examples=[["ROMI", "SUC3"]],
     )
     kwic: list[KWICRow] = Field(..., description="Returned KWIC rows for the requested page.")
-    query_data: str = Field(
+    pagination_state: str = Field(
         ...,
         description=(
-            "Compact hit-distribution data for this query. Submit this value as the `query_data` parameter when "
+            "Compact hit-distribution data for this query. Submit this value as the `pagination_state` parameter when "
             "requesting another page with the same corpus, CQP, `within`, `max_hits_per_corpus`, and `in_order` "
             "settings."
         ),
@@ -333,7 +333,7 @@ class ConcordanceParameters:
     context: defaultdict[str, tuple[str, ...]] = dataclasses.field(default_factory=lambda: defaultdict(tuple))
     default_context: str | None = None
     expand_prequeries: bool = True
-    query_data: str | None = None
+    pagination_state: str | None = None
 
 
 def _end_from_offset_limit(offset: int, limit: int) -> int:
@@ -360,7 +360,7 @@ async def parse_parameters(
     left_context: Sequence[str] | None = None,
     right_context: Sequence[str] | None = None,
     expand_prequeries: bool = True,
-    query_data: str | None = None,
+    pagination_state: str | None = None,
 ) -> ConcordanceParameters:
     """Parse and validate concordance parameters.
 
@@ -384,7 +384,7 @@ async def parse_parameters(
         left_context: List of left context specifications for each corpus.
         right_context: List of right context specifications for each corpus.
         expand_prequeries: Whether to expand prequeries when multiple CQP queries are provided.
-        query_data: Previously saved query data for caching purposes.
+        pagination_state: Previously saved pagination state for caching purposes.
 
     Returns:
         A ConcordanceParameters object containing the parsed and validated parameters.
@@ -455,7 +455,7 @@ async def parse_parameters(
         default_context=default_context,
         context=context_dict,
         expand_prequeries=expand_prequeries,
-        query_data=query_data,
+        pagination_state=pagination_state,
     )
 
 
@@ -481,13 +481,13 @@ async def perform_query(
     within = concordance_parameters.within
     max_hits_per_corpus = concordance_parameters.max_hits_per_corpus
     expand_prequeries = concordance_parameters.expand_prequeries
-    query_data = concordance_parameters.query_data
+    pagination_state = concordance_parameters.pagination_state
     start = concordance_parameters.start
     end = concordance_parameters.end
 
     result: dict[str, Any] = {"kwic": []}
 
-    # Checksum for whole query, used to verify query_data from the client
+    # Checksum for whole query, used to verify pagination_state from the client
     checksum = utils.get_hash(
         (sorted(corpora), cqp_query, sorted(within.items()), max_hits_per_corpus, expand_prequeries, free_search)
     )
@@ -499,29 +499,30 @@ async def perform_query(
     total_hits = 0
     corpus_hit_stats = {}
 
-    cached_corpus_hit_stats = {}  # Information about which corpora have how many hits, either from query_data or cache
+    # Information about which corpora have how many hits, either from pagination_state or cache
+    cached_corpus_hit_stats = {}
 
-    # The query_data parameter contains previously saved info about corpus hit counts (cached_corpus_hit_stats)
-    if query_data:
+    # The pagination_state parameter contains previously saved info about corpus hit counts (cached_corpus_hit_stats)
+    if pagination_state:
         try:
-            query_data = zlib.decompress(
-                base64.b64decode(query_data.replace("\\n", "\n").replace("-", "+").replace("_", "/"))
+            pagination_state = zlib.decompress(
+                base64.b64decode(pagination_state.replace("\\n", "\n").replace("-", "+").replace("_", "/"))
             ).decode("UTF-8")
         except Exception:
             if ctx.common.debug:
-                debug["query_data_unparseable"] = True
+                debug["pagination_state_unparseable"] = True
         else:
             if ctx.common.debug:
-                debug["query_data_read"] = True
-            saved_checksum, stats_temp = query_data.split(";", 1)
+                debug["pagination_state_read"] = True
+            saved_checksum, stats_temp = pagination_state.split(";", 1)
             if saved_checksum == checksum:
                 for pair in stats_temp.split(";"):
                     corpus, hits = pair.split(":")
                     cached_corpus_hit_stats[corpus] = int(hits)
             elif ctx.common.debug:
-                debug["query_data_checksum_mismatch"] = True
+                debug["pagination_state_checksum_mismatch"] = True
 
-    # If we have no usable query_data, try to get cached corpus hit counts from memcached instead
+    # If we have no usable pagination_state, try to get cached corpus hit counts from memcached instead
     if use_cache and not cached_corpus_hit_stats:
         memcached_keys = {}
         cache_prefixes = await caching.cache_prefix(ctx.cache, [corpus.split("|")[0] for corpus in corpora])
@@ -728,7 +729,7 @@ async def perform_query(
     result["hits"] = total_hits
     result["corpus_hits"] = corpus_hit_stats
     result["corpus_order"] = corpora
-    result["query_data"] = (
+    result["pagination_state"] = (
         binascii.b2a_base64(
             zlib.compress(bytes(checksum + ";" + ";".join(f"{c}:{h}" for c, h in corpus_hit_stats.items()), "utf-8"))
         )
@@ -767,7 +768,7 @@ async def concordance_sample(
     left_context: LeftContextParam | None = None,
     right_context: RightContextParam | None = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
-    query_data: QueryDataParam = None,
+    pagination_state: PaginationStateParam = None,
     abort_signal: AbortDep = None,
 ) -> AsyncGenerator[dict]:
     """Perform a CQP query and return a random match.
@@ -797,7 +798,7 @@ async def concordance_sample(
         right_context=right_context,
         context=context,
         expand_prequeries=expand_prequeries,
-        query_data=query_data,
+        pagination_state=pagination_state,
     )
 
     corpora = concordance_params.corpora
@@ -809,7 +810,7 @@ async def concordance_sample(
             if item.get("hits", 0) > 0:
                 item.pop("hits", None)
                 item.pop("corpus_hits", None)
-                item.pop("query_data", None)
+                item.pop("pagination_state", None)
                 yield item
                 return
 
@@ -844,7 +845,7 @@ async def concordance(
     right_context: RightContextParam = None,
     context: params.ContextParam = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
-    query_data: QueryDataParam = None,
+    pagination_state: PaginationStateParam = None,
     abort_signal: AbortDep = None,
 ) -> AsyncGenerator[dict]:
     """Perform a CQP query and return a number of matches.
@@ -871,7 +872,7 @@ async def concordance(
         right_context=right_context,
         context=context,
         expand_prequeries=expand_prequeries,
-        query_data=query_data,
+        pagination_state=pagination_state,
     )
 
     async for item in perform_query(concordance_params, ctx, abort_signal=abort_signal):

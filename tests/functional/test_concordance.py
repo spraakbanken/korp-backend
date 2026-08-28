@@ -121,7 +121,7 @@ class TestConcordanceSample:
         assert data["kwic"] == []
         assert "hits" not in data
         assert "corpus_hits" not in data
-        assert "query_data" not in data
+        assert "pagination_state" not in data
 
     @staticmethod
     def test_concordance_sample_hit_omits_hit_counts(concordance_sample_testcorpus: Callable[..., dict]) -> None:
@@ -132,4 +132,4 @@ class TestConcordanceSample:
         assert data["corpus_order"] == ["TESTCORPUS"]
         assert "hits" not in data
         assert "corpus_hits" not in data
-        assert "query_data" not in data
+        assert "pagination_state" not in data
