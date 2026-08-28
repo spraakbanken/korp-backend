@@ -157,8 +157,8 @@ class Settings(BaseSettings):
     # Max number of rows from the frequency command to cache
     CACHE_MAX_STATS: int = 50
 
-    # Max size in bytes per cached query data file (0 = no limit)
-    CACHE_MAX_QUERY_DATA: int = 0
+    # Max size in bytes per cached concordance result (0 = no limit)
+    CACHE_MAX_CONCORDANCE_CACHE_SIZE: int = 0
 
     # Corpus configuration directory
     CORPUS_CONFIG_DIR: Path | None = None

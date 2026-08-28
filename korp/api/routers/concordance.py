@@ -924,7 +924,7 @@ def query_corpus(
     random_seed = concordance_params.random_seed
 
     cache_dir = settings.CACHE_DIR
-    cache_max_query_data = settings.CACHE_MAX_QUERY_DATA
+    cache_max_concordance_cache_size = settings.CACHE_MAX_CONCORDANCE_CACHE_SIZE
 
     @dataclass
     class ConcordanceCache:
@@ -1100,11 +1100,11 @@ def query_corpus(
     next(lines)
 
     # Remove cache file if it exceeds max cache file size
-    if cache and not cache.is_cached and cache_max_query_data:
+    if cache and not cache.is_cached and cache_max_concordance_cache_size:
         assert cache_dir is not None
         cache_file = cache_dir / f"{corpus}:{cache.query_temp}"
         try:
-            if cache_file.is_file() and cache_file.stat().st_size > cache_max_query_data:
+            if cache_file.is_file() and cache_file.stat().st_size > cache_max_concordance_cache_size:
                 cache_file.unlink()
         except FileNotFoundError:
             pass
