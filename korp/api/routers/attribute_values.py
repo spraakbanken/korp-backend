@@ -35,9 +35,9 @@ for structural CWB attributes (usually sentence or document annotations) such as
 similar to `/frequencies/corpus`, but the result is organized as a lookup of attribute values instead of frequency rows,
 and it supports hierarchical attribute expressions.
 
-Use `attr` to request one or more CWB attribute names. A value can be a single attribute, such as `text_author`, or a
-hierarchy using `>`, such as `text_author>text_title`. Hierarchical expressions produce nested objects, which are useful
-for building dependent filters: for example, authors as top-level keys and their titles as child values.
+Use `attributes` to request one or more CWB attribute names. A value can be a single attribute, such as `text_author`,
+or a hierarchy using `>`, such as `text_author>text_title`. Hierarchical expressions produce nested objects, which are
+useful for building dependent filters: for example, authors as top-level keys and their titles as child values.
 
 By default the result contains value lists. When `include_counts=true`, leaf values are token counts instead. Use
 `split` for set-valued CWB attributes whose values should be split on `|` before being included in the result.
@@ -50,7 +50,7 @@ before the final result in the streamed JSON object.
 
 Get all authors and their titles with token counts:
 
-`/attribute_values?corpus=ROMI&attr=text_author>text_title&include_counts=true`
+`/attribute_values?corpus=ROMI&attributes=text_author>text_title&include_counts=true`
 """
 
 AttrParam: TypeAlias = Annotated[
@@ -96,7 +96,7 @@ class AttrValuesResponse(schemas.CommonResponse):
         None,
         description=(
             "Per-corpus CWB attribute values, keyed by corpus id. Omitted when `per_corpus=false`. Within each corpus, "
-            "keys are the requested `attr` expressions."
+            "keys are the requested `attributes` expressions."
         ),
         examples=[{"ROMI": {"text_author": ["Söderberg, Hjalmar"], "pos": {"NN": 1250, "VB": 341}}}],
     )
@@ -104,7 +104,7 @@ class AttrValuesResponse(schemas.CommonResponse):
         None,
         description=(
             "CWB attribute values merged across all selected corpora. Omitted when `combined=false`. Keys are the "
-            "requested `attr` expressions."
+            "requested `attributes` expressions."
         ),
         examples=[{"text_author>text_title": {"Söderberg, Hjalmar": {"Doktor Glas": 12345}}}],
     )
@@ -130,7 +130,7 @@ class AttrValuesResponse(schemas.CommonResponse):
 async def attribute_values(
     ctx: CtxDep,
     corpus: params.CorpusParam,
-    attr: AttrParam,
+    attributes: AttrParam,
     include_counts: IncludeCountsParam = False,
     per_corpus: params.PerCorpusParam = True,
     combined: params.CombinedParam = True,
@@ -141,7 +141,7 @@ async def attribute_values(
     Args:
         ctx: Request context.
         corpus: Comma-separated list of corpora.
-        attr: Comma-separated list of CWB attribute names or attribute hierarchies.
+        attributes: Comma-separated list of CWB attribute names or attribute hierarchies.
         include_counts: Whether to include counts for each attribute value.
         per_corpus: Whether to include per-corpus results.
         combined: Whether to include combined results across corpora.
@@ -164,7 +164,7 @@ async def attribute_values(
         all_cache = True
         for c in corpus:
             cache_prefixes[c] = await caching.cache_prefix(ctx.cache, c)
-            for attribute in attr:
+            for attribute in attributes:
                 checksum = utils.get_hash((c, attribute, split, include_counts))
                 data = await ctx.cache.get(f"{cache_prefixes[c]}:attribute_values_{checksum}")
                 if data is not None:
@@ -204,7 +204,7 @@ async def attribute_values(
 
         async with anyio.create_task_group() as tg:
             for c in corpus:
-                for attribute in attr:
+                for attribute in attributes:
                     if (c, attribute) not in from_cache:
                         tg.start_soon(_worker, c, attribute, send.clone())
 
@@ -277,7 +277,7 @@ async def attribute_values(
         for c in corpus:
             if c not in cache_prefixes:
                 cache_prefixes[c] = await caching.cache_prefix(ctx.cache, c)
-            for attribute in attr:
+            for attribute in attributes:
                 if (c, attribute) in from_cache:
                     continue
                 checksum = utils.get_hash((c, attribute, split, include_counts))
