@@ -18,13 +18,41 @@ from urllib.parse import parse_qsl, urlencode
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.dependencies.utils import get_flat_dependant
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
 
 from korp.config import settings
 from korp.dependencies import AbortSignal, Ctx, CtxDep
 
 logger = getLogger(__name__)
+
+
+class APIValidationError(HTTPException):
+    """Report invalid request input before the response body begins.
+
+    Raise this exception from a FastAPI dependency when validation must happen before the route callable is entered,
+    for example when validating a relationship between multiple query parameters. FastAPI resolves dependencies before
+    invoking the route and recognizes this exception as an intentional HTTP error, returning status 422 instead of
+    treating the validation failure as an unhandled server exception.
+
+    It may also be raised directly by a route during its initial setup. In that case, `api_handler` catches it before
+    creating the streaming response and returns a formatted 422 response. Errors raised by dependencies use FastAPI's
+    standard HTTP-exception response body instead. Validation that happens after the response has started cannot change
+    the HTTP status and is handled as a streamed error instead.
+
+    Example:
+        def validate_dates(date_from: str | None, date_to: str | None) -> None:
+            if date_from and date_to and date_from > date_to:
+                raise APIValidationError("date_from must be before or equal to date_to.")
+    """
+
+    def __init__(self, detail: str) -> None:
+        """Create a validation error with HTTP status 422 and the given detail message."""
+        super().__init__(status_code=422, detail=detail)
+
+    def __str__(self) -> str:
+        """Return the validation detail without the HTTP status prefix."""
+        return str(self.detail)
 
 
 def _unwrap_error(exc: BaseException) -> BaseException:
@@ -219,7 +247,8 @@ def _format_error(exc: BaseException, *, debug: bool) -> dict[str, Any]:
         A dictionary representing the error response.
     """
     error = _unwrap_error(exc)
-    err: dict[str, Any] = {"error": {"type": type(error).__name__, "value": str(error)}}
+    error_type = "validation_error" if isinstance(error, APIValidationError) else type(error).__name__
+    err: dict[str, Any] = {"error": {"type": error_type, "value": str(error)}}
     if debug:
         tb = traceback.format_exception(type(error), error, error.__traceback__)
         err["error"]["traceback"] = [line.rstrip("\n") for line in tb]
@@ -262,9 +291,13 @@ def api_handler(
     avoid blocking the event loop. Async endpoints run in the event loop as usual.
 
     Output and keepalive behavior:
-    - Async generators and sync generators stream results and enable keepalive output.
-    - Non-generator endpoints (sync or async) return a single dict; keepalive cannot be sent while they compute.
-      Long-running endpoints should therefore be generators to avoid proxy timeouts.
+    - Async generators and sync generators, whether yielded directly by the route or returned by it, stream results and
+      enable keepalive output.
+    - A regular route coroutine can perform preflight validation and setup, then return an async or sync iterator for
+      the long-running work. Work done before that iterator is returned cannot send keepalive output, so long-running
+      work should happen in the returned iterator.
+    - A route can also return a single dictionary or another non-iterator value. Such a value is sent as one result, and
+      keepalive output cannot be sent while the route computes it.
 
     Every route is required to have the following parameter (named either "ctx" or "_ctx"), which injects the request
     context, containing common parameters and other commonly used objects:
@@ -278,9 +311,11 @@ def api_handler(
     To check if abort is requested, use `abort_signal.is_set()`.
 
     Decorated routes can either:
-      - yield dict fragments for incremental output
-      - return dict
-      - return Response (bypasses decorator processing)
+      - yield dict fragments from a generator or async generator
+      - return a sync or async iterator yielding dict fragments
+      - return a dict or another value to send as one result
+      - return Response to bypass the decorator's JSON streaming, error formatting, and timing output. Cache headers
+        and rate-limit headers may still be added.
 
     The decorator can be used with or without parentheses:
         @api_handler
@@ -362,6 +397,19 @@ def api_handler(
                         result = await result
                 else:
                     result = await asyncio.to_thread(fn, *args, **kwargs)
+            except APIValidationError as exc:
+                elapsed = time.perf_counter() - start
+                if slow_request_threshold > 0 and elapsed >= slow_request_threshold:
+                    logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
+                await stop_watchdog()
+                response = JSONResponse(
+                    status_code=exc.status_code,
+                    content=_format_error(exc, debug=common.debug),
+                    headers=exc.headers,
+                )
+                for header_name, header_value in rate_limit_headers.items():
+                    response.headers[header_name] = header_value
+                return response
             except BaseException:
                 elapsed = time.perf_counter() - start
                 if slow_request_threshold > 0 and elapsed >= slow_request_threshold:
