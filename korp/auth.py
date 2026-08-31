@@ -7,6 +7,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from fastapi import HTTPException
+
 from korp import caching
 from korp.dependencies import AuthContext, Ctx
 
@@ -15,8 +17,16 @@ if TYPE_CHECKING:
     from korp.memcached import Memcached
 
 
-class KorpAuthorizationError(Exception):
-    """Custom exception for Korp authorization errors."""
+class KorpAuthorizationError(HTTPException):
+    """Signal that the current user is not authorized to access requested corpora."""
+
+    def __init__(self, detail: str) -> None:
+        """Create an HTTP 403 authorization error."""
+        super().__init__(status_code=403, detail=detail)
+
+    def __str__(self) -> str:
+        """Return the authorization detail without the HTTP status prefix."""
+        return str(self.detail)
 
 
 @dataclass(frozen=True)
