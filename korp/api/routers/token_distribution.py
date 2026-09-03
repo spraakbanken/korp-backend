@@ -3,9 +3,11 @@
 import bisect
 import functools
 import itertools
+import re
 from collections import defaultdict
 from collections.abc import AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from logging import getLogger
 from operator import itemgetter
 from time import perf_counter
@@ -24,7 +26,7 @@ from korp.api import params, schemas
 from korp.api.params import GranularityValues
 from korp.config import settings
 from korp.dependencies import CtxDep
-from korp.handler import api_handler, docs_response
+from korp.handler import APIValidationError, api_handler, docs_response
 from korp.memcached import CacheError
 
 router = APIRouter(tags=["Statistics"])
@@ -76,6 +78,44 @@ DateToParam: TypeAlias = Annotated[
         examples=["20201231235959", "2020-12-31"],
     ),
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedDateRange:
+    """Date bounds that have passed token-distribution validation."""
+
+    date_from: str | None
+    date_to: str | None
+    parsed_date_from: datetime | None
+    parsed_date_to: datetime | None
+
+
+def validate_date_range(date_from: str | None, date_to: str | None) -> ValidatedDateRange:
+    """Validate paired and ordered date bounds.
+
+    Returns:
+        The validated date bounds.
+
+    Raises:
+        APIValidationError: If the date range is incomplete or ordered incorrectly.
+    """
+    if (date_from or date_to) and not (date_from and date_to):
+        raise APIValidationError("When using 'date_from' or 'date_to', both need to be specified.")
+    parsed_date_from = parsed_date_to = None
+    if date_from and date_to:
+        try:
+            parsed_date_from = utils.strptime(re.sub(r"\D", "", date_from))
+            parsed_date_to = utils.strptime(re.sub(r"\D", "", date_to))
+        except ValueError as exc:
+            raise APIValidationError("Invalid date range.") from exc
+        if parsed_date_from > parsed_date_to:
+            raise APIValidationError("'date_from' must be before or equal to 'date_to'.")
+    return ValidatedDateRange(
+        date_from=date_from,
+        date_to=date_to,
+        parsed_date_from=parsed_date_from,
+        parsed_date_to=parsed_date_to,
+    )
 
 
 class TokenDistributionResponse(schemas.CommonResponse):
@@ -162,6 +202,33 @@ def _adjust_date(date_str: str, granularity: GranularityValues, *, subtract: boo
     return int(d.strftime(g_config.date_fmt))
 
 
+async def _token_distribution_stream(
+    ctx: CtxDep,
+    corpora: list[str],
+    granularity: GranularityValues,
+    combined: bool,
+    per_corpus: bool,
+    strategy: params.StrategyValues,
+    date_range: ValidatedDateRange,
+) -> AsyncIterator[dict]:
+    """Calculate and stream token distribution data from validated parameters.
+
+    This wraps `get_token_distribution` to provide an async iterator interface for streaming responses.
+
+    Yields:
+        A dictionary containing the token distribution information.
+    """
+    yield await get_token_distribution(
+        ctx,
+        corpora,
+        granularity=granularity,
+        combined=combined,
+        per_corpus=per_corpus,
+        strategy=strategy,
+        validated_date_range=date_range,
+    )
+
+
 @router.get(
     "/token_distribution",
     response_model=None,
@@ -193,24 +260,23 @@ async def token_distribution(
         date_from: Start date for filtering (inclusive).
         date_to: End date for filtering (inclusive).
 
-    Yields:
-        A dictionary containing the token distribution information.
+    Returns:
+        An async iterator yielding the token distribution information.
     """
     corpora = corpora or []
-
-    yield await get_timespan(
+    date_range = validate_date_range(date_from, date_to)
+    return _token_distribution_stream(
         ctx,
         corpora,
-        granularity=granularity,
-        combined=combined,
-        per_corpus=per_corpus,
-        strategy=strategy,
-        date_from=date_from,
-        date_to=date_to,
+        granularity,
+        combined,
+        per_corpus,
+        strategy,
+        date_range,
     )
 
 
-async def get_timespan(
+async def get_token_distribution(
     ctx: CtxDep,
     corpora: list[str],
     granularity: GranularityValues = GranularityValues.year,
@@ -220,8 +286,9 @@ async def get_timespan(
     date_from: str | None = None,
     date_to: str | None = None,
     no_combined_cache: bool = False,
+    validated_date_range: ValidatedDateRange | None = None,
 ) -> dict:
-    """Calculate timespan information for corpora.
+    """Fetch, cache, and calculate token distribution data for selected corpora.
 
     Args:
         ctx: The request context.
@@ -233,15 +300,16 @@ async def get_timespan(
         date_from: Start date for filtering (inclusive).
         date_to: End date for filtering (inclusive).
         no_combined_cache: If True, do not use combined caching for multiple corpora.
+        validated_date_range: Date bounds already validated before streaming starts.
 
     Returns:
-        A dictionary containing the timespan information.
+        A dictionary containing the token distribution information.
 
-    Raises:
-        ValueError: If only one of date_from or date_to is provided.
     """
-    if (date_from or date_to) and not (date_from and date_to):
-        raise ValueError("When using 'date_from' or 'date_to', both need to be specified.")
+    if validated_date_range is None:
+        validated_date_range = validate_date_range(date_from, date_to)
+    date_from = validated_date_range.date_from
+    date_to = validated_date_range.date_to
     total_start = perf_counter()
     fetch_duration = 0.0
     cache_write_duration = 0.0
@@ -361,7 +429,7 @@ async def get_timespan(
     if cache_enabled and max_cache_rows and len(rows) > max_cache_rows:
         cache_enabled = False
         logger.debug(
-            "Skipping timespan cache writes for large response (rows=%d > limit=%d)",
+            "Skipping token distribution cache writes for large response (rows=%d > limit=%d)",
             len(rows),
             max_cache_rows,
         )
@@ -376,14 +444,14 @@ async def get_timespan(
             except CacheError:
                 pass
 
-        corpus_data = await _run_timespan_cpu_bound(_group_rows_by_corpus, rows, row_count=len(rows))
+        corpus_data = await _run_token_distribution_cpu_bound(_group_rows_by_corpus, rows, row_count=len(rows))
         for corpus, data in corpus_data.items():
             await save_cache(corpus, data)
         cache_write_duration = perf_counter() - cache_write_start
 
     calc_start = perf_counter()
-    result = await _run_timespan_cpu_bound(
-        _calculate_timespan_from_rows,
+    result = await _run_token_distribution_cpu_bound(
+        _calculate_token_distribution_from_rows,
         cached_data,
         rows,
         granularity,
@@ -404,7 +472,8 @@ async def get_timespan(
     total_duration = perf_counter() - total_start
     if phase_log_seconds and total_duration >= phase_log_seconds:
         logger.warning(
-            "Timespan phases total=%.3fs fetch=%.3fs cache_write=%.3fs calculate=%.3fs rows=%d cached_rows=%d",
+            "Token distribution phases total=%.3fs fetch=%.3fs cache_write=%.3fs calculate=%.3fs rows=%d "
+            "cached_rows=%d",
             total_duration,
             fetch_duration,
             cache_write_duration,
@@ -428,7 +497,7 @@ def _group_rows_by_corpus(rows: list[Mapping[str, Any]]) -> defaultdict[str, lis
     return corpus_data
 
 
-def _calculate_timespan_from_rows(
+def _calculate_token_distribution_from_rows(
     cached_data: list[Mapping[str, Any]],
     rows: list[Mapping[str, Any]],
     granularity: GranularityValues,
@@ -436,12 +505,12 @@ def _calculate_timespan_from_rows(
     per_corpus: bool,
     strategy: params.StrategyValues,
 ) -> dict:
-    """Calculate timespan output from cached and newly fetched rows.
+    """Calculate token distribution output from cached and newly fetched rows.
 
     Returns:
-        The final timespan response payload.
+        The final token distribution response payload.
     """
-    return timespan_calculator(
+    return build_token_distribution(
         itertools.chain(cached_data, rows),
         granularity=granularity,
         combined=combined,
@@ -450,19 +519,19 @@ def _calculate_timespan_from_rows(
     )
 
 
-async def _run_timespan_cpu_bound(function: Any, *args: Any, row_count: int) -> Any:
-    """Run CPU-heavy timespan work in process for large inputs, with thread fallback.
+async def _run_token_distribution_cpu_bound(function: Any, *args: Any, row_count: int) -> Any:
+    """Run CPU-heavy token distribution work in process for large inputs, with thread fallback.
 
     Returns:
         The return value produced by `function`.
     """
     threshold = max(0, settings.TIMESPAN_PROCESS_THRESHOLD_ROWS)
     if threshold and row_count >= threshold:
-        logger.debug("Offloading timespan CPU stage to process (rows=%d)", row_count)
+        logger.debug("Offloading token distribution CPU stage to process (rows=%d)", row_count)
         try:
             return await anyio.to_process.run_sync(function, *args)
         except Exception as error:
-            logger.debug("Timespan process offload failed, falling back to thread: %r", error)
+            logger.debug("Token distribution process offload failed, falling back to thread: %r", error)
 
     return await anyio.to_thread.run_sync(function, *args)
 
@@ -539,14 +608,14 @@ def _calculate_series_sweepline(
     return data
 
 
-def timespan_calculator(
+def build_token_distribution(
     timedata: Iterable[Mapping],
     granularity: GranularityValues = GranularityValues.year,
     combined: bool = True,
     per_corpus: bool = True,
     strategy: params.StrategyValues = params.StrategyValues.some_overlaps,
 ) -> dict:
-    """Calculate timespan information for corpora.
+    """Aggregate corpus time intervals into token counts grouped by time period.
 
     Args:
         timedata: List of time data dictionaries with keys 'corpus', 'df' (datefrom), 'dt' (dateto), and 'sum' (token
@@ -557,7 +626,7 @@ def timespan_calculator(
         strategy: Strategy for date range matching.
 
     Returns:
-        A dictionary containing the timespan information.
+        A dictionary containing the token distribution information.
     """
     g_config = _GRANULARITY[granularity]
     digit_len = g_config.digit_len

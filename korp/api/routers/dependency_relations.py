@@ -7,6 +7,7 @@ import time
 from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Container, Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Annotated, Any, Literal, TypeAlias
 
@@ -21,7 +22,7 @@ from korp.api import params, schemas
 from korp.api.routers import info
 from korp.config import settings
 from korp.dependencies import AbortDep, AbortSignal, CtxDep
-from korp.handler import api_handler, docs_response
+from korp.handler import APIValidationError, api_handler, docs_response
 from korp.memcached import CacheError
 
 from . import concordance, token_distribution
@@ -1632,6 +1633,26 @@ async def _existing_tables(conn: AsyncConnection, pattern: str) -> set[str]:
     return {str(next(iter(row.values()))) for row in rows}
 
 
+async def _validate_dependency_relations_request(
+    ctx: CtxDep,
+    corpora: list[str],
+    include_split: bool,
+    include_overall: bool,
+    start_year: int | None,
+    end_year: int | None,
+) -> None:
+    """Validate authorization and cross-field relation options before streaming starts.
+
+    Raises:
+        APIValidationError: If no result scope is selected or the year range is invalid.
+    """
+    await auth.check_authorization(corpora, ctx)
+    if not include_split and not include_overall:
+        raise APIValidationError("Both split and overall results are disabled.")
+    if start_year is not None and end_year is not None and start_year > end_year:
+        raise APIValidationError("'start_year' is greater than 'end_year'.")
+
+
 async def _dependency_relations_impl(
     ctx: CtxDep,
     corpora: list[str],
@@ -1674,12 +1695,6 @@ async def _dependency_relations_impl(
         Progress updates as dictionaries with keys like "progress_corpora" or "progress_{index}",
         and finally a dictionary containing the results.
     """
-    await auth.check_authorization(corpora, ctx)
-
-    if not include_split and not include_overall:
-        yield {"error": "Both split and overall results are disabled."}
-        return
-
     is_lexeme = term_type == TermType.lexeme
     limit_per_period = max_scope == MaxScope.per_period
     time_filter = start_year is not None or end_year is not None
@@ -1788,7 +1803,7 @@ async def _dependency_relations_impl(
     # Everything past this point uses the accumulator for split/overall data
 
     # Get yearly size of corpora to be able to compute relative frequencies
-    corpus_timedata = await token_distribution.get_timespan(
+    corpus_timedata = await token_distribution.get_token_distribution(
         ctx,
         corpora,
         granularity=params.GranularityValues.year,
@@ -1970,10 +1985,18 @@ async def relations(
 ) -> AsyncIterator[dict]:
     """Calculate dependency relations data.
 
-    Yields:
-        Dependency relation data.
+    Returns:
+        An async iterator yielding dependency relation data.
     """
-    async for item in _dependency_relations_impl(
+    await _validate_dependency_relations_request(
+        ctx=ctx,
+        corpora=corpora,
+        include_split=include_time,
+        include_overall=include_overall,
+        start_year=start_year,
+        end_year=end_year,
+    )
+    return _dependency_relations_impl(
         ctx=ctx,
         corpora=corpora,
         term=term,
@@ -1990,8 +2013,7 @@ async def relations(
         max_scope=max_scope,
         measures=measures,
         abort_signal=abort_signal,
-    ):
-        yield item
+    )
 
 
 @router.get(
@@ -2022,10 +2044,18 @@ async def relations_time(
 ) -> AsyncIterator[dict]:
     """Calculate dependency relations data with time splits.
 
-    Yields:
-        Dependency relation data with time splits.
+    Returns:
+        An async iterator yielding dependency relation data with time splits.
     """
-    async for item in _dependency_relations_impl(
+    await _validate_dependency_relations_request(
+        ctx=ctx,
+        corpora=corpora,
+        include_split=True,
+        include_overall=include_overall,
+        start_year=start_year,
+        end_year=end_year,
+    )
+    return _dependency_relations_impl(
         ctx=ctx,
         corpora=corpora,
         term=term,
@@ -2042,8 +2072,7 @@ async def relations_time(
         max_scope=max_scope,
         measures=measures,
         abort_signal=abort_signal,
-    ):
-        yield item
+    )
 
 
 def _parse_sources(sources: list[str]) -> dict[str, set[int]]:
@@ -2053,27 +2082,55 @@ def _parse_sources(sources: list[str]) -> dict[str, set[int]]:
             corpus, relation_id = item.split(":", 1)
             parsed[corpus.upper()].add(int(relation_id))
         except ValueError as exc:
-            raise ValueError("Malformed value for key 'sources'. Expected 'CORPUS:ID'.") from exc
+            raise APIValidationError("Malformed value for key 'sources'. Expected 'CORPUS:ID'.") from exc
     return parsed
 
 
-async def _relations_sentences_impl(
+@dataclass(frozen=True, slots=True)
+class _RelationSentenceRequestState:
+    """Validated state shared by a relation-sentence route and its stream."""
+
+    source_map: dict[str, set[int]]
+    concordance_params: concordance.ConcordanceParameters
+
+
+async def _prepare_relation_sentence_request(
     ctx: CtxDep,
     sources: list[str],
-    offset: int,
     limit: int,
     attributes: str,
     struct_attributes: str,
     default_context: str,
+) -> _RelationSentenceRequestState:
+    """Parse, authorize, and validate relation-sentence parameters before streaming.
+
+    Returns:
+        Parsed relation sources and a concordance parameter template.
+    """
+    source_map = _parse_sources(sources)
+    concordance_params = await concordance.parse_parameters(
+        ctx=ctx,
+        corpora=list(source_map),
+        cqp_query=["[]"],
+        offset=0,
+        limit=limit,
+        attributes=utils.split_csv(attributes or "word"),
+        struct_attributes=["sentence_id", *set(utils.split_csv(struct_attributes))],
+        default_context=default_context,
+    )
+    return _RelationSentenceRequestState(source_map=source_map, concordance_params=concordance_params)
+
+
+async def _relations_sentences_impl(
+    ctx: CtxDep,
+    request_state: _RelationSentenceRequestState,
+    offset: int,
+    limit: int,
     yearly: bool,
     abort_signal: AbortSignal | None = None,
 ) -> dict[str, Any]:
-    source_map = _parse_sources(sources)
-    await auth.check_authorization(source_map.keys(), ctx)
-
+    source_map = request_state.source_map
     table_suffix = f"{SPLIT_SUFFIX}_sentences" if yearly else "_sentences"
-    shown_attributes = attributes or "word"
-    shown_struct_attributes = set(utils.split_csv(struct_attributes))
     debug: dict[str, Any] = {}
 
     sql_query_start_time = time.perf_counter()
@@ -2141,15 +2198,10 @@ async def _relations_sentences_impl(
         if abort_signal and abort_signal.is_set():
             return result
         cqp = '<sentence_id="{}"> []* </sentence_id> within sentence'.format("|".join(set(sids.keys())))
-        concordance_params = await concordance.parse_parameters(
-            ctx=ctx,
+        concordance_params = replace(
+            request_state.concordance_params,
             corpora=[corpus],
             cqp_query=[cqp],
-            offset=0,
-            limit=limit,
-            attributes=utils.split_csv(shown_attributes),
-            struct_attributes=["sentence_id", *shown_struct_attributes],
-            default_context=default_context,
         )
         result_temp = await utils.async_generator_to_dict(
             concordance.perform_query(concordance_params, ctx, abort_signal=abort_signal)
@@ -2183,6 +2235,29 @@ async def _relations_sentences_impl(
     return result
 
 
+async def _relations_sentences_stream(
+    ctx: CtxDep,
+    request_state: _RelationSentenceRequestState,
+    offset: int,
+    limit: int,
+    yearly: bool,
+    abort_signal: AbortSignal | None = None,
+) -> AsyncIterator[dict]:
+    """Run the relation-sentence query while retaining streaming keepalives.
+
+    Yields:
+        A dictionary containing the matching sentences and metadata.
+    """
+    yield await _relations_sentences_impl(
+        ctx=ctx,
+        request_state=request_state,
+        offset=offset,
+        limit=limit,
+        yearly=yearly,
+        abort_signal=abort_signal,
+    )
+
+
 @router.get(
     "/dependency_relations/sentences",
     response_model=None,
@@ -2214,17 +2289,22 @@ async def relations_sentences(
         default_context: Default context size for query results (e.g., "1 sentence").
         abort_signal: Optional signal for aborting long-running operations.
 
-    Yields:
-        A dictionary containing the sentences and related metadata.
+    Returns:
+        An async iterator yielding the sentences and related metadata.
     """
-    yield await _relations_sentences_impl(
+    request_state = await _prepare_relation_sentence_request(
+        ctx,
+        sources,
+        limit,
+        attributes,
+        struct_attributes,
+        default_context,
+    )
+    return _relations_sentences_stream(
         ctx=ctx,
-        sources=sources,
+        request_state=request_state,
         offset=offset,
         limit=limit,
-        attributes=attributes,
-        struct_attributes=struct_attributes,
-        default_context=default_context,
         yearly=False,
         abort_signal=abort_signal,
     )
@@ -2261,17 +2341,22 @@ async def relations_time_sentences(
         default_context: Default context size for query results (e.g., "1 sentence").
         abort_signal: Optional signal for aborting long-running operations.
 
-    Yields:
-        A dictionary containing the sentences and related metadata.
+    Returns:
+        An async iterator yielding the sentences and related metadata.
     """
-    yield await _relations_sentences_impl(
+    request_state = await _prepare_relation_sentence_request(
+        ctx,
+        sources,
+        limit,
+        attributes,
+        struct_attributes,
+        default_context,
+    )
+    return _relations_sentences_stream(
         ctx=ctx,
-        sources=sources,
+        request_state=request_state,
         offset=offset,
         limit=limit,
-        attributes=attributes,
-        struct_attributes=struct_attributes,
-        default_context=default_context,
         yearly=True,
         abort_signal=abort_signal,
     )

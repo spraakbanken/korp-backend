@@ -26,7 +26,7 @@ from korp.api import params, schemas
 from korp.config import settings
 from korp.cwb import CWB
 from korp.dependencies import AbortDep, AbortSignal, CtxDep
-from korp.handler import api_handler
+from korp.handler import APIValidationError, api_handler
 from korp.memcached import MemcachedSyncClient
 
 if TYPE_CHECKING:
@@ -390,7 +390,7 @@ async def parse_parameters(
         A ConcordanceParameters object containing the parsed and validated parameters.
 
     Raises:
-        ValueError: If any of the parameters are invalid.
+        APIValidationError: If any of the parameters are invalid.
     """
     corpora = corpora or []
     await auth.check_authorization(corpora, ctx)
@@ -401,9 +401,12 @@ async def parse_parameters(
     struct_attributes_set = set(struct_attributes) if struct_attributes else set()
 
     if settings.MAX_KWIC_ROWS and limit > settings.MAX_KWIC_ROWS:
-        raise ValueError(f"At most {settings.MAX_KWIC_ROWS} KWIC rows can be returned per call.")
+        raise APIValidationError(f"At most {settings.MAX_KWIC_ROWS} KWIC rows can be returned per call.")
 
-    within_dict = cqp.parse_within(within, default_within)
+    try:
+        within_dict = cqp.parse_within(within, default_within)
+    except ValueError as exc:
+        raise APIValidationError(str(exc)) from exc
 
     # Parse context/left_context/right_context/default_context
     context_dict: defaultdict[str, tuple[str, ...]] = defaultdict(lambda: (default_context or "",))
@@ -417,7 +420,7 @@ async def parse_parameters(
         if context_pairs:
             for pair in context_pairs:
                 if ":" not in pair:
-                    raise ValueError(f"Malformed value for key '{context_type}'.")
+                    raise APIValidationError(f"Malformed value for key '{context_type}'.")
                 contexts[context_type] = {
                     context_corpus.upper(): value
                     for context_corpus, value in (pair.split(":", 1) for pair in context_pairs)
@@ -437,7 +440,7 @@ async def parse_parameters(
     cqp_query = [c.strip().removesuffix(";") for c in cqp_query]
 
     if len(cqp_query) > 1 and expand_prequeries and not all(within_dict[c] for c in corpora):
-        raise ValueError("Multiple CQP queries requires 'within' or 'expand_prequeries=false'")
+        raise APIValidationError("Multiple CQP queries requires 'within' or 'expand_prequeries=false'")
 
     return ConcordanceParameters(
         corpora=corpora,
@@ -744,6 +747,30 @@ async def perform_query(
     yield result
 
 
+async def _perform_sample_query(
+    concordance_params: ConcordanceParameters, ctx: CtxDep, abort_signal: AbortSignal | None
+) -> AsyncGenerator[dict]:
+    """Search corpora in random order until a sampled concordance row is found.
+
+    Yields:
+        The sampled concordance row, or an empty KWIC result when no match is found.
+    """
+    corpora = concordance_params.corpora
+    random.shuffle(corpora)
+
+    for corpus in corpora:
+        params_corpus = dataclasses.replace(concordance_params, corpora=[corpus])
+        async for item in perform_query(params_corpus, ctx, abort_signal=abort_signal):
+            if item.get("hits", 0) > 0:
+                item.pop("hits", None)
+                item.pop("corpus_hits", None)
+                item.pop("pagination_state", None)
+                yield item
+                return
+
+    yield {"kwic": []}
+
+
 @router.get(
     "/concordance/sample",
     response_model=None,
@@ -776,8 +803,8 @@ async def concordance_sample(
     The query is performed sequentially on the selected corpora in random order until a match is found. No total hit
     count is calculated.
 
-    Yields:
-        A single KWIC result as a dictionary, or an empty KWIC list if no matches are found.
+    Returns:
+        An async iterator yielding a single KWIC result or an empty KWIC list.
     """
     concordance_params = await parse_parameters(
         ctx=ctx,
@@ -801,20 +828,7 @@ async def concordance_sample(
         pagination_state=pagination_state,
     )
 
-    corpora = concordance_params.corpora
-    random.shuffle(corpora)
-
-    for c in corpora:
-        params_corpus = dataclasses.replace(concordance_params, corpora=[c])
-        async for item in perform_query(params_corpus, ctx, abort_signal=abort_signal):
-            if item.get("hits", 0) > 0:
-                item.pop("hits", None)
-                item.pop("corpus_hits", None)
-                item.pop("pagination_state", None)
-                yield item
-                return
-
-    yield {"kwic": []}
+    return _perform_sample_query(concordance_params, ctx, abort_signal)
 
 
 @router.get(
@@ -850,8 +864,8 @@ async def concordance(
 ) -> AsyncGenerator[dict]:
     """Perform a CQP query and return a number of matches.
 
-    Yields:
-        KWIC results as dictionaries, followed by a final dictionary containing the total hit count and other metadata.
+    Returns:
+        An async iterator yielding KWIC results followed by hit counts and other metadata.
     """
     concordance_params = await parse_parameters(
         ctx=ctx,
@@ -875,8 +889,7 @@ async def concordance(
         pagination_state=pagination_state,
     )
 
-    async for item in perform_query(concordance_params, ctx, abort_signal=abort_signal):
-        yield item
+    return perform_query(concordance_params, ctx, abort_signal=abort_signal)
 
 
 def query_corpus(

@@ -1,6 +1,6 @@
 """Router for lexeme counts."""
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncIterator
 from typing import Annotated, TypeAlias
 
 from fastapi import APIRouter, Query
@@ -64,33 +64,12 @@ class LexemeCountResponse(schemas.CommonResponse):
     )
 
 
-@router.get(
-    "/lexeme_counts",
-    response_model=None,
-    responses=docs_response(LexemeCountResponse),
-    summary="Lexeme Statistics",
-    description=LEXEME_COUNT_DESCRIPTION,
-)
-@router.post("/lexeme_counts", response_model=None, include_in_schema=False)
-@api_handler
-async def lexeme_counts(
-    ctx: CtxDep,
-    lexemes: LexemesParam,
-    corpora: CorporaParamOptional = None,
-) -> AsyncGenerator[dict]:
-    """Return lexeme statistics per corpus.
-
-    Args:
-        ctx: Request context.
-        lexemes: Comma-separated list of lexemes.
-        corpora: Comma-separated list of corpora.
+async def _lexeme_counts_stream(ctx: CtxDep, lexemes: list[str], corpora: list[str]) -> AsyncIterator[dict]:
+    """Query the database and yield lexeme counts.
 
     Yields:
         A dictionary with lexeme counts.
     """
-    corpora = corpora or []
-    await auth.check_authorization(corpora, ctx)
-
     bind_params: dict[str, str] = {}
     lexeme_placeholders = ", ".join(f":lexeme_{i}" for i in range(len(lexemes)))
     for i, lexeme in enumerate(lexemes):
@@ -113,8 +92,33 @@ async def lexeme_counts(
 
     async with ctx.db.async_connection() as conn:
         query_result = await conn.execute(sql, bind_params)
-        yield {
-            "lexeme_counts": {
-                row["lexeme"]: int(row["freq"]) for row in query_result.mappings()
-            }
-        }
+        yield {"lexeme_counts": {row["lexeme"]: int(row["freq"]) for row in query_result.mappings()}}
+
+
+@router.get(
+    "/lexeme_counts",
+    response_model=None,
+    responses=docs_response(LexemeCountResponse),
+    summary="Lexeme Statistics",
+    description=LEXEME_COUNT_DESCRIPTION,
+)
+@router.post("/lexeme_counts", response_model=None, include_in_schema=False)
+@api_handler
+async def lexeme_counts(
+    ctx: CtxDep,
+    lexemes: LexemesParam,
+    corpora: CorporaParamOptional = None,
+) -> AsyncIterator[dict]:
+    """Return lexeme statistics per corpus.
+
+    Args:
+        ctx: Request context.
+        lexemes: Comma-separated list of lexemes.
+        corpora: Comma-separated list of corpora.
+
+    Returns:
+        An async iterator yielding a dictionary with lexeme counts.
+    """
+    corpora = corpora or []
+    await auth.check_authorization(corpora, ctx)
+    return _lexeme_counts_stream(ctx, lexemes, corpora)

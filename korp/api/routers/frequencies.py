@@ -21,7 +21,7 @@ from korp import auth, caching, cqp, handler, utils
 from korp.api import params, schemas
 from korp.config import settings
 from korp.dependencies import AbortDep, AbortSignal, CtxDep
-from korp.handler import api_handler
+from korp.handler import APIValidationError, api_handler
 from korp.memcached import CacheError, MemcachedSyncClient
 
 from . import info, token_distribution
@@ -354,7 +354,7 @@ async def parse_frequency_parameters(
         A FrequencyParameters instance with parsed parameters.
 
     Raises:
-        ValueError: If any parameter is invalid.
+        APIValidationError: If any parameter is invalid.
     """
     await auth.check_authorization(corpora, ctx)
 
@@ -368,11 +368,14 @@ async def parse_frequency_parameters(
 
     ignore_case_set = set(ignore_case) if ignore_case else set()
 
-    within_dict = cqp.parse_within(within, default_within)
+    try:
+        within_dict = cqp.parse_within(within, default_within)
+    except ValueError as exc:
+        raise APIValidationError(str(exc)) from exc
 
     relative_to_structs = sorted(set(relative_to_struct)) if relative_to_struct else []
     if not all(r in group_by_struct for r in relative_to_structs):
-        raise ValueError("All 'relative_to_struct' values also need to be present in 'group_by_struct'.")
+        raise APIValidationError("All 'relative_to_struct' values also need to be present in 'group_by_struct'.")
 
     relative_to = [(r, True) for r in relative_to_structs]
 
@@ -380,7 +383,10 @@ async def parse_frequency_parameters(
     if max_values_per_set:
         for t in max_values_per_set:
             if ":" in t:
-                max_values[t.split(":")[0]] = int(t.split(":")[1])
+                try:
+                    max_values[t.split(":")[0]] = int(t.split(":")[1])
+                except ValueError as exc:
+                    raise APIValidationError(f"Malformed value for 'max_values_per_set': {t!r}.") from exc
             else:
                 max_values[t] = 1
 
@@ -390,7 +396,7 @@ async def parse_frequency_parameters(
         cqp_combined.extend(cqp_query)
 
     if len(cqp_combined) > 1 and expand_prequeries and not all(within_dict[c] for c in corpora):
-        raise ValueError("Multiple CQP queries requires 'within' or 'expand_prequeries=false'")
+        raise APIValidationError("Multiple CQP queries requires 'within' or 'expand_prequeries=false'")
 
     if subcqp:
         cqp_combined.append(subcqp)
@@ -881,8 +887,8 @@ async def frequencies(
 ) -> AsyncIterator[dict]:
     """Perform a CQP query and return a count of the given words/CWB attributes.
 
-    Yields:
-        Count results as dictionaries.
+    Returns:
+        An async iterator yielding count result dictionaries.
     """
     frequency_params = await parse_frequency_parameters(
         ctx=ctx,
@@ -905,8 +911,7 @@ async def frequencies(
         limit=limit,
     )
 
-    async for item in perform_frequency_query(frequency_params, ctx, abort_signal):
-        yield item
+    return perform_frequency_query(frequency_params, ctx, abort_signal)
 
 
 @router.get(
@@ -938,8 +943,8 @@ async def corpus_frequencies(
 ) -> AsyncIterator[dict]:
     """Like `/frequencies` but for every single value of the given CWB attributes.
 
-    Yields:
-        Count results as dictionaries.
+    Returns:
+        An async iterator yielding count result dictionaries.
     """
     frequency_params = await parse_frequency_parameters(
         ctx=ctx,
@@ -962,8 +967,7 @@ async def corpus_frequencies(
         limit=limit,
     )
 
-    async for item in perform_frequency_query(frequency_params, ctx, abort_signal):
-        yield item
+    return perform_frequency_query(frequency_params, ctx, abort_signal)
 
 
 DateFromParam: TypeAlias = Annotated[
@@ -990,23 +994,24 @@ DateToParam: TypeAlias = Annotated[
 ]
 
 
-@router.get(
-    "/frequencies/time",
-    response_model=None,
-    responses=handler.docs_response(FrequenciesTimeResponse),
-    summary="Statistics Over Time",
-    description=FREQUENCIES_TIME_DESCRIPTION,
-)
-@router.post("/frequencies/time", response_model=None, include_in_schema=False)
-@api_handler
-async def frequencies_time(
+@dataclass(frozen=True, slots=True)
+class _FrequencyTimeRequestState:
+    """Validated and prepared state shared by the frequency-time route and its stream."""
+
+    frequency_params: FrequencyParameters
+    corpus_data: dict
+    date_range: token_distribution.ValidatedDateRange
+    effective_date_from: datetime | None
+    effective_date_to: datetime | None
+
+
+async def _resolve_frequencies_time_request(
     ctx: CtxDep,
     corpora: params.CorporaParam,
     cqp_query: params.CQPParam,
     subcqp: SubCQPParam = None,
     within: params.WithinParam = None,
     default_within: params.DefaultWithinParam = None,
-    # cut: int | None = None,
     offset: OffsetParam = 0,
     limit: LimitParam = 0,
     ignore_case: IgnoreCaseParam = None,
@@ -1018,18 +1023,14 @@ async def frequencies_time(
     granularity: params.GranularityParam = params.GranularityValues.year,
     date_from: DateFromParam = None,
     date_to: DateToParam = None,
-    strategy: params.StrategyParam = params.StrategyValues.some_overlaps,
-    combined: params.CombinedParam = True,
-    per_corpus: params.PerCorpusParam = True,
-    abort_signal: AbortDep = None,
-) -> AsyncIterator[dict]:
-    """Count occurrences per time period.
+) -> _FrequencyTimeRequestState:
+    """Prepare and validate frequency-time parameters before the streaming response is created.
 
-    Yields:
-        Count results as dictionaries.
+    Returns:
+        The parsed frequency parameters and corpus metadata needed by the stream.
 
     Raises:
-        ValueError: If parameters are invalid or if the date range is too large for the selected granularity.
+        APIValidationError: If a parameter rule is violated.
     """
     frequency_params = await parse_frequency_parameters(
         ctx=ctx,
@@ -1052,14 +1053,65 @@ async def frequencies_time(
         limit=limit,
     )
 
+    date_range = token_distribution.validate_date_range(date_from, date_to)
+    parsed_date_from = date_range.parsed_date_from
+    parsed_date_to = date_range.parsed_date_to
+
+    corpus_data = await info.get_corpus_info(ctx=ctx, corpora=frequency_params.corpora, no_combined_cache=True)
+    if parsed_date_from is None or parsed_date_to is None:
+        for corpus in corpus_data["corpora"].values():
+            first_date = corpus["info"].get("FirstDate")
+            last_date = corpus["info"].get("LastDate")
+            if first_date and last_date:
+                first_date = utils.strptime(re.sub(r"\D", "", first_date))
+                last_date = utils.strptime(re.sub(r"\D", "", last_date))
+                parsed_date_from = min(parsed_date_from, first_date) if parsed_date_from else first_date
+                parsed_date_to = max(parsed_date_to, last_date) if parsed_date_to else last_date
+
+    max_points = 3600
+    granularity_units = {
+        params.GranularityValues.year: "years",
+        params.GranularityValues.month: "months",
+        params.GranularityValues.day: "days",
+        params.GranularityValues.hour: "hours",
+        params.GranularityValues.minute: "minutes",
+        params.GranularityValues.second: "seconds",
+    }
+    add = relativedelta(**{granularity_units[granularity]: max_points})  # type: ignore
+    if parsed_date_from and parsed_date_to and parsed_date_to > parsed_date_from + add:
+        raise APIValidationError(
+            f"The date range is too large (over {max_points} points) for the selected granularity. Use 'date_from' and "
+            "'date_to' to limit the range."
+        )
+    return _FrequencyTimeRequestState(
+        frequency_params=frequency_params,
+        corpus_data=corpus_data,
+        date_range=date_range,
+        effective_date_from=parsed_date_from,
+        effective_date_to=parsed_date_to,
+    )
+
+
+async def _frequencies_time_stream(
+    ctx: CtxDep,
+    request_state: _FrequencyTimeRequestState,
+    granularity: params.GranularityParam = params.GranularityValues.year,
+    strategy: params.StrategyParam = params.StrategyValues.some_overlaps,
+    combined: params.CombinedParam = True,
+    per_corpus: params.PerCorpusParam = True,
+    abort_signal: AbortDep = None,
+) -> AsyncIterator[dict]:
+    """Stream frequency counts over time from prepared request state.
+
+    Yields:
+        Count results as dictionaries.
+    """
+    frequency_params = request_state.frequency_params
+
     incremental = ctx.common.incremental
 
-    # Check that we have a suitable date range for the selected granularity
-    df = None
-    dt = None
-
-    if (date_from or date_to) and not (date_from and date_to):
-        raise ValueError("When using 'date_from' or 'date_to', both need to be specified.")
+    df = request_state.effective_date_from
+    dt = request_state.effective_date_to
 
     result = {}
     if per_corpus:
@@ -1068,18 +1120,15 @@ async def frequencies_time(
         result["debug"] = {"cqp": frequency_params.cqp_query}
 
     # Get date range of selected corpora
-    corpus_data = await info.get_corpus_info(ctx=ctx, corpora=frequency_params.corpora, no_combined_cache=True)
+    corpus_data = request_state.corpus_data
     corpora_copy = frequency_params.corpora.copy()
 
     def _parse_corpus_date(date_str: str) -> datetime:
         return utils.strptime(re.sub(r"\D", "", date_str))
 
-    if date_from and date_to:
-        date_from = re.sub(r"\D", "", date_from)
-        date_to = re.sub(r"\D", "", date_to)
-        df = utils.strptime(date_from)
-        dt = utils.strptime(date_to)
-
+    if request_state.date_range.date_from and request_state.date_range.date_to:
+        assert df is not None
+        assert dt is not None
         # Remove corpora not within selected date span
         for c in corpus_data["corpora"]:
             first_date = corpus_data["corpora"][c]["info"].get("FirstDate")
@@ -1090,38 +1139,6 @@ async def frequencies_time(
 
                 if not (first_date <= dt and last_date >= df):
                     frequency_params.corpora.remove(c)
-    else:
-        # If no date range was provided, use whole date range of the selected corpora
-        for c in corpus_data["corpora"]:
-            first_date = corpus_data["corpora"][c]["info"].get("FirstDate")
-            last_date = corpus_data["corpora"][c]["info"].get("LastDate")
-            if first_date and last_date:
-                first_date = _parse_corpus_date(first_date)
-                last_date = _parse_corpus_date(last_date)
-
-                if not df or first_date < df:
-                    df = first_date
-                if not dt or last_date > dt:
-                    dt = last_date
-
-    if df and dt:
-        max_points = 3600
-
-        granularity_units = {
-            granularity.year: "years",
-            granularity.month: "months",
-            granularity.day: "days",
-            granularity.hour: "hours",
-            granularity.minute: "minutes",
-            granularity.second: "seconds",
-        }
-        add = relativedelta(**{granularity_units[granularity]: max_points})  # type: ignore
-
-        if dt > (df + add):
-            raise ValueError(
-                "The date range is too large for the selected granularity. Use 'date_from' and 'date_to' to limit "
-                "the range."
-            )
 
     if granularity in {granularity.hour, granularity.minute, granularity.second}:
         group_by = [(v, True) for v in (DATEFROM, TIMEFROM, DATETO, TIMETO)]
@@ -1243,20 +1260,19 @@ async def frequencies_time(
                 yield {f"progress_{ns.progress_count}": c}
                 ns.progress_count += 1
 
-    corpus_timedata = await token_distribution.get_timespan(
+    corpus_timedata = await token_distribution.get_token_distribution(
         ctx=ctx,
         corpora=frequency_params.corpora,
         granularity=granularity,
-        date_from=date_from,
-        date_to=date_to,
         strategy=strategy,
         no_combined_cache=True,
+        validated_date_range=request_state.date_range,
     )
 
     search_timedata = []
     search_timedata_combined = []
     for total_row in total_rows:
-        temp = token_distribution.timespan_calculator(total_row, granularity=granularity, strategy=strategy)
+        temp = token_distribution.build_token_distribution(total_row, granularity=granularity, strategy=strategy)
         if per_corpus:
             search_timedata.append(temp["corpora"])
         if combined:
@@ -1336,6 +1352,74 @@ async def frequencies_time(
         result["combined"] = total_stats if len(total_stats) > 1 else total_stats[0]
 
     yield result
+
+
+@router.get(
+    "/frequencies/time",
+    response_model=None,
+    responses=handler.docs_response(FrequenciesTimeResponse),
+    summary="Statistics Over Time",
+    description=FREQUENCIES_TIME_DESCRIPTION,
+)
+@router.post("/frequencies/time", response_model=None, include_in_schema=False)
+@api_handler
+async def frequencies_time(
+    ctx: CtxDep,
+    corpora: params.CorporaParam,
+    cqp_query: params.CQPParam,
+    subcqp: SubCQPParam = None,
+    within: params.WithinParam = None,
+    default_within: params.DefaultWithinParam = None,
+    # cut: int | None = None,
+    offset: OffsetParam = 0,
+    limit: LimitParam = 0,
+    ignore_case: IgnoreCaseParam = None,
+    relative_to_struct: RelativeToStructParam = None,
+    split: params.SplitParam = None,
+    strip_pointer_suffix: StripPointerSuffixParam = None,
+    max_values_per_set: MaxValuesPerSetParam = None,
+    expand_prequeries: params.ExpandPrequeriesParam = True,
+    granularity: params.GranularityParam = params.GranularityValues.year,
+    date_from: DateFromParam = None,
+    date_to: DateToParam = None,
+    strategy: params.StrategyParam = params.StrategyValues.some_overlaps,
+    combined: params.CombinedParam = True,
+    per_corpus: params.PerCorpusParam = True,
+    abort_signal: AbortDep = None,
+) -> AsyncIterator[dict]:
+    """Count occurrences per time period.
+
+    Returns:
+        An async iterator yielding count results as dictionaries.
+    """
+    request_state = await _resolve_frequencies_time_request(
+        ctx=ctx,
+        corpora=corpora,
+        cqp_query=cqp_query,
+        subcqp=subcqp,
+        within=within,
+        default_within=default_within,
+        offset=offset,
+        limit=limit,
+        ignore_case=ignore_case,
+        relative_to_struct=relative_to_struct,
+        split=split,
+        strip_pointer_suffix=strip_pointer_suffix,
+        max_values_per_set=max_values_per_set,
+        expand_prequeries=expand_prequeries,
+        granularity=granularity,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return _frequencies_time_stream(
+        ctx=ctx,
+        request_state=request_state,
+        granularity=granularity,
+        strategy=strategy,
+        combined=combined,
+        per_corpus=per_corpus,
+        abort_signal=abort_signal,
+    )
 
 
 @dataclass

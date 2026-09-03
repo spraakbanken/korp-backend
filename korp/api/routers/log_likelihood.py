@@ -4,13 +4,13 @@ import asyncio
 import dataclasses
 import math
 from collections import defaultdict
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncIterator
 from typing import Annotated, TypeAlias
 
 from fastapi import APIRouter, Query
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field
 
-from korp import auth, utils
+from korp import utils
 from korp.api import params, schemas
 from korp.dependencies import AbortDep, CtxDep
 from korp.handler import api_handler, docs_response
@@ -121,70 +121,35 @@ class LogLikelihoodResponse(schemas.CommonResponse):
     )
 
 
-@router.get(
-    "/log_likelihood",
-    response_model=None,
-    responses=docs_response(LogLikelihoodResponse),
-    summary="Log-Likelihood Comparison",
-    description=LOGLIKE_DESCRIPTION,
-)
-@router.post("/log_likelihood", response_model=None, include_in_schema=False)
-@api_handler
-async def log_likelihood(
+@dataclasses.dataclass(frozen=True, slots=True)
+class _LogLikelihoodRequestState:
+    """Validated state shared by the log-likelihood route and its stream."""
+
+    frequency_params: frequencies.FrequencyParameters
+    set1_corpora: list[str]
+    set2_corpora: list[str]
+
+
+async def _log_likelihood_stream(
     ctx: CtxDep,
+    request_state: _LogLikelihoodRequestState,
     set1_cqp: Set1CQPParam,
     set2_cqp: Set2CQPParam,
-    set1_corpora: Set1CorporaParam,
-    set2_corpora: Set2CorporaParam,
     max_results: MaxResultsParam = 15,
-    group_by: frequencies.GroupByParam = None,
-    group_by_struct: frequencies.GroupByStructParam = None,
-    within: params.WithinParam = None,
-    default_within: params.DefaultWithinParam = None,
-    # cut: int | None = None,
-    offset: frequencies.OffsetParam = 0,
-    limit: frequencies.LimitParam = 0,
-    ignore_case: frequencies.IgnoreCaseParam = None,
-    relative_to_struct: frequencies.RelativeToStructParam = None,
-    split: params.SplitParam = None,
-    strip_pointer_suffix: frequencies.StripPointerSuffixParam = None,
-    max_values_per_set: frequencies.MaxValuesPerSetParam = None,
-    expand_prequeries: params.ExpandPrequeriesParam = True,
     abort_signal: AbortDep = None,
-) -> AsyncGenerator[dict]:
-    """Do a log-likelihood comparison on two queries.
+) -> AsyncIterator[dict]:
+    """Stream a log-likelihood comparison from validated request state.
 
     Yields:
         A dictionary with log-likelihood results.
     """
-    # Handle parameters common to frequency queries
-    frequency_params = await frequencies.parse_frequency_parameters(
-        ctx=ctx,
-        corpora=[],
-        cqp_query=[],
-        subcqp=None,
-        group_by=group_by,
-        group_by_struct=group_by_struct,
-        within=within,
-        default_within=default_within,
-        cut=None,
-        ignore_case=ignore_case,
-        relative_to_struct=relative_to_struct,
-        split=split,
-        strip_pointer_suffix=strip_pointer_suffix,
-        max_values_per_set=max_values_per_set,
-        simple=False,
-        expand_prequeries=expand_prequeries,
-        offset=offset,
-        limit=limit,
-    )
+    frequency_params = request_state.frequency_params
 
     # Handle parameters specific to log-likelihood
-    set1_corpora_set = set(set1_corpora)
-    set2_corpora_set = set(set2_corpora)
+    set1_corpora = request_state.set1_corpora
+    set2_corpora = request_state.set2_corpora
 
-    corpora = set1_corpora_set.union(set2_corpora_set)
-    await auth.check_authorization(corpora, ctx)
+    corpora = set(set1_corpora).union(set2_corpora)
 
     same_cqp = set1_cqp == set2_cqp
 
@@ -308,9 +273,9 @@ async def log_likelihood(
 
     else:
         frequency_params_2 = dataclasses.replace(frequency_params)
-        frequency_params.corpora = list(set1_corpora)
+        frequency_params.corpora = set1_corpora
         frequency_params.cqp_query = [set1_cqp]
-        frequency_params_2.corpora = list(set2_corpora)
+        frequency_params_2.corpora = set2_corpora
         frequency_params_2.cqp_query = [set2_cqp]
         frequency_result_1, frequency_result_2 = await asyncio.gather(
             utils.async_generator_to_dict(
@@ -344,3 +309,77 @@ async def log_likelihood(
         )
 
     yield result
+
+
+@router.get(
+    "/log_likelihood",
+    response_model=None,
+    responses=docs_response(LogLikelihoodResponse),
+    summary="Log-Likelihood Comparison",
+    description=LOGLIKE_DESCRIPTION,
+)
+@router.post("/log_likelihood", response_model=None, include_in_schema=False)
+@api_handler
+async def log_likelihood(
+    ctx: CtxDep,
+    set1_cqp: Set1CQPParam,
+    set2_cqp: Set2CQPParam,
+    set1_corpora: Set1CorporaParam,
+    set2_corpora: Set2CorporaParam,
+    max_results: MaxResultsParam = 15,
+    group_by: frequencies.GroupByParam = None,
+    group_by_struct: frequencies.GroupByStructParam = None,
+    within: params.WithinParam = None,
+    default_within: params.DefaultWithinParam = None,
+    # cut: int | None = None,
+    offset: frequencies.OffsetParam = 0,
+    limit: frequencies.LimitParam = 0,
+    ignore_case: frequencies.IgnoreCaseParam = None,
+    relative_to_struct: frequencies.RelativeToStructParam = None,
+    split: params.SplitParam = None,
+    strip_pointer_suffix: frequencies.StripPointerSuffixParam = None,
+    max_values_per_set: frequencies.MaxValuesPerSetParam = None,
+    expand_prequeries: params.ExpandPrequeriesParam = True,
+    abort_signal: AbortDep = None,
+) -> AsyncIterator[dict]:
+    """Do a log-likelihood comparison on two queries.
+
+    Returns:
+        An async iterator yielding a dictionary with log-likelihood results.
+    """
+    corpora = set(set1_corpora).union(set2_corpora)
+
+    # This also performs authorization for the selected corpora
+    frequency_params = await frequencies.parse_frequency_parameters(
+        ctx=ctx,
+        corpora=list(corpora),
+        cqp_query=[],
+        subcqp=None,
+        group_by=group_by,
+        group_by_struct=group_by_struct,
+        within=within,
+        default_within=default_within,
+        cut=None,
+        ignore_case=ignore_case,
+        relative_to_struct=relative_to_struct,
+        split=split,
+        strip_pointer_suffix=strip_pointer_suffix,
+        max_values_per_set=max_values_per_set,
+        simple=False,
+        expand_prequeries=expand_prequeries,
+        offset=offset,
+        limit=limit,
+    )
+    request_state = _LogLikelihoodRequestState(
+        frequency_params=frequency_params,
+        set1_corpora=set1_corpora,
+        set2_corpora=set2_corpora,
+    )
+    return _log_likelihood_stream(
+        ctx=ctx,
+        request_state=request_state,
+        set1_cqp=set1_cqp,
+        set2_cqp=set2_cqp,
+        max_results=max_results,
+        abort_signal=abort_signal,
+    )
