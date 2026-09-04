@@ -283,7 +283,8 @@ class FrequenciesTimeResponse(schemas.CommonResponse):
     corpora: dict[str, list[TimeStatistics]] | SkipJsonSchema[None] = Field(
         None,
         description=(
-            "Time-series statistics per corpus, always as arrays. Omitted when `per_corpus=false`. The main query is "
+            "Time-series statistics per corpus, always as arrays. Omitted when `include_per_corpus=false`. The main "
+            "query is "
             "first, followed by `subcqp` results."
         ),
     )
@@ -291,7 +292,7 @@ class FrequenciesTimeResponse(schemas.CommonResponse):
         None,
         description=(
             "Combined time-series statistics for all corpora, always as an array with the main query first. Omitted "
-            "when `combined=false`."
+            "when `include_combined=false`."
         ),
     )
     progress_corpora: list[str] | SkipJsonSchema[None] = Field(
@@ -1091,8 +1092,8 @@ async def _frequencies_time_stream(
     request_state: _FrequencyTimeRequestState,
     granularity: params.GranularityParam = params.GranularityValues.year,
     strategy: params.StrategyParam = params.StrategyValues.some_overlaps,
-    combined: params.CombinedParam = True,
-    per_corpus: params.PerCorpusParam = True,
+    include_combined: params.IncludeCombinedParam = True,
+    include_per_corpus: params.IncludePerCorpusParam = True,
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
     """Stream frequency counts over time from prepared request state.
@@ -1108,7 +1109,7 @@ async def _frequencies_time_stream(
     dt = request_state.effective_date_to
 
     result = {}
-    if per_corpus:
+    if include_per_corpus:
         result["corpora"] = {}
     if ctx.common.debug:
         result["debug"] = {"cqp": frequency_params.cqp_query}
@@ -1139,7 +1140,7 @@ async def _frequencies_time_stream(
     else:
         group_by = [(v, True) for v in (DATEFROM, DATETO)]
 
-    if per_corpus:
+    if include_per_corpus:
         # Add zero values for the corpora we removed because of the selected date span
         for c in set(corpora_copy).difference(set(frequency_params.corpora)):
             result["corpora"][c] = [
@@ -1150,7 +1151,7 @@ async def _frequencies_time_stream(
                 c2["cqp"] = frequency_params.subcqp[i]
 
     # Add zero values for the combined results if no corpora are within the selected date span
-    if combined and not frequency_params.corpora:
+    if include_combined and not frequency_params.corpora:
         result["combined"] = [
             {"absolute": {}, "relative": {}, "sums": {"absolute": 0, "relative": 0.0}}
             for _ in range(len(frequency_params.subcqp) + 1)
@@ -1261,12 +1262,12 @@ async def _frequencies_time_stream(
     search_timedata_combined = []
     for total_row in total_rows:
         temp = token_distribution.build_token_distribution(total_row, granularity=granularity, strategy=strategy)
-        if per_corpus:
+        if include_per_corpus:
             search_timedata.append(temp["corpora"])
-        if combined:
+        if include_combined:
             search_timedata_combined.append(temp["combined"])
 
-    if per_corpus:
+    if include_per_corpus:
         for c in frequency_params.corpora:
             corpus_stats = [
                 {"absolute": defaultdict(int), "relative": defaultdict(float), "sums": {"absolute": 0, "relative": 0.0}}
@@ -1300,7 +1301,7 @@ async def _frequencies_time_stream(
 
             result["corpora"][c] = corpus_stats
 
-    if combined:
+    if include_combined:
         total_stats = [
             {"absolute": defaultdict(int), "relative": defaultdict(float), "sums": {"absolute": 0, "relative": 0.0}}
             for _ in range(len(frequency_params.subcqp) + 1)
@@ -1371,8 +1372,8 @@ async def frequencies_time(
     date_from: DateFromParam = None,
     date_to: DateToParam = None,
     strategy: params.StrategyParam = params.StrategyValues.some_overlaps,
-    combined: params.CombinedParam = True,
-    per_corpus: params.PerCorpusParam = True,
+    include_combined: params.IncludeCombinedParam = True,
+    include_per_corpus: params.IncludePerCorpusParam = True,
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
     """Count occurrences per time period.
@@ -1404,8 +1405,8 @@ async def frequencies_time(
         request_state=request_state,
         granularity=granularity,
         strategy=strategy,
-        combined=combined,
-        per_corpus=per_corpus,
+        include_combined=include_combined,
+        include_per_corpus=include_per_corpus,
         abort_signal=abort_signal,
     )
 

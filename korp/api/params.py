@@ -155,11 +155,11 @@ StrategyParam: TypeAlias = Annotated[
     ),
 ]
 
-CombinedParam: TypeAlias = Annotated[
+IncludeCombinedParam: TypeAlias = Annotated[
     bool,
     Query(description="Whether to include results merged across all selected corpora in the `combined` field."),
 ]
-PerCorpusParam: TypeAlias = Annotated[
+IncludePerCorpusParam: TypeAlias = Annotated[
     bool,
     Query(description="Whether to include separate results for each selected corpus in the `corpora` field."),
 ]

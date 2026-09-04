@@ -1807,8 +1807,8 @@ async def _dependency_relations_impl(
         ctx,
         corpora,
         granularity=params.GranularityValues.year,
-        combined=False,
-        per_corpus=True,
+        include_combined=False,
+        include_per_corpus=True,
         no_combined_cache=True,
     )
 

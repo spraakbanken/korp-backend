@@ -42,8 +42,9 @@ useful for building dependent filters: for example, authors as top-level keys an
 By default the result contains value lists. When `include_counts=true`, leaf values are token counts instead. Use
 `split` for set-valued CWB attributes whose values should be split on `|` before being included in the result.
 
-Use `combined` and `per_corpus` to choose whether to include merged values across all selected corpora, per-corpus
-values, or both. When `incremental=true`, progress keys such as `progress_corpora` and `progress_0` may be included
+Use `include_combined` and `include_per_corpus` to choose whether to include merged values across all selected corpora,
+per-corpus values, or both. When `incremental=true`, progress keys such as `progress_corpora` and `progress_0` may be
+included
 before the final result in the streamed JSON object.
 
 ### Example
@@ -95,7 +96,8 @@ class AttrValuesResponse(schemas.CommonResponse):
     corpora: dict[str, AttributeValuesData] | SkipJsonSchema[None] = Field(
         None,
         description=(
-            "Per-corpus CWB attribute values, keyed by corpus id. Omitted when `per_corpus=false`. Within each corpus, "
+            "Per-corpus CWB attribute values, keyed by corpus id. Omitted when `include_per_corpus=false`. Within each "
+            "corpus, "
             "keys are the requested `attributes` expressions."
         ),
         examples=[{"ROMI": {"text_author": ["Söderberg, Hjalmar"], "pos": {"NN": 1250, "VB": 341}}}],
@@ -103,7 +105,8 @@ class AttrValuesResponse(schemas.CommonResponse):
     combined: AttributeValuesData | SkipJsonSchema[None] = Field(
         None,
         description=(
-            "CWB attribute values merged across all selected corpora. Omitted when `combined=false`. Keys are the "
+            "CWB attribute values merged across all selected corpora. Omitted when `include_combined=false`. Keys are "
+            "the "
             "requested `attributes` expressions."
         ),
         examples=[{"text_author>text_title": {"Söderberg, Hjalmar": {"Doktor Glas": 12345}}}],
@@ -132,8 +135,8 @@ async def attribute_values(
     corpora: params.CorporaParam,
     attributes: AttrParam,
     include_counts: IncludeCountsParam = False,
-    per_corpus: params.PerCorpusParam = True,
-    combined: params.CombinedParam = True,
+    include_per_corpus: params.IncludePerCorpusParam = True,
+    include_combined: params.IncludeCombinedParam = True,
     split: AttrValuesSplitParam = None,
 ) -> AsyncIterator[dict]:
     """Get all available values for one or more corpus annotations.
@@ -143,8 +146,8 @@ async def attribute_values(
         corpora: Comma-separated list of corpora.
         attributes: Comma-separated list of CWB attribute names or attribute hierarchies.
         include_counts: Whether to include counts for each attribute value.
-        per_corpus: Whether to include per-corpus results.
-        combined: Whether to include combined results across corpora.
+        include_per_corpus: Whether to include per-corpus results.
+        include_combined: Whether to include combined results across corpora.
         split: Comma-separated list of CWB attributes to split values for.
 
     Yields:
@@ -267,7 +270,7 @@ async def attribute_values(
                     yield {f"progress_{progress_count}": c}
                     progress_count += 1
 
-    if combined:
+    if include_combined:
         for c in result["corpora"]:
             _merge_into(result["combined"], result["corpora"][c])
     else:
@@ -292,7 +295,7 @@ async def attribute_values(
                         result["debug"].setdefault("caches_saved", [])
                         result["debug"]["caches_saved"].append(f"{c}:{attribute}")
 
-    if not per_corpus:
+    if not include_per_corpus:
         del result["corpora"]
 
     yield result

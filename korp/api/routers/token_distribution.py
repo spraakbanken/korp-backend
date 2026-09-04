@@ -127,13 +127,15 @@ class TokenDistributionResponse(schemas.CommonResponse):
         None,
         description=(
             "Token counts per time period, keyed first by corpus id and then by period start. Omitted when "
-            "`per_corpus=false`."
+            "`include_per_corpus=false`."
         ),
         examples=[{"ROMI": {"2017": 15366, "2018": 7437}}],
     )
     combined: dict[str, int] | SkipJsonSchema[None] = Field(
         None,
-        description="Combined token counts per time period across all selected corpora. Omitted when `combined=false`.",
+        description=(
+            "Combined token counts per time period across all selected corpora. Omitted when `include_combined=false`."
+        ),
         examples=[{"2017": 15366, "2018": 7437}],
     )
 
@@ -206,8 +208,8 @@ async def _token_distribution_stream(
     ctx: CtxDep,
     corpora: list[str],
     granularity: GranularityValues,
-    combined: bool,
-    per_corpus: bool,
+    include_combined: bool,
+    include_per_corpus: bool,
     strategy: params.StrategyValues,
     date_range: ValidatedDateRange,
 ) -> AsyncIterator[dict]:
@@ -222,8 +224,8 @@ async def _token_distribution_stream(
         ctx,
         corpora,
         granularity=granularity,
-        combined=combined,
-        per_corpus=per_corpus,
+        include_combined=include_combined,
+        include_per_corpus=include_per_corpus,
         strategy=strategy,
         validated_date_range=date_range,
     )
@@ -242,8 +244,8 @@ async def token_distribution(
     ctx: CtxDep,
     corpora: params.CorporaParam,
     granularity: params.GranularityParam = GranularityValues.year,
-    combined: params.CombinedParam = True,
-    per_corpus: params.PerCorpusParam = True,
+    include_combined: params.IncludeCombinedParam = True,
+    include_per_corpus: params.IncludePerCorpusParam = True,
     strategy: params.StrategyParam = params.StrategyValues.some_overlaps,
     date_from: DateFromParam = None,
     date_to: DateToParam = None,
@@ -254,8 +256,8 @@ async def token_distribution(
         ctx: The request context.
         corpora: Comma-separated list of corpora.
         granularity: Granularity of result.
-        combined: Whether to include combined results.
-        per_corpus: Whether to include results per corpus.
+        include_combined: Whether to include combined results.
+        include_per_corpus: Whether to include results per corpus.
         strategy: Strategy for date range matching.
         date_from: Start date for filtering (inclusive).
         date_to: End date for filtering (inclusive).
@@ -269,8 +271,8 @@ async def token_distribution(
         ctx,
         corpora,
         granularity,
-        combined,
-        per_corpus,
+        include_combined,
+        include_per_corpus,
         strategy,
         date_range,
     )
@@ -280,8 +282,8 @@ async def get_token_distribution(
     ctx: CtxDep,
     corpora: list[str],
     granularity: GranularityValues = GranularityValues.year,
-    combined: bool = True,
-    per_corpus: bool = True,
+    include_combined: bool = True,
+    include_per_corpus: bool = True,
     strategy: params.StrategyValues = params.StrategyValues.some_overlaps,
     date_from: str | None = None,
     date_to: str | None = None,
@@ -294,8 +296,8 @@ async def get_token_distribution(
         ctx: The request context.
         corpora: List of corpora.
         granularity: Granularity of result.
-        combined: Whether to include combined results.
-        per_corpus: Whether to include results per corpus.
+        include_combined: Whether to include combined results.
+        include_per_corpus: Whether to include results per corpus.
         strategy: Strategy for date range matching.
         date_from: Start date for filtering (inclusive).
         date_to: End date for filtering (inclusive).
@@ -332,7 +334,7 @@ async def get_token_distribution(
     if cache_enabled:
         # Check if whole query is cached
         combined_checksum = utils.get_hash(
-            (granularity, strategy, combined, per_corpus, date_from, date_to, sorted(corpora))
+            (granularity, strategy, include_combined, include_per_corpus, date_from, date_to, sorted(corpora))
         )
         cache_prefix = await caching.cache_prefix(ctx.cache)
         cache_combined_key = f"{cache_prefix}:timespan_{combined_checksum}"
@@ -455,8 +457,8 @@ async def get_token_distribution(
         cached_data,
         rows,
         granularity,
-        combined,
-        per_corpus,
+        include_combined,
+        include_per_corpus,
         strategy,
         row_count=len(cached_data) + len(rows),
     )
@@ -501,8 +503,8 @@ def _calculate_token_distribution_from_rows(
     cached_data: list[Mapping[str, Any]],
     rows: list[Mapping[str, Any]],
     granularity: GranularityValues,
-    combined: bool,
-    per_corpus: bool,
+    include_combined: bool,
+    include_per_corpus: bool,
     strategy: params.StrategyValues,
 ) -> dict:
     """Calculate token distribution output from cached and newly fetched rows.
@@ -513,8 +515,8 @@ def _calculate_token_distribution_from_rows(
     return build_token_distribution(
         itertools.chain(cached_data, rows),
         granularity=granularity,
-        combined=combined,
-        per_corpus=per_corpus,
+        include_combined=include_combined,
+        include_per_corpus=include_per_corpus,
         strategy=strategy,
     )
 
@@ -611,8 +613,8 @@ def _calculate_series_sweepline(
 def build_token_distribution(
     timedata: Iterable[Mapping],
     granularity: GranularityValues = GranularityValues.year,
-    combined: bool = True,
-    per_corpus: bool = True,
+    include_combined: bool = True,
+    include_per_corpus: bool = True,
     strategy: params.StrategyValues = params.StrategyValues.some_overlaps,
 ) -> dict:
     """Aggregate corpus time intervals into token counts grouped by time period.
@@ -621,8 +623,8 @@ def build_token_distribution(
         timedata: List of time data dictionaries with keys 'corpus', 'df' (datefrom), 'dt' (dateto), and 'sum' (token
             count).
         granularity: Granularity of result.
-        combined: Whether to include combined results.
-        per_corpus: Whether to include results per corpus.
+        include_combined: Whether to include combined results.
+        include_per_corpus: Whether to include results per corpus.
         strategy: Strategy for date range matching.
 
     Returns:
@@ -674,20 +676,20 @@ def build_token_distribution(
                 continue
 
         interval = (datefrom_short, dateto_short, int(row["sum"]))
-        if combined:
+        if include_combined:
             intervals["__combined__"].append(interval)
             nodes["__combined__"].add(("f", datefrom_short))
             nodes["__combined__"].add(("t", dateto_short))
-        if per_corpus:
+        if include_per_corpus:
             intervals[corpus].append(interval)
             nodes[corpus].add(("f", datefrom_short))
             nodes[corpus].add(("t", dateto_short))
 
     corpusnodes = {k: sorted(v, key=lambda x: (x[1] or 0, x[0])) for k, v in nodes.items()}
     result: dict[str, Any] = {}
-    if per_corpus:
+    if include_per_corpus:
         result["corpora"] = {}
-    if combined:
+    if include_combined:
         result["combined"] = {}
 
     for corpus, nodes_ in corpusnodes.items():
@@ -713,7 +715,7 @@ def build_token_distribution(
         # Segments are generated from node boundaries sorted by date; therefore start points are monotonic
         data = _calculate_series_sweepline(segments, corpus_intervals, granularity)
 
-        if combined and corpus == "__combined__":
+        if include_combined and corpus == "__combined__":
             result["combined"] = data
         else:
             result["corpora"][corpus] = data
