@@ -824,7 +824,7 @@ async def perform_frequency_query(
                 yield {f"progress_{frequency_state.progress_count}": c}
                 frequency_state.progress_count += 1
 
-    result["count"] = len(total_stats[0]["rows"])
+    result["total_rows"] = len(total_stats[0]["rows"])
 
     if abort_signal and abort_signal.is_set():
         return
