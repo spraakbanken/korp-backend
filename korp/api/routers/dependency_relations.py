@@ -2212,16 +2212,16 @@ async def _relations_sentences_impl(
             sentence = result_temp["kwic"][i]
             sid = sentence["structs"]["sentence_id"]
             relation_positions = sids[sid][0]
-            sentence_start = sentence["match"]["start"]
-            sentence["match"]["start"] = sentence_start + min(map(int, relation_positions)) - 1
-            sentence["match"]["end"] = sentence_start + max(map(int, relation_positions))
+            sentence_start = sentence["matches"][0]["start"]
+            sentence["matches"][0]["start"] = sentence_start + min(map(int, relation_positions)) - 1
+            sentence["matches"][0]["end"] = sentence_start + max(map(int, relation_positions))
 
             # If the same relation appears more than once in the same sentence,
             # append copies of the sentence as separate results
             for relation_positions in sids[sid][1:]:
                 copy_sentence = deepcopy(sentence)
-                copy_sentence["match"]["start"] = sentence_start + min(map(int, relation_positions)) - 1
-                copy_sentence["match"]["end"] = sentence_start + max(map(int, relation_positions))
+                copy_sentence["matches"][0]["start"] = sentence_start + min(map(int, relation_positions)) - 1
+                copy_sentence["matches"][0]["end"] = sentence_start + max(map(int, relation_positions))
                 result_temp["kwic"].insert(i + 1, copy_sentence)
 
         result.setdefault("kwic", []).extend(result_temp["kwic"])

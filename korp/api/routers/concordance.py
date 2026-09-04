@@ -53,7 +53,7 @@ Context is controlled by `default_context`, or per corpus with `context`, `left_
 `left_context` and `right_context` let you request asymmetric context around the match.
 
 When `in_order=false`, token order in the CQP query does not matter. Each occurrence of a matched query token is
-highlighted separately, so the row's `match` field becomes a list of match objects. Free-order searches require
+highlighted separately, and the row's `matches` list contains multiple match objects. Free-order searches require
 `default_within` or `within`. Not all CQP queries can be run in free order; if the query cannot be executed in free
 order, an error is returned.
 
@@ -111,8 +111,8 @@ InOrderParam: TypeAlias = Annotated[
     Query(
         description=(
             "Whether token order in the CQP query should matter. When set to `false`, Korp performs a free-order "
-            "search, highlights each matched query token separately, and returns `match` as a list. Free-order search "
-            "also requires `default_within` or `within`."
+            "search, highlights each matched query token separately, and returns all match positions in `matches`. "
+            "Free-order search also requires `default_within` or `within`."
         )
     ),
 ]
@@ -240,11 +240,11 @@ class KWICRow(BaseModel):
     """A single concordance row."""
 
     corpus: str = Field(..., description="Corpus that produced this KWIC row.", examples=["SUC3"])
-    match: Match | list[Match] = Field(
+    matches: list[Match] = Field(
         ...,
         description=(
-            "Match position in the returned context. For free-order searches (`in_order=false`), this is a list with "
-            "one match object per highlighted token."
+            "Match positions in the returned context. Ordered searches contain one match object; free-order searches "
+            "contain one object per highlighted token."
         ),
     )
     structs: dict[str, str | None] | SkipJsonSchema[None] = Field(
@@ -1376,7 +1376,7 @@ def query_parse_lines(
         # Build KWIC row
         kwic_row: dict[str, Any] = {
             "corpus": corpus,
-            "match": match if not free_search else [match],
+            "matches": [match],
         }
         if linestructs:
             kwic_row["structs"] = linestructs
@@ -1386,7 +1386,7 @@ def query_parse_lines(
         if free_search:
             line_span = (match["position"] - match["start"], match["position"] - match["start"] + len(tokens) - 1)
             if line_span == last_line_span:
-                kwic[-1]["match"].append(match)
+                kwic[-1]["matches"].append(match)
             else:
                 kwic.append(kwic_row)
             last_line_span = line_span
