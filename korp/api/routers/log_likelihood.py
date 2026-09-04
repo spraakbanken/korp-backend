@@ -327,9 +327,6 @@ async def log_likelihood(
     group_by_struct: frequencies.GroupByStructParam = None,
     within: params.WithinParam = None,
     default_within: params.DefaultWithinParam = None,
-    # cut: int | None = None,
-    offset: frequencies.OffsetParam = 0,
-    limit: frequencies.LimitParam = 0,
     ignore_case: frequencies.IgnoreCaseParam = None,
     relative_to_struct: frequencies.RelativeToStructParam = None,
     split: params.SplitParam = None,
@@ -363,8 +360,8 @@ async def log_likelihood(
         max_values_per_set=max_values_per_set,
         simple=False,
         expand_prequeries=expand_prequeries,
-        offset=offset,
-        limit=limit,
+        offset=0,
+        limit=0,
     )
     request_state = _LogLikelihoodRequestState(
         frequency_params=frequency_params,
