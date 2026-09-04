@@ -29,7 +29,7 @@ _API_DOCUMENTATION_STRUCTURE = [
     {
         "name": "Corpus Information",
         "description": "Routes for retrieving corpus metadata and configuration.",
-        "routes": ["/info", "/corpora/info", "/attribute_values", "/corpora/config"],
+        "routes": ["/info", "/corpora/info", "/attribute-values", "/corpora/config"],
     },
     {
         "name": "Concordance",
@@ -43,19 +43,19 @@ _API_DOCUMENTATION_STRUCTURE = [
             "/frequencies",
             "/frequencies/corpus",
             "/frequencies/time",
-            "/token_distribution",
-            "/log_likelihood",
-            "/lexeme_counts",
+            "/token-distribution",
+            "/log-likelihood",
+            "/lexeme-counts",
         ],
     },
     {
         "name": "Dependency Relations",
         "description": "Routes for querying dependency relation statistics.",
         "routes": [
-            "/dependency_relations",
-            "/dependency_relations/time",
-            "/dependency_relations/sentences",
-            "/dependency_relations/time/sentences",
+            "/dependency-relations",
+            "/dependency-relations/time",
+            "/dependency-relations/sentences",
+            "/dependency-relations/time/sentences",
         ],
     },
     {

@@ -28,7 +28,7 @@ with `0`.
 
 Get the number of occurrences of two lexemes in one corpus:
 
-`/lexeme_counts?lexemes=ge..vb.1,ta..vb.1&corpora=ROMI`
+`/lexeme-counts?lexemes=ge..vb.1,ta..vb.1&corpora=ROMI`
 """
 
 CorporaParamOptional: TypeAlias = Annotated[
@@ -55,7 +55,7 @@ LexemesParam: TypeAlias = Annotated[
 
 
 class LexemeCountResponse(schemas.CommonResponse):
-    """Response model for `/lexeme_counts` route."""
+    """Response model for `/lexeme-counts` route."""
 
     lexeme_counts: dict[str, int] = Field(
         ...,
@@ -96,13 +96,13 @@ async def _lexeme_counts_stream(ctx: CtxDep, lexemes: list[str], corpora: list[s
 
 
 @router.get(
-    "/lexeme_counts",
+    "/lexeme-counts",
     response_model=None,
     responses=docs_response(LexemeCountResponse),
     summary="Lexeme Statistics",
     description=LEXEME_COUNT_DESCRIPTION,
 )
-@router.post("/lexeme_counts", response_model=None, include_in_schema=False)
+@router.post("/lexeme-counts", response_model=None, include_in_schema=False)
 @api_handler
 async def lexeme_counts(
     ctx: CtxDep,

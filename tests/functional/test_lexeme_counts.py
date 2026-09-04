@@ -1,4 +1,4 @@
-"""Pytest tests for the Korp `/lexeme_counts` endpoint."""
+"""Pytest tests for the Korp `/lexeme-counts` endpoint."""
 
 from collections.abc import Callable
 
@@ -9,10 +9,10 @@ from tests.testutils import make_liststr
 
 @pytest.fixture
 def lexeme_counts(get_json: Callable, database_tables: Callable) -> Callable:
-    """Return function returning JSON response for `/lexeme_counts` to corpora.
+    """Return function returning JSON response for `/lexeme-counts` to corpora.
 
     The returned function takes as its parameters lexemes, a corpus or a list of corpora, possible additional request
-    parameters and Korp configuration parameters. It returns the JSON response for `/lexeme_counts` to the specified
+    parameters and Korp configuration parameters. It returns the JSON response for `/lexeme-counts` to the specified
     corpora with the given parameters (and cache=false). It imports the lexeme_counts database data for the given
     corpora.
     """
@@ -27,17 +27,17 @@ def lexeme_counts(get_json: Callable, database_tables: Callable) -> Callable:
         }
         database_tables(corpora, "lexeme_counts")
         query_params.update(params or {})
-        return get_json("/lexeme_counts", params=query_params, config=config)
+        return get_json("/lexeme-counts", params=query_params, config=config)
 
     return _lexeme_counts
 
 
 class TestLexemeCounts:
-    """Tests for `/lexeme_counts`."""
+    """Tests for `/lexeme-counts`."""
 
     @staticmethod
     def test_lexeme_counts_single_corpus(lexeme_counts: Callable) -> None:
-        """Test `/lexeme_counts` on a single corpus and single lexeme."""
+        """Test `/lexeme-counts` on a single corpus and single lexeme."""
         lexeme = "test..nn.1"
         corpus = "testcorpus1"
         data = lexeme_counts(lexeme, corpus)

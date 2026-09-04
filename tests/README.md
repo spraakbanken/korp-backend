@@ -132,11 +132,11 @@ database table data. For example:
 
 ```python
 def test_lexeme_counts_single_corpus(get_json, database_tables):
-    """Test `/lexeme_counts` on a single corpus."""
+    """Test `/lexeme-counts` on a single corpus."""
     database_tables("testcorpus1", "lexeme_counts")
     lexeme = "test..nn.1"
     response = get_json(
-        "/lexeme_counts",
+        "/lexeme-counts",
         params={
             "corpus": "testcorpus1",
             "lexeme": lexeme,

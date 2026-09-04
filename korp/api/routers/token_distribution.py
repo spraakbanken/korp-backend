@@ -52,7 +52,7 @@ Use `date_from` and `date_to` together to limit the date range.
 
 Show yearly token distribution for a corpus:
 
-`/token_distribution?corpora=VIVILL&granularity=year`
+`/token-distribution?corpora=VIVILL&granularity=year`
 """
 
 DateFromParam: TypeAlias = Annotated[
@@ -119,7 +119,7 @@ def validate_date_range(date_from: str | None, date_to: str | None) -> Validated
 
 
 class TokenDistributionResponse(schemas.CommonResponse):
-    """Response model for `/token_distribution` route."""
+    """Response model for `/token-distribution` route."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -230,13 +230,13 @@ async def _token_distribution_stream(
 
 
 @router.get(
-    "/token_distribution",
+    "/token-distribution",
     response_model=None,
     responses=docs_response(TokenDistributionResponse),
     summary="Token Distribution",
     description=TOKEN_DISTRIBUTION_DESCRIPTION,
 )
-@router.post("/token_distribution", response_model=None, include_in_schema=False)
+@router.post("/token-distribution", response_model=None, include_in_schema=False)
 @api_handler
 async def token_distribution(
     ctx: CtxDep,

@@ -50,7 +50,7 @@ before the final result in the streamed JSON object.
 
 Get all authors and their titles with token counts:
 
-`/attribute_values?corpora=ROMI&attributes=text_author>text_title&include_counts=true`
+`/attribute-values?corpora=ROMI&attributes=text_author>text_title&include_counts=true`
 """
 
 AttrParam: TypeAlias = Annotated[
@@ -88,7 +88,7 @@ AttributeValuesData = dict[str, list[str] | dict[str, Any]]
 
 
 class AttrValuesResponse(schemas.CommonResponse):
-    """Response model for `/attribute_values` route."""
+    """Response model for `/attribute-values` route."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -119,13 +119,13 @@ class AttrValuesResponse(schemas.CommonResponse):
 
 
 @router.get(
-    "/attribute_values",
+    "/attribute-values",
     response_model=None,
     responses=handler.docs_response(AttrValuesResponse),
     summary="Attribute Values",
     description=ATTRIBUTE_VALUES_DESCRIPTION,
 )
-@router.post("/attribute_values", response_model=None, include_in_schema=False)
+@router.post("/attribute-values", response_model=None, include_in_schema=False)
 @api_handler
 async def attribute_values(
     ctx: CtxDep,

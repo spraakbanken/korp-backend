@@ -45,7 +45,7 @@ Most grouping and value-normalization parameters are shared with `/frequencies`,
 
 Compare nouns in two corpora and return up to ten values from each side:
 
-`/log_likelihood?set1_cqp=[pos="NN"]&set2_cqp=[pos="NN"]&group_by=word&max_results=10&set1_corpora=ROMI&set2_corpora=GP2012`
+`/log-likelihood?set1_cqp=[pos="NN"]&set2_cqp=[pos="NN"]&group_by=word&max_results=10&set1_corpora=ROMI&set2_corpora=GP2012`
 """
 
 Set1CQPParam: TypeAlias = Annotated[
@@ -105,7 +105,7 @@ class LogLikelihoodRow(BaseModel):
 
 
 class LogLikelihoodResponse(schemas.CommonResponse):
-    """Response model for `/log_likelihood` route."""
+    """Response model for `/log-likelihood` route."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -308,13 +308,13 @@ async def _log_likelihood_stream(
 
 
 @router.get(
-    "/log_likelihood",
+    "/log-likelihood",
     response_model=None,
     responses=docs_response(LogLikelihoodResponse),
     summary="Log-Likelihood Comparison",
     description=LOGLIKE_DESCRIPTION,
 )
-@router.post("/log_likelihood", response_model=None, include_in_schema=False)
+@router.post("/log-likelihood", response_model=None, include_in_schema=False)
 @api_handler
 async def log_likelihood(
     ctx: CtxDep,

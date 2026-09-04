@@ -82,20 +82,20 @@ DEPENDENCY_RELATIONS_DESCRIPTION = """Get dependency relations for a word or lex
 
 The route looks up dependency relations where the requested value occurs as either the head or the dependent. Each
 relation row identifies the head, dependency relation, dependent, part-of-speech tags, optional dependent prefix, and
-source ids that can be passed to `/dependency_relations/sentences`.
+source ids that can be passed to `/dependency-relations/sentences`.
 
 The statistical measures included in each row are controlled by `measures`. `freq` is the absolute relation frequency,
 `freq_relative` is the relation frequency per million tokens, `mi` is lexicographer's mutual information, and `rmi` is
 relative MI.
 
-By default `/dependency_relations` returns overall relation statistics. Set `include_time=true` to also include
-time-sliced data in `relations_time`; use `/dependency_relations/time` when you only want the time-sliced view.
+By default `/dependency-relations` returns overall relation statistics. Set `include_time=true` to also include
+time-sliced data in `relations_time`; use `/dependency-relations/time` when you only want the time-sliced view.
 
 ### Example
 
 Get dependency relations for the lexeme `ge..vb.1`:
 
-`/dependency_relations?term=ge..vb.1&term_type=lexeme&corpora=ROMI`
+`/dependency-relations?term=ge..vb.1&term_type=lexeme&corpora=ROMI`
 """
 
 DEPENDENCY_RELATIONS_TIME_DESCRIPTION = """Get dependency relations grouped by year or multi-year period.
@@ -110,15 +110,15 @@ those relations.
 
 DEPENDENCY_RELATIONS_SENTENCES_DESCRIPTION = """Return KWIC sentences containing dependency relation sources.
 
-Use the `source` ids returned by `/dependency_relations` as the comma-separated `sources` parameter to retrieve the
+Use the `source` ids returned by `/dependency-relations` as the comma-separated `sources` parameter to retrieve the
 corpus sentences where those relation instances occur. The sentence rows use the same KWIC structure as `/concordance`,
 with the relation span highlighted as the match.
 """
 
 DEPENDENCY_RELATIONS_TIME_SENTENCES_DESCRIPTION = """Return KWIC sentences for time-sliced dependency relation sources.
 
-This is the sentence lookup companion to `/dependency_relations/time`. It returns the same KWIC-style structure as
-`/dependency_relations/sentences`.
+This is the sentence lookup companion to `/dependency-relations/time`. It returns the same KWIC-style structure as
+`/dependency-relations/sentences`.
 """
 
 TermParam: TypeAlias = Annotated[
@@ -162,7 +162,7 @@ RelationsSortParam: TypeAlias = Annotated[
 
 RelationsIncludeTimeParam: TypeAlias = Annotated[
     bool,
-    Query(description="Whether `/dependency_relations` should include time-sliced results in `relations_time`."),
+    Query(description="Whether `/dependency-relations` should include time-sliced results in `relations_time`."),
 ]
 
 PeriodSizeParam: TypeAlias = Annotated[
@@ -273,8 +273,8 @@ class RelationRow(BaseModel):
     source: list[str] = Field(
         ...,
         description=(
-            "Source ids for retrieving example sentences. Use `/dependency_relations/sentences` for overall relation "
-            "rows and `/dependency_relations/time/sentences` for time-sliced relation rows."
+            "Source ids for retrieving example sentences. Use `/dependency-relations/sentences` for overall relation "
+            "rows and `/dependency-relations/time/sentences` for time-sliced relation rows."
         ),
         examples=[["ROMI:253662"]],
     )
@@ -300,7 +300,7 @@ class RelationsRange(BaseModel):
 
 
 class RelationsResponse(schemas.CommonResponse):
-    """Response model for `/dependency_relations` and `/dependency_relations/time` routes."""
+    """Response model for `/dependency-relations` and `/dependency-relations/time` routes."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -312,7 +312,7 @@ class RelationsResponse(schemas.CommonResponse):
         None,
         description=(
             "Time-sliced relation rows keyed by year or period. Included when `include_time=true` on "
-            "`/dependency_relations` or when using `/dependency_relations/time`."
+            "`/dependency-relations` or when using `/dependency-relations/time`."
         ),
     )
     token_frequencies: dict[str, int] | SkipJsonSchema[None] = Field(
@@ -1671,7 +1671,7 @@ async def _dependency_relations_impl(
     measures: Container[Measures],
     abort_signal: AbortSignal | None = None,
 ) -> AsyncIterator[dict]:
-    """Shared implementation for `/dependency_relations` and `/dependency_relations/time`.
+    """Shared implementation for `/dependency-relations` and `/dependency-relations/time`.
 
     Args:
         ctx: Common dependencies.
@@ -1957,13 +1957,13 @@ async def _dependency_relations_impl(
 
 
 @router.get(
-    "/dependency_relations",
+    "/dependency-relations",
     response_model=None,
     responses=docs_response(RelationsResponse),
     summary="Dependency Relations",
     description=DEPENDENCY_RELATIONS_DESCRIPTION,
 )
-@router.post("/dependency_relations", response_model=None, include_in_schema=False)
+@router.post("/dependency-relations", response_model=None, include_in_schema=False)
 @api_handler
 async def relations(
     ctx: CtxDep,
@@ -2017,13 +2017,13 @@ async def relations(
 
 
 @router.get(
-    "/dependency_relations/time",
+    "/dependency-relations/time",
     response_model=None,
     responses=docs_response(RelationsResponse),
     summary="Dependency Relations Over Time",
     description=DEPENDENCY_RELATIONS_TIME_DESCRIPTION,
 )
-@router.post("/dependency_relations/time", response_model=None, include_in_schema=False)
+@router.post("/dependency-relations/time", response_model=None, include_in_schema=False)
 @api_handler
 async def relations_time(
     ctx: CtxDep,
@@ -2259,13 +2259,13 @@ async def _relations_sentences_stream(
 
 
 @router.get(
-    "/dependency_relations/sentences",
+    "/dependency-relations/sentences",
     response_model=None,
     responses=docs_response(RelationsSentencesResponse),
     summary="Dependency Relations Sentences",
     description=DEPENDENCY_RELATIONS_SENTENCES_DESCRIPTION,
 )
-@router.post("/dependency_relations/sentences", response_model=None, include_in_schema=False)
+@router.post("/dependency-relations/sentences", response_model=None, include_in_schema=False)
 @api_handler
 async def relations_sentences(
     ctx: CtxDep,
@@ -2311,13 +2311,13 @@ async def relations_sentences(
 
 
 @router.get(
-    "/dependency_relations/time/sentences",
+    "/dependency-relations/time/sentences",
     response_model=None,
     responses=docs_response(RelationsSentencesResponse),
     summary="Dependency Relations Time Sentences",
     description=DEPENDENCY_RELATIONS_TIME_SENTENCES_DESCRIPTION,
 )
-@router.post("/dependency_relations/time/sentences", response_model=None, include_in_schema=False)
+@router.post("/dependency-relations/time/sentences", response_model=None, include_in_schema=False)
 @api_handler
 async def relations_time_sentences(
     ctx: CtxDep,
