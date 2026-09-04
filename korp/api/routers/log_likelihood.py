@@ -153,16 +153,16 @@ async def _log_likelihood_stream(
 
     same_cqp = set1_cqp == set2_cqp
 
-    def _make_freq_key(value: dict) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    def _make_freq_key(value: dict[str, list[str]]) -> tuple[tuple[str, tuple[str, ...]], ...]:
         """Create a hashable frequency key from a frequency result row's value dict.
 
         Args:
-            value: A dict mapping CWB attribute names to their values.
+            value: A dict mapping CWB attribute names to arrays of values.
 
         Returns:
             A sorted tuple of (attr_name, values_tuple) pairs.
         """
-        return tuple((k, v if isinstance(v, tuple) else (v,)) for k, v in sorted(value.items()))
+        return tuple((k, tuple(v)) for k, v in sorted(value.items()))
 
     def compute_loglike(wf1: int, tot1: int, wf2: int, tot2: int) -> float:
         """Compute log-likelihood for a single pair.
@@ -278,12 +278,8 @@ async def _log_likelihood_stream(
         frequency_params_2.corpora = set2_corpora
         frequency_params_2.cqp_query = [set2_cqp]
         frequency_result_1, frequency_result_2 = await asyncio.gather(
-            utils.async_generator_to_dict(
-                frequencies.perform_frequency_query(frequency_params, ctx, abort_signal)
-            ),
-            utils.async_generator_to_dict(
-                frequencies.perform_frequency_query(frequency_params_2, ctx, abort_signal)
-            ),
+            utils.async_generator_to_dict(frequencies.perform_frequency_query(frequency_params, ctx, abort_signal)),
+            utils.async_generator_to_dict(frequencies.perform_frequency_query(frequency_params_2, ctx, abort_signal)),
         )
 
         sets = [{}, {}]

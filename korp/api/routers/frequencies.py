@@ -50,8 +50,8 @@ the value of a specific token in a multi-token query, mark that token as the CQP
 `[pos = "JJ"] @[pos = "NN"]`.
 
 Repeat the `cqp` parameter to run prequeries in sequence. Repeat the `subcqp` parameter to add subqueries over the final
-main-query result. When subqueries are used, `combined` and each entry in `corpora` become arrays: the first item is the
-main query result and the following items are the subquery results, each with a `cqp` field.
+main-query result. `combined` and each entry in `corpora` are always arrays: the first item is the main query result
+and the following items are the subquery results, each with a `cqp` field.
 
 When `incremental=true`, progress keys such as `progress_corpora` and `progress_0` may be included before the final
 statistics in the streamed JSON object.
@@ -80,9 +80,9 @@ means there is no corpus data for that period; `0` means data exists but the que
 
 {params.TIME_STRATEGY_DESCRIPTION}
 
-Repeat the `subcqp` parameter to add subqueries over the final main-query result. When subqueries are used, `combined`
-and each entry in `corpora` become arrays: the first item is the main query result and the following items are the
-subquery results, each with a `cqp` field.
+Repeat the `subcqp` parameter to add subqueries over the final main-query result. `combined` and each entry in `corpora`
+are always arrays: the first item is the main query result and the following items are the subquery results, each with a
+`cqp` field.
 """
 
 GroupByParam: TypeAlias = Annotated[
@@ -188,11 +188,11 @@ class FrequencySums(BaseModel):
 class FrequencyRow(BaseModel):
     """A grouped frequency row."""
 
-    value: dict[str, str | list[str]] = Field(
+    value: dict[str, list[str]] = Field(
         ...,
         description=(
-            "Grouped CWB attribute values. Positional values are arrays with one value per token in the match; "
-            "structural values normally contain one value."
+            "Grouped CWB attribute values. Every value is an array: positional values contain one value per token in "
+            "the match, while structural values normally contain one value."
         ),
         examples=[{"word": ["run"], "pos": ["VB"]}, {"text_author": ["Söderberg, Hjalmar"]}],
     )
@@ -215,19 +215,13 @@ class FrequenciesResponse(schemas.CommonResponse):
 
     model_config = ConfigDict(extra="allow")
 
-    corpora: dict[str, FrequencyStatistics | list[FrequencyStatistics]] = Field(
+    corpora: dict[str, list[FrequencyStatistics]] = Field(
         ...,
-        description=(
-            "Statistics per corpus. Values are arrays when `subcqp` is used; otherwise each value is one statistics "
-            "object."
-        ),
+        description="Statistics per corpus, always as arrays. The main query is first, followed by `subcqp` results.",
     )
-    combined: FrequencyStatistics | list[FrequencyStatistics] = Field(
+    combined: list[FrequencyStatistics] = Field(
         ...,
-        description=(
-            "Combined statistics for all corpora. This is an array when `subcqp` is used; otherwise it is one "
-            "statistics object."
-        ),
+        description="Combined statistics for all corpora, always as an array with the main query first.",
     )
     count: int = Field(
         ..., description="Total number of distinct grouped values before response slicing.", examples=[241]
@@ -259,7 +253,7 @@ class CorpusFrequenciesResponse(schemas.CommonResponse):
 class TimeStatistics(BaseModel):
     """Time-series statistics for one query or subquery."""
 
-    absolute: dict[str, int | None] | int = Field(
+    absolute: dict[str, int | None] = Field(
         ...,
         description=(
             "Absolute frequencies per time period. A value of `null` means there is no corpus data for that period; "
@@ -267,7 +261,7 @@ class TimeStatistics(BaseModel):
         ),
         examples=[{"2017": 354, "2018": 115, "2019": None}],
     )
-    relative: dict[str, float | None] | float = Field(
+    relative: dict[str, float | None] = Field(
         ...,
         description=(
             "Relative frequencies per time period. A value of `null` means there is no corpus data for that period; "
@@ -286,18 +280,18 @@ class FrequenciesTimeResponse(schemas.CommonResponse):
 
     model_config = ConfigDict(extra="allow")
 
-    corpora: dict[str, TimeStatistics | list[TimeStatistics]] | SkipJsonSchema[None] = Field(
+    corpora: dict[str, list[TimeStatistics]] | SkipJsonSchema[None] = Field(
         None,
         description=(
-            "Time-series statistics per corpus. Omitted when `per_corpus=false`. Values are arrays when `subcqp` is "
-            "used; otherwise each value is one statistics object."
+            "Time-series statistics per corpus, always as arrays. Omitted when `per_corpus=false`. The main query is "
+            "first, followed by `subcqp` results."
         ),
     )
-    combined: TimeStatistics | list[TimeStatistics] | SkipJsonSchema[None] = Field(
+    combined: list[TimeStatistics] | SkipJsonSchema[None] = Field(
         None,
         description=(
-            "Combined time-series statistics for all corpora. Omitted when `combined=false`. This is an array when "
-            "`subcqp` is used; otherwise it is one statistics object."
+            "Combined time-series statistics for all corpora, always as an array with the main query first. Omitted "
+            "when `combined=false`."
         ),
     )
     progress_corpora: list[str] | SkipJsonSchema[None] = Field(
@@ -549,7 +543,9 @@ def _rows_to_list(rows: dict, group_by: list[tuple[str, bool]]) -> list[dict]:
     Returns:
         List of dicts with "value" key and stat values.
     """
-    return [{"value": {key[0]: ngram[i] for i, key in enumerate(group_by)}, **vals} for ngram, vals in rows.items()]
+    return [
+        {"value": {key[0]: list(ngram[i]) for i, key in enumerate(group_by)}, **vals} for ngram, vals in rows.items()
+    ]
 
 
 def _finalize_frequency_results(
@@ -699,11 +695,13 @@ async def perform_frequency_query(
         relative_to_freqs = {"combined": {}, "corpora": defaultdict(dict)}
 
         for row in relative_to_result["combined"]["rows"]:
-            relative_to_freqs["combined"][tuple(v for k, v in sorted(row["value"].items()))] = row["absolute"]
+            relative_to_freqs["combined"][tuple(tuple(v) for k, v in sorted(row["value"].items()))] = row["absolute"]
 
         for c in relative_to_result["corpora"]:
             for row in relative_to_result["corpora"][c]["rows"]:
-                relative_to_freqs["corpora"][c][tuple(v for k, v in sorted(row["value"].items()))] = row["absolute"]
+                relative_to_freqs["corpora"][c][tuple(tuple(v) for k, v in sorted(row["value"].items()))] = row[
+                    "absolute"
+                ]
 
     frequency_worker = frequency_query_worker if not simple else simple_frequency_query_worker
 
@@ -843,11 +841,7 @@ async def perform_frequency_query(
         end=end,
     )
 
-    result["combined"] = total_stats if len(total_stats) > 1 else total_stats[0]
-
-    if not subcqp:
-        for c in corpora:
-            result["corpora"][c] = result["corpora"][c][0]
+    result["combined"] = total_stats
 
     if ctx.common.debug:
         debug.update({"cqp": cqp_combined, "simple": simple})
@@ -1149,26 +1143,20 @@ async def _frequencies_time_stream(
         # Add zero values for the corpora we removed because of the selected date span
         for c in set(corpora_copy).difference(set(frequency_params.corpora)):
             result["corpora"][c] = [
-                {"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
+                {"absolute": {}, "relative": {}, "sums": {"absolute": 0, "relative": 0.0}}
                 for _ in range(len(frequency_params.subcqp) + 1)
             ]
             for i, c2 in enumerate(result["corpora"][c][1:]):
                 c2["cqp"] = frequency_params.subcqp[i]
 
-            if not frequency_params.subcqp:
-                result["corpora"][c] = result["corpora"][c][0]
-
     # Add zero values for the combined results if no corpora are within the selected date span
     if combined and not frequency_params.corpora:
         result["combined"] = [
-            {"absolute": 0, "relative": 0.0, "sums": {"absolute": 0, "relative": 0.0}}
+            {"absolute": {}, "relative": {}, "sums": {"absolute": 0, "relative": 0.0}}
             for _ in range(len(frequency_params.subcqp) + 1)
         ]
         for i, c in enumerate(result["combined"][1:]):
             c["cqp"] = frequency_params.subcqp[i]
-
-        if not frequency_params.subcqp:
-            result["combined"] = result["combined"][0]
 
         yield result
         return
@@ -1310,7 +1298,7 @@ async def _frequencies_time_stream(
                 if frequency_params.subcqp and i > 0:
                     corpus_stats[i]["cqp"] = frequency_params.subcqp[i - 1]
 
-            result["corpora"][c] = corpus_stats if len(corpus_stats) > 1 else corpus_stats[0]
+            result["corpora"][c] = corpus_stats
 
     if combined:
         total_stats = [
@@ -1349,7 +1337,7 @@ async def _frequencies_time_stream(
             if frequency_params.subcqp and i > 0:
                 total_stats[i]["cqp"] = frequency_params.subcqp[i - 1]
 
-        result["combined"] = total_stats if len(total_stats) > 1 else total_stats[0]
+        result["combined"] = total_stats
 
     yield result
 
