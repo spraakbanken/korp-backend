@@ -56,8 +56,8 @@ class TestCorpusInfo:
         data = corpus_info(corpora)
         assert len(data["corpora"]) == len(corpora)
         assert set(data["corpora"].keys()) == {corpus.upper() for corpus in corpora}
-        assert data["total_size"] == self._get_corpora_info_sum(data, "Size")
-        assert data["total_sentences"] == self._get_corpora_info_sum(data, "Sentences")
+        assert data["total_size"] == self._get_corpora_info_sum(data, "size")
+        assert data["total_sentences"] == self._get_corpora_info_sum(data, "sentences")
 
     @pytest.mark.parametrize(
         ("corpus", "attrs_p", "attrs_s", "attrs_a"),
@@ -118,6 +118,6 @@ class TestCorpusInfo:
         data = corpus_info_single(corpus)
         attrs = data["attrs"]
         assert attrs
-        assert attrs["p"] == attrs_p
-        assert attrs["s"] == attrs_s
-        assert attrs["a"] == attrs_a
+        assert attrs["positional"] == attrs_p
+        assert attrs["structural"] == attrs_s
+        assert attrs["alignment"] == attrs_a

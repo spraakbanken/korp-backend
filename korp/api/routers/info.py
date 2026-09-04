@@ -1,11 +1,11 @@
 """Routes for retrieving information about the Korp backend and available corpora."""
 
 import importlib.metadata
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 from fastapi import APIRouter
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 from pydantic.json_schema import SkipJsonSchema
 
 from korp import auth, caching, cqp, handler, utils
@@ -26,8 +26,9 @@ CORPUS_INFO_DESCRIPTION = """Fetch Corpus Workbench metadata for one or more cor
 
 For each requested corpus, the response contains the positional, structural, and alignment CWB attributes reported by
 CQP. These are the encoded fields used to expose corpus data, including annotations. The response also includes
-key-value metadata from CQP's `info` command and the corpus `.info` file. Common metadata keys include
-`Size`, `Sentences`, `Charset`, `FirstDate`, `LastDate`, and `Updated`, but installations may expose additional keys.
+key-value metadata from CQP's `info` command and the corpus `.info` file. Known metadata keys are exposed in
+snake_case, including `name`, `size`, `charset`, `protected`, `sentences`, `first_date`, `last_date`, and `updated`.
+Installation-specific keys are preserved under `additional` with their original names.
 
 The `total_size` and `total_sentences` fields sum the corresponding values for the requested corpora.
 """
@@ -55,19 +56,17 @@ class InfoResponse(schemas.CommonResponse):
 class CorpusAttributes(BaseModel):
     """CWB attribute names available in a corpus."""
 
-    p: list[str] = Field(
+    positional: list[str] = Field(
         ...,
         description="Names of positional CWB attributes, i.e. token-level annotations.",
         examples=[["word", "lemma", "pos"]],
     )
-    s: list[str] = Field(
+    structural: list[str] = Field(
         ...,
-        description=(
-            "Names of structural CWB attributes, usually sentence-, text-, or document-level annotations."
-        ),
+        description=("Names of structural CWB attributes, usually sentence-, text-, or document-level annotations."),
         examples=[["text", "text_id", "sentence", "sentence_id"]],
     )
-    a: list[str] = Field(
+    alignment: list[str] = Field(
         ...,
         description="Names of alignment CWB attributes for linked corpora.",
         examples=[["link_n"]],
@@ -77,43 +76,50 @@ class CorpusAttributes(BaseModel):
 class CorpusWorkbenchInfo(BaseModel):
     """Corpus metadata returned by CQP."""
 
-    model_config = ConfigDict(extra="allow")
+    name: str | SkipJsonSchema[None] = Field(
+        None,
+        description="Corpus name reported by CQP.",
+        examples=["ROMI"],
+    )
 
+    size: int | SkipJsonSchema[None] = Field(
+        None,
+        description="Number of tokens in the corpus.",
+        examples=[57169],
+    )
     charset: str | SkipJsonSchema[None] = Field(
         None,
-        alias="Charset",
         description="Character encoding of the corpus.",
         examples=["utf8"],
     )
+    protected: bool | SkipJsonSchema[None] = Field(
+        None,
+        description="Whether the corpus requires authorization.",
+        examples=[True],
+    )
+    sentences: int | SkipJsonSchema[None] = Field(
+        None,
+        description="Number of sentences in the corpus, if available.",
+        examples=[83643],
+    )
     first_date: str | SkipJsonSchema[None] = Field(
         None,
-        alias="FirstDate",
         description="Date and time of the oldest dated text in the corpus, if available.",
         examples=["1976-01-01 00:00:00"],
     )
     last_date: str | SkipJsonSchema[None] = Field(
         None,
-        alias="LastDate",
         description="Date and time of the newest dated text in the corpus, if available.",
         examples=["1990-12-31 23:59:59"],
     )
-    size: int = Field(
-        ...,
-        alias="Size",
-        description="Number of tokens in the corpus, represented as a string by CQP.",
-        examples=[2531038],
-    )
-    sentences: int | SkipJsonSchema[None] = Field(
-        None,
-        alias="Sentences",
-        description="Number of sentences in the corpus, if available.",
-        examples=[83643],
-    )
     updated: str | SkipJsonSchema[None] = Field(
         None,
-        alias="Updated",
         description="Date when the corpus was last updated, if available.",
         examples=["2018-05-13"],
+    )
+    additional: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Installation-specific metadata with the original CWB key names.",
     )
 
 
@@ -137,6 +143,54 @@ class CorpusInfoResponse(schemas.CommonResponse):
         description="Total number of sentences in the requested corpora.",
         examples=[326556],
     )
+
+
+_KNOWN_INFO_KEYS = {
+    "name": "name",
+    "size": "size",
+    "charset": "charset",
+    "protected": "protected",
+    "sentences": "sentences",
+    "firstdate": "first_date",
+    "lastdate": "last_date",
+    "updated": "updated",
+}
+
+
+def _parse_cwb_info_value(key: str, value: str) -> Any:
+    """Convert known numeric and boolean CWB metadata values to native types.
+
+    Returns:
+        The converted metadata value.
+    """
+    key_casefolded = key.casefold()
+    if key_casefolded in {"size", "sentences"} and value.isdigit():
+        return int(value)
+    if key_casefolded == "protected" and value.casefold() in {"true", "false"}:
+        return value.casefold() == "true"
+    return value
+
+
+def _normalize_cwb_info(raw_info: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize known CWB metadata keys and preserve unknown keys under `additional`.
+
+    Returns:
+        Normalized metadata mapping.
+    """
+    normalized: dict[str, Any] = {}
+    additional: dict[str, Any] = {}
+
+    for key, value in raw_info.items():
+        normalized_key = _KNOWN_INFO_KEYS.get(key.casefold()) if isinstance(key, str) else None
+        if normalized_key is None:
+            additional[key] = value
+        else:
+            normalized[normalized_key] = (
+                _parse_cwb_info_value(normalized_key, value) if isinstance(value, str) else value
+            )
+
+    normalized["additional"] = additional
+    return normalized
 
 
 @router.get("/", response_model=None, include_in_schema=False)
@@ -284,28 +338,31 @@ async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bo
 
         for c in uncached_corpora:
             # Read attributes
-            attrs = ctx.cwb.read_attributes(lines)
+            cwb_attrs = ctx.cwb.read_attributes(lines)
+            attrs = {
+                "positional": cwb_attrs["p"],
+                "structural": cwb_attrs["s"],
+                "alignment": cwb_attrs["a"],
+            }
 
             # Corpus information
-            info = {}
+            cwb_info: dict[str, Any] = {}
 
             for line in lines:
                 if line == cqp.END_OF_LINE:
                     break
                 if ":" in line and not line.endswith(":"):
                     infokey, infoval = (x.strip() for x in line.split(":", 1))
-                    if infokey in {"Size", "Sentences"} and isinstance(infoval, str) and infoval.isdigit():
-                        infoval = int(infoval)
-                    info[infokey] = infoval
+                    cwb_info[infokey] = _parse_cwb_info_value(infokey, infoval)
 
-            result["corpora"][c] = {"attrs": attrs, "info": info}
+            result["corpora"][c] = {"attrs": attrs, "info": _normalize_cwb_info(cwb_info)}
             if c in save_cache:
                 memcached_data[f"{all_prefixes[c]}:info"] = result["corpora"][c]
 
     for c in corpora:
         info = result["corpora"][c]["info"]
-        total_size += info["Size"]
-        sentences = info.get("Sentences", 0)
+        total_size += info["size"]
+        sentences = info.get("sentences", 0)
         if isinstance(sentences, int):
             total_sentences += sentences
 

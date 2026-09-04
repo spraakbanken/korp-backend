@@ -1785,7 +1785,7 @@ async def _dependency_relations_impl(
         if Measures.freq_relative in measures:
             # Avoid calling CWB if relative frequencies are not needed, to be able to test the endpoint without CWB
             corpus_data = await info.get_corpus_info(ctx=ctx, corpora=corpora, no_combined_cache=True)
-            total_corpus_size = sum(int(corpus_data["corpora"][corpus]["info"]["Size"]) for corpus in corpora)
+            total_corpus_size = sum(int(corpus_data["corpora"][corpus]["info"]["size"]) for corpus in corpora)
         else:
             total_corpus_size = 0
 

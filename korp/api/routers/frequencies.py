@@ -1055,8 +1055,8 @@ async def _resolve_frequencies_time_request(
     corpus_data = await info.get_corpus_info(ctx=ctx, corpora=frequency_params.corpora, no_combined_cache=True)
     if parsed_date_from is None or parsed_date_to is None:
         for corpus in corpus_data["corpora"].values():
-            first_date = corpus["info"].get("FirstDate")
-            last_date = corpus["info"].get("LastDate")
+            first_date = corpus["info"].get("first_date")
+            last_date = corpus["info"].get("last_date")
             if first_date and last_date:
                 first_date = utils.strptime(re.sub(r"\D", "", first_date))
                 last_date = utils.strptime(re.sub(r"\D", "", last_date))
@@ -1126,8 +1126,8 @@ async def _frequencies_time_stream(
         assert dt is not None
         # Remove corpora not within selected date span
         for c in corpus_data["corpora"]:
-            first_date = corpus_data["corpora"][c]["info"].get("FirstDate")
-            last_date = corpus_data["corpora"][c]["info"].get("LastDate")
+            first_date = corpus_data["corpora"][c]["info"].get("first_date")
+            last_date = corpus_data["corpora"][c]["info"].get("last_date")
             if first_date and last_date:
                 first_date = _parse_corpus_date(first_date)
                 last_date = _parse_corpus_date(last_date)
