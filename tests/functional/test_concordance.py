@@ -75,7 +75,7 @@ class TestConcordance:
         """Test a simple concordance search on a single corpus."""
         data = concordance_testcorpus('[lemma="this"]')
         kwic = data["kwic"]
-        assert len(kwic) == data["hits"]
+        assert len(kwic) == data["total_hits"]
 
     @staticmethod
     def test_concordance_max_kwic_rows(concordance_testcorpus_kwic_rows: Callable[[int, int], dict]) -> None:
@@ -99,7 +99,7 @@ class TestConcordance:
         # testcorpus does not contain 1,000,000 tokens, so the following should return all hits. MAX_KWIC_ROWS is tested
         # before returning the data.
         data = concordance_testcorpus_kwic_rows(0, 1000000)
-        assert len(data["kwic"]) == data["hits"]
+        assert len(data["kwic"]) == data["total_hits"]
 
     @staticmethod
     def test_concordance_invalid_cqp_surfaces_cqp_error(concordance_testcorpus: Callable[..., dict]) -> None:
@@ -119,8 +119,8 @@ class TestConcordanceSample:
         data = concordance_sample_testcorpus('[word="__definitely_not_in_testcorpus__"]')
 
         assert data["kwic"] == []
-        assert "hits" not in data
-        assert "corpus_hits" not in data
+        assert "total_hits" not in data
+        assert "hits_by_corpus" not in data
         assert "pagination_state" not in data
 
     @staticmethod
@@ -130,6 +130,6 @@ class TestConcordanceSample:
 
         assert len(data["kwic"]) == 1
         assert data["corpus_order"] == ["TESTCORPUS"]
-        assert "hits" not in data
-        assert "corpus_hits" not in data
+        assert "total_hits" not in data
+        assert "hits_by_corpus" not in data
         assert "pagination_state" not in data

@@ -41,9 +41,9 @@ annotations selected through positional CWB attributes in `attributes`, optional
 `struct_attributes`, and the match position inside the returned context.
 
 Results are grouped by corpus and returned in `corpus_order`; sorting is also done within each corpus, not globally
-across all selected corpora. Use `offset` and `limit` for pagination. The response also includes total hit counts per
-corpus and a `pagination_state` value that can be sent back with later pages of the same query to avoid recalculating
-hit distribution across corpora.
+across all selected corpora. Use `offset` and `limit` for pagination. The response includes `total_hits`, a
+`hits_by_corpus` mapping, and a `pagination_state` value that can be sent back with later pages of the same query to
+avoid recalculating hit distribution across corpora.
 
 Repeat the `cqp` parameter to run multiple queries in sequence, where each query is executed on the result of the
 previous one. When multiple `cqp` parameters are used with the default `expand_prequeries=true`, the query also needs
@@ -76,8 +76,9 @@ Processing stops as soon as one corpus produces a hit, and no full hit count is 
 The search is always sorted randomly, so the `sort` parameter from `/concordance` is not exposed here. Provide
 `random_seed` when you need reproducible sampling for the same corpus data and query parameters.
 
-The response always contains a `kwic` list. Since the route stops at the first sampled hit, it does not return `hits`,
-`corpus_hits`, or `pagination_state`; those fields would only describe the capped per-corpus sample query, not the full
+The response always contains a `kwic` list. Since the route stops at the first sampled hit, it does not return
+`total_hits`, `hits_by_corpus`, or `pagination_state`; those fields would only describe the capped per-corpus sample
+query, not the full
 set of selected corpora.
 """
 
@@ -192,7 +193,8 @@ MaxHitsPerCorpusParam: TypeAlias = Annotated[
     Query(
         description=(
             "Maximum number of hits to consider per corpus before pagination. Use this to cap expensive searches; "
-            "when it is set, `hits` and `corpus_hits` describe the capped result, not necessarily the full corpus hit "
+            "when it is set, `total_hits` and `hits_by_corpus` describe the capped result, not necessarily the full "
+            "corpus hit "
             "count."
         ),
         examples=[25],
@@ -264,9 +266,9 @@ class ConcordanceResponse(schemas.CommonResponse):
 
     model_config = ConfigDict(extra="allow")
 
-    hits: int = Field(..., description="Total number of hits across all selected corpora.", examples=[1422])
-    corpus_hits: dict[str, int] = Field(
-        ..., description="Number of hits per corpus.", examples=[{"ROMI": 1135, "SUC3": 287}]
+    total_hits: int = Field(..., description="Total number of hits across all selected corpora.", examples=[1422])
+    hits_by_corpus: dict[str, int] = Field(
+        ..., description="Number of hits grouped by corpus.", examples=[{"ROMI": 1135, "SUC3": 287}]
     )
     corpus_order: list[str] = Field(
         ...,
@@ -500,12 +502,12 @@ async def perform_query(
         debug["checksum"] = checksum
 
     total_hits = 0
-    corpus_hit_stats = {}
+    hits_by_corpus = {}
 
     # Information about which corpora have how many hits, either from pagination_state or cache
-    cached_corpus_hit_stats = {}
+    cached_hits_by_corpus = {}
 
-    # The pagination_state parameter contains previously saved info about corpus hit counts (cached_corpus_hit_stats)
+    # The pagination_state parameter contains previously saved info about corpus hit counts (cached_hits_by_corpus)
     if pagination_state:
         try:
             pagination_state = zlib.decompress(
@@ -521,12 +523,12 @@ async def perform_query(
             if saved_checksum == checksum:
                 for pair in stats_temp.split(";"):
                     corpus, hits = pair.split(":")
-                    cached_corpus_hit_stats[corpus] = int(hits)
+                    cached_hits_by_corpus[corpus] = int(hits)
             elif ctx.common.debug:
                 debug["pagination_state_checksum_mismatch"] = True
 
     # If we have no usable pagination_state, try to get cached corpus hit counts from memcached instead
-    if use_cache and not cached_corpus_hit_stats:
+    if use_cache and not cached_hits_by_corpus:
         memcached_keys = {}
         cache_prefixes = await caching.cache_prefix(ctx.cache, [corpus.split("|")[0] for corpus in corpora])
         for corpus in corpora:
@@ -535,17 +537,17 @@ async def perform_query(
             )
             memcached_keys[f"{cache_prefixes[corpus.split('|')[0]]}:concordance_size_{corpus_checksum}"] = corpus
 
-        cached_corpus_hits = await ctx.cache.get_many(memcached_keys.keys())
-        for key in cached_corpus_hits:
-            cached_corpus_hit_stats[memcached_keys[key]] = cached_corpus_hits[key]
+        cached_hit_counts = await ctx.cache.get_many(memcached_keys.keys())
+        for key in cached_hit_counts:
+            cached_hits_by_corpus[memcached_keys[key]] = cached_hit_counts[key]
 
     start_local = start
     end_local = end
 
-    if cached_corpus_hit_stats:
+    if cached_hits_by_corpus:
         if ctx.common.debug:
-            debug["cache_coverage"] = f"{len(cached_corpus_hit_stats)}/{len(corpora)}"
-        complete_hits = set(corpora) == set(cached_corpus_hit_stats.keys())
+            debug["cache_coverage"] = f"{len(cached_hits_by_corpus)}/{len(corpora)}"
+        complete_hits = set(corpora) == set(cached_hits_by_corpus.keys())
     else:
         complete_hits = False
 
@@ -553,11 +555,11 @@ async def perform_query(
         return
 
     if complete_hits:
-        # We have cached_corpus_hit_stats available for all corpora, so calculate which corpora need to be queried and
+        # We have cached hit counts available for all corpora, so calculate which corpora need to be queried and
         # then query them in parallel
-        corpora_hits = which_hits(corpora, cached_corpus_hit_stats, start, end)
-        total_hits = sum(cached_corpus_hit_stats.values())
-        corpus_hit_stats = cached_corpus_hit_stats
+        corpora_hits = which_hits(corpora, cached_hits_by_corpus, start, end)
+        total_hits = sum(cached_hits_by_corpus.values())
+        hits_by_corpus = cached_hits_by_corpus
         corpora_kwics = {}
         progress_count = 0
 
@@ -617,7 +619,7 @@ async def perform_query(
                 if corpus in corpora_hits:
                     result["kwic"].extend(corpora_kwics[corpus])
     else:
-        # cached_corpus_hit_stats is missing or incomplete, so we need to query the corpora in
+        # cached_hits_by_corpus is missing or incomplete, so we need to query the corpora in
         # serial until we have the needed rows, and then query the remaining corpora
         # in parallel to get number of hits.
         if incremental:
@@ -635,8 +637,8 @@ async def perform_query(
             skip_corpus = False
             nr_hits = 0
             kwic = []
-            if corpus in cached_corpus_hit_stats:
-                nr_hits = cached_corpus_hit_stats[corpus]
+            if corpus in cached_hits_by_corpus:
+                nr_hits = cached_hits_by_corpus[corpus]
                 if nr_hits - 1 < start_local:
                     kwic = []
                     skip_corpus = True
@@ -656,7 +658,7 @@ async def perform_query(
                     )
                 )
 
-            corpus_hit_stats[corpus] = nr_hits
+            hits_by_corpus[corpus] = nr_hits
             total_hits += nr_hits
 
             # Calculate which hits from next corpus we need, if any
@@ -675,11 +677,11 @@ async def perform_query(
             result = {}
 
         if rest_corpora:
-            if cached_corpus_hit_stats:
+            if cached_hits_by_corpus:
                 for corpus in rest_corpora:
-                    if corpus in cached_corpus_hit_stats:
-                        corpus_hit_stats[corpus] = cached_corpus_hit_stats[corpus]
-                        total_hits += cached_corpus_hit_stats[corpus]
+                    if corpus in cached_hits_by_corpus:
+                        hits_by_corpus[corpus] = cached_hits_by_corpus[corpus]
+                        total_hits += cached_hits_by_corpus[corpus]
 
             limiter = CapacityLimiter(settings.PARALLEL_THREADS)
             send, receive = anyio.create_memory_object_stream(0)
@@ -711,7 +713,7 @@ async def perform_query(
 
             async with anyio.create_task_group() as tg:
                 for corpus in rest_corpora:
-                    if corpus not in cached_corpus_hit_stats:
+                    if corpus not in cached_hits_by_corpus:
                         tg.start_soon(_worker, corpus, send.clone())
 
                 await send.aclose()
@@ -720,7 +722,7 @@ async def perform_query(
                     if abort_signal and abort_signal.is_set():
                         tg.cancel_scope.cancel()
                         return
-                    corpus_hit_stats[corpus] = nr_hits
+                    hits_by_corpus[corpus] = nr_hits
                     total_hits += nr_hits
                     if incremental:
                         yield {f"progress_{progress_count}": {"corpus": corpus, "hits": nr_hits}}
@@ -729,12 +731,12 @@ async def perform_query(
     if ctx.common.debug:
         debug["cqp"] = cqp_query
 
-    result["hits"] = total_hits
-    result["corpus_hits"] = corpus_hit_stats
+    result["total_hits"] = total_hits
+    result["hits_by_corpus"] = hits_by_corpus
     result["corpus_order"] = corpora
     result["pagination_state"] = (
         binascii.b2a_base64(
-            zlib.compress(bytes(checksum + ";" + ";".join(f"{c}:{h}" for c, h in corpus_hit_stats.items()), "utf-8"))
+            zlib.compress(bytes(checksum + ";" + ";".join(f"{c}:{h}" for c, h in hits_by_corpus.items()), "utf-8"))
         )
         .decode("utf-8")
         .replace("+", "-")
@@ -761,9 +763,9 @@ async def _perform_sample_query(
     for corpus in corpora:
         params_corpus = dataclasses.replace(concordance_params, corpora=[corpus])
         async for item in perform_query(params_corpus, ctx, abort_signal=abort_signal):
-            if item.get("hits", 0) > 0:
-                item.pop("hits", None)
-                item.pop("corpus_hits", None)
+            if item.get("total_hits", 0) > 0:
+                item.pop("total_hits", None)
+                item.pop("hits_by_corpus", None)
                 item.pop("pagination_state", None)
                 yield item
                 return
@@ -1450,11 +1452,11 @@ def which_hits(corpora: list, stats: dict, start: int, end: int) -> dict[str, tu
     Returns:
         Dict mapping corpus names to (start, end) hit ranges within that corpus.
     """
-    corpus_hits = {}
+    corpus_ranges = {}
     for corpus in corpora:
         hits = stats[corpus]
         if hits > start:
-            corpus_hits[corpus] = (start, min(hits - 1, end))
+            corpus_ranges[corpus] = (start, min(hits - 1, end))
 
         start -= hits
         end -= hits
@@ -1462,4 +1464,4 @@ def which_hits(corpora: list, stats: dict, start: int, end: int) -> dict[str, tu
         if end < 0:
             break
 
-    return corpus_hits
+    return corpus_ranges
