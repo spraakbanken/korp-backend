@@ -21,7 +21,7 @@ def common_params(
     cache: Annotated[bool, Query(description="Whether to use caching for the request.")] = True,
     debug: Annotated[bool, Query(description="Whether to include debug information in responses.")] = False,
     indent: Annotated[int, Query(ge=0, le=16, description="Number of spaces to indent JSON output.")] = 0,
-    incremental: Annotated[
+    stream: Annotated[
         bool,
         Query(
             description="Whether to return an `application/x-ndjson` event stream instead of one JSON object. Each "
@@ -37,7 +37,7 @@ def common_params(
         cache: Whether to use caching for the request.
         debug: Whether to include debug information in responses.
         indent: Number of spaces to indent JSON output.
-        incremental: Whether to produce an NDJSON event stream.
+        stream: Whether to produce an NDJSON event stream.
 
     Returns:
         A CommonParams object with the parsed parameters.
@@ -47,7 +47,7 @@ def common_params(
     return CommonParams(
         debug=debug,
         indent=indent,
-        incremental=incremental,
+        stream=stream,
         cache=effective_cache,
     )
 
@@ -59,13 +59,13 @@ class CommonParams:
     Attributes:
         debug: Whether to include debug information in responses.
         indent: Number of spaces to indent JSON output.
-        incremental: Whether to produce an NDJSON event stream.
+        stream: Whether to produce an NDJSON event stream.
         cache: Whether to use caching for the request.
     """
 
     debug: bool = False
     indent: int = 0
-    incremental: bool = False
+    stream: bool = False
     cache: bool = True
 
 

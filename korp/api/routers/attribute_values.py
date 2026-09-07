@@ -43,7 +43,7 @@ By default the result contains value lists. When `include_counts=true`, leaf val
 `split` for set-valued CWB attributes whose values should be split on `|` before being included in the result.
 
 Use `include_combined` and `include_per_corpus` to choose whether to include merged values across all selected corpora,
-per-corpus values, or both. With `incremental=true`, the response is an NDJSON event stream containing progress events,
+per-corpus values, or both. With `stream=true`, the response is an NDJSON event stream containing progress events,
 result fragments, and a final completion event.
 
 ### Example
@@ -144,7 +144,7 @@ async def attribute_values(
     Yields:
         Progress events and CWB attribute values for the specified corpora and annotations.
     """
-    incremental = ctx.common.incremental
+    stream = ctx.common.stream
 
     await auth.check_authorization(corpora, ctx)
 
@@ -176,7 +176,7 @@ async def attribute_values(
         pending_work = [(c, attribute) for c in corpora for attribute in attributes if (c, attribute) not in from_cache]
         progress_count = 0
         progress_total = len(pending_work)
-        if incremental:
+        if stream:
             pending_corpora = list(dict.fromkeys(c for c, _attribute in pending_work))
             yield handler.ProgressEvent(completed=0, total=progress_total, corpora=pending_corpora)
 
@@ -258,7 +258,7 @@ async def attribute_values(
                 elif not include_counts and corpus_stats_set:
                     result["corpora"][c][attribute] = sorted(corpus_stats_set)
 
-                if incremental:
+                if stream:
                     progress_count += 1
                     yield handler.ProgressEvent(completed=progress_count, total=progress_total, corpus=c)
 

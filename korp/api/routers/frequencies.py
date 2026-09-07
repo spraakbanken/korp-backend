@@ -53,7 +53,7 @@ Repeat the `cqp` parameter to run prequeries in sequence. Repeat the `subcqp` pa
 main-query result. `combined` and each entry in `corpora` are always arrays: the first item is the main query result
 and the following items are the subquery results, each with a `cqp` field.
 
-With `incremental=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
+With `stream=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
 final completion event.
 """
 
@@ -616,7 +616,7 @@ async def perform_frequency_query(
     Raises:
         ValueError: If there is an error parsing the results.
     """
-    incremental = ctx.common.incremental
+    stream = ctx.common.stream
     corpora = frequency_params.corpora
     cqp_combined = frequency_params.cqp_query
     subcqp = frequency_params.subcqp
@@ -693,7 +693,7 @@ async def perform_frequency_query(
 
     progress_completed = 0
     processing_corpora = [c for c in corpora if c not in zero_hits]
-    if incremental:
+    if stream:
         # Initial yield to indicate which corpora will be processed
         yield handler.ProgressEvent(completed=0, total=len(processing_corpora), corpora=processing_corpora)
 
@@ -807,7 +807,7 @@ async def perform_frequency_query(
 
             result["corpora"][c] = corpus_stats
 
-            if incremental:
+            if stream:
                 progress_completed += 1
                 yield handler.ProgressEvent(
                     completed=progress_completed,
@@ -1093,7 +1093,7 @@ async def _frequencies_time_stream(
     """
     frequency_params = request_state.frequency_params
 
-    incremental = ctx.common.incremental
+    stream = ctx.common.stream
 
     df = request_state.effective_date_from
     dt = request_state.effective_date_to
@@ -1157,7 +1157,7 @@ async def _frequencies_time_stream(
     ns.total_size = 0
 
     progress_completed = 0
-    if incremental:
+    if stream:
         yield handler.ProgressEvent(
             completed=0,
             total=len(frequency_params.corpora),
@@ -1239,7 +1239,7 @@ async def _frequencies_time_stream(
                     {"corpus": c, "df": datefrom + timefrom, "dt": dateto + timeto, "sum": int(count)}
                 )
 
-            if incremental:
+            if stream:
                 progress_completed += 1
                 yield handler.ProgressEvent(
                     completed=progress_completed,

@@ -108,7 +108,7 @@ async def health(_ctx: CtxDep) -> dict:
 async def sleep(_ctx: CtxDep, t: int = 5) -> AsyncIterator[dict]:
     """Sleep for t seconds, yielding a value each second.
 
-    This is mainly for testing purposes, particularly for demonstrating incremental responses.
+    This is mainly for testing purposes, particularly for demonstrating streamed responses.
 
     Args:
         t: Number of seconds to sleep.
@@ -155,8 +155,7 @@ async def optimize(
         cqp_query, cqp_params, find_match=False, expand=False, free_search=free_search
     )
 
-    result = {
+    yield {
         "cqp": optimized_cqp if optimization_status == cqp.QueryOptimizeResult.SUCCESS else cqp_query,
         "status": optimization_status.name,
     }
-    yield result

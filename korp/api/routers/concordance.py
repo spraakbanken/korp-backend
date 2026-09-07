@@ -57,7 +57,7 @@ highlighted separately, and the row's `matches` list contains multiple match obj
 `default_within` or `within`. Not all CQP queries can be run in free order; if the query cannot be executed in free
 order, an error is returned.
 
-With `incremental=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
+With `stream=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
 final completion event.
 
 ### Examples
@@ -461,7 +461,7 @@ async def perform_query(
     Yields:
         Progress events and dictionaries containing KWIC rows and related metadata.
     """
-    incremental = ctx.common.incremental
+    stream = ctx.common.stream
     use_cache = ctx.common.cache
     free_search = not concordance_parameters.in_order
 
@@ -549,7 +549,7 @@ async def perform_query(
 
         if len(corpora_hits) > 0:
             progress_total = len(corpora_hits)
-            if incremental:
+            if stream:
                 yield handler.ProgressEvent(
                     completed=0,
                     total=progress_total,
@@ -595,7 +595,7 @@ async def perform_query(
                         return
 
                     corpora_kwics[corpus] = kwic
-                    if incremental:
+                    if stream:
                         progress_count += 1
                         yield handler.ProgressEvent(
                             completed=progress_count,
@@ -611,7 +611,7 @@ async def perform_query(
         # cached_hits_by_corpus is missing or incomplete, so we need to query the corpora in
         # serial until we have the needed rows, and then query the remaining corpora
         # in parallel to get number of hits.
-        if incremental:
+        if stream:
             yield handler.ProgressEvent(completed=0, total=len(corpora), corpora=corpora)
         progress_count = 0
         rest_corpora: list[str] = []
@@ -657,7 +657,7 @@ async def perform_query(
 
             result["kwic"].extend(kwic)
 
-            if incremental:
+            if stream:
                 progress_count += 1
                 yield handler.ProgressEvent(
                     completed=progress_count,
@@ -666,7 +666,7 @@ async def perform_query(
                     hits=nr_hits,
                 )
 
-        if incremental:
+        if stream:
             yield result
             result = {}
 
@@ -718,7 +718,7 @@ async def perform_query(
                         return
                     hits_by_corpus[corpus] = nr_hits
                     total_hits += nr_hits
-                    if incremental:
+                    if stream:
                         progress_count += 1
                         yield handler.ProgressEvent(
                             completed=progress_count,
@@ -759,7 +759,7 @@ async def _perform_sample_query(
     corpora = concordance_params.corpora
     random.shuffle(corpora)
     progress_completed = 0
-    if ctx.common.incremental:
+    if ctx.common.stream:
         yield handler.ProgressEvent(completed=0, total=len(corpora), corpora=corpora)
 
     for corpus in corpora:
@@ -771,7 +771,7 @@ async def _perform_sample_query(
             corpus_result.update(item)
 
         hits = corpus_result.get("total_hits", 0)
-        if ctx.common.incremental:
+        if ctx.common.stream:
             progress_completed += 1
             yield handler.ProgressEvent(
                 completed=progress_completed,

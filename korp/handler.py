@@ -30,7 +30,7 @@ logger = getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class ProgressEvent:
-    """A progress update emitted while producing an incremental response.
+    """A progress update emitted while producing a streamed response.
 
     Attributes:
         completed: Number of completed work items.
@@ -144,7 +144,7 @@ def docs_response(
 
     ndjson_record_schema = TypeAdapter(StreamEvent).json_schema()
     ndjson_record_schema["description"] = (
-        "Schema for each line in the NDJSON stream returned when `incremental=true`. Result `data` objects are "
+        "Schema for each line in the NDJSON stream returned when `stream=true`. Result `data` objects are "
         "fragments of the ordinary JSON response and are merged in the order they are received."
     )
     response: dict[str, Any] = {
@@ -325,13 +325,13 @@ def api_handler(
 
     This decorator is to be used on all API routes. It provides the following features:
 
-    - It produces a single JSON object normally, or an NDJSON event stream when `common.incremental` is enabled.
+    - It produces a single JSON object normally, or an NDJSON event stream when `common.stream` is enabled.
     - It prevents proxy timeouts by sending keepalive whitespace regularly.
     - It handles client disconnects and signals the route to abort processing.
     - It formats error responses, including optional tracebacks in debug mode.
     - It sets HTTP cache headers if enabled.
     - It adds timing information to the output.
-    - It indents JSON output if requested (only for non-incremental responses).
+    - It indents JSON output if requested (only for non-streaming responses).
 
     The decorator handles both synchronous and asynchronous endpoints. Synchronous endpoints are run in a thread to
     avoid blocking the event loop. Async endpoints run in the event loop as usual.
@@ -525,7 +525,7 @@ def api_handler(
                 finally:
                     await queue.put(None)  # Sentinel to indicate end of stream
 
-            async def body_iter_incremental() -> AsyncIterator[bytes]:
+            async def body_iter_stream() -> AsyncIterator[bytes]:
                 producer_task = asyncio.create_task(producer())
                 finished = False
                 ok = True
@@ -582,8 +582,8 @@ def api_handler(
 
             keepalive = object()
 
-            # We need a separate keepalive ticker task for non-incremental responses, since we can't rely on queue
-            # timeouts in that case (the route might still be producing output incrementally, but we won't be sending it
+            # We need a separate keepalive ticker task for non-streaming responses, since we can't rely on queue
+            # timeouts in that case (the route might still be producing output, but we won't be sending it
             # until the end)
             async def ticker() -> None:
                 try:
@@ -648,9 +648,9 @@ def api_handler(
                     with contextlib.suppress(asyncio.CancelledError, Exception):
                         await ticker_task
 
-            stream = body_iter_incremental() if common.incremental else body_iter_full()
-            media_type = "application/x-ndjson" if common.incremental else "application/json"
-            resp = StreamingResponse(stream, media_type=media_type)
+            response_stream = body_iter_stream() if common.stream else body_iter_full()
+            media_type = "application/x-ndjson" if common.stream else "application/json"
+            resp = StreamingResponse(response_stream, media_type=media_type)
 
             if cache_headers and common.cache and not common.debug:
                 max_age = settings.HTTP_CACHE_MAXAGE * 3600

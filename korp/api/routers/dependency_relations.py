@@ -91,7 +91,7 @@ relative MI.
 By default `/dependency-relations` returns overall relation statistics. Set `include_time=true` to also include
 time-sliced data in `relations_time`; use `/dependency-relations/time` when you only want the time-sliced view.
 
-With `incremental=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
+With `stream=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
 final completion event.
 
 ### Example
@@ -110,7 +110,7 @@ Use `period_size` and `period_align` to control how years are grouped. `max_scop
 inside each period; `max_scope=overall` first selects the top overall relations and then returns time data only for
 those relations.
 
-With `incremental=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
+With `stream=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
 final completion event.
 """
 
@@ -1744,7 +1744,7 @@ async def _dependency_relations_impl(
             yield {"error": "No dependency relations data available for the selected corpora."}
             return
 
-        if corpora_rest and ctx.common.incremental:
+        if corpora_rest and ctx.common.stream:
             yield ProgressEvent(completed=0, total=len(corpora_rest), corpora=list(corpora_rest))
 
         progress_index = 0
@@ -1773,7 +1773,7 @@ async def _dependency_relations_impl(
                     await ctx.cache.add(cache_key, data)
                 except CacheError:
                     pass
-            if ctx.common.incremental:
+            if ctx.common.stream:
                 progress_index += 1
                 yield ProgressEvent(
                     completed=progress_index,

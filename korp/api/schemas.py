@@ -19,7 +19,7 @@ class CommonResponse(BaseModel):
 
 
 class StreamProgressEvent(BaseModel):
-    """Progress made while producing an incremental response."""
+    """Progress made while producing a streamed response."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -32,7 +32,7 @@ class StreamProgressEvent(BaseModel):
 
 
 class StreamResultEvent(BaseModel):
-    """One result fragment from an incremental response."""
+    """One result fragment from a streamed response."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -41,7 +41,7 @@ class StreamResultEvent(BaseModel):
 
 
 class StreamErrorDetails(BaseModel):
-    """Error details for an incremental response."""
+    """Error details for a streamed response."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -51,7 +51,7 @@ class StreamErrorDetails(BaseModel):
 
 
 class StreamErrorEvent(BaseModel):
-    """Failure encountered after an incremental response started."""
+    """Failure encountered after a streamed response started."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -60,7 +60,7 @@ class StreamErrorEvent(BaseModel):
 
 
 class StreamCompleteEvent(BaseModel):
-    """Final event in an incremental response."""
+    """Final event in a streamed response."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -70,7 +70,7 @@ class StreamCompleteEvent(BaseModel):
 
 
 class StreamKeepaliveEvent(BaseModel):
-    """Keepalive emitted while an incremental response is otherwise idle."""
+    """Keepalive emitted while a streamed response is otherwise idle."""
 
     model_config = ConfigDict(extra="forbid")
 
