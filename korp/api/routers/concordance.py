@@ -57,8 +57,8 @@ highlighted separately, and the row's `matches` list contains multiple match obj
 `default_within` or `within`. Not all CQP queries can be run in free order; if the query cannot be executed in free
 order, an error is returned.
 
-When `incremental=true`, progress keys such as `progress_corpora` and `progress_0` may be included before the final
-concordance data in the streamed JSON object.
+With `incremental=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
+final completion event.
 
 ### Examples
 
@@ -287,14 +287,6 @@ class ConcordanceResponse(schemas.CommonResponse):
             "eJwdxsERgCAMBMCWwnEY0Ap8OM7YAUlI_yXouK-tUV0NBKw0j8wNQ4tQJ9kXxupZWqX5RLJ0CafICvONYRE4nvs6d3T--QZ9AbXiFqk="
         ],
     )
-    progress_corpora: list[str] | SkipJsonSchema[None] = Field(
-        None,
-        description=(
-            "Corpora that will produce incremental progress updates. Included only when `incremental=true`; individual "
-            "progress entries are returned as dynamic keys such as `progress_0`."
-        ),
-        examples=[["ROMI", "SUC3"]],
-    )
 
 
 class ConcordanceSampleResponse(schemas.CommonResponse):
@@ -306,14 +298,6 @@ class ConcordanceSampleResponse(schemas.CommonResponse):
         None, description="Corpus that produced the sample hit, included when a hit is found."
     )
     kwic: list[KWICRow] = Field(..., description="Sample KWIC row if a hit is found, otherwise an empty list.")
-    progress_corpora: list[str] | SkipJsonSchema[None] = Field(
-        None,
-        description=(
-            "Corpora that will produce incremental progress updates. Included only when `incremental=true`; individual "
-            "progress entries are returned as dynamic keys such as `progress_0`."
-        ),
-        examples=[["ROMI", "SUC3"]],
-    )
 
 
 @dataclass
@@ -466,7 +450,7 @@ async def parse_parameters(
 
 async def perform_query(
     concordance_parameters: ConcordanceParameters, ctx: CtxDep, abort_signal: AbortSignal | None = None
-) -> AsyncGenerator[dict]:
+) -> AsyncGenerator[handler.ResponseFragment]:
     """Execute a corpus query and stream KWIC results.
 
     Args:
@@ -475,7 +459,7 @@ async def perform_query(
         abort_signal: Optional abort handle that can be used to cancel a running query.
 
     Yields:
-        Dictionaries containing KWIC rows and related metadata for the requested query.
+        Progress events and dictionaries containing KWIC rows and related metadata.
     """
     incremental = ctx.common.incremental
     use_cache = ctx.common.cache
@@ -564,8 +548,13 @@ async def perform_query(
         progress_count = 0
 
         if len(corpora_hits) > 0:
+            progress_total = len(corpora_hits)
             if incremental:
-                yield {"progress_corpora": list(corpora_hits.keys())}
+                yield handler.ProgressEvent(
+                    completed=0,
+                    total=progress_total,
+                    corpora=list(corpora_hits),
+                )
 
             limiter = CapacityLimiter(settings.PARALLEL_THREADS)
             send, receive = anyio.create_memory_object_stream(0)
@@ -607,13 +596,13 @@ async def perform_query(
 
                     corpora_kwics[corpus] = kwic
                     if incremental:
-                        yield {
-                            f"progress_{progress_count}": {
-                                "corpus": corpus,
-                                "hits": corpora_hits[corpus][1] - corpora_hits[corpus][0] + 1,
-                            }
-                        }
                         progress_count += 1
+                        yield handler.ProgressEvent(
+                            completed=progress_count,
+                            total=progress_total,
+                            corpus=corpus,
+                            hits=corpora_hits[corpus][1] - corpora_hits[corpus][0] + 1,
+                        )
 
             for corpus in corpora:
                 if corpus in corpora_hits:
@@ -623,7 +612,7 @@ async def perform_query(
         # serial until we have the needed rows, and then query the remaining corpora
         # in parallel to get number of hits.
         if incremental:
-            yield {"progress_corpora": corpora}
+            yield handler.ProgressEvent(completed=0, total=len(corpora), corpora=corpora)
         progress_count = 0
         rest_corpora: list[str] = []
 
@@ -669,8 +658,13 @@ async def perform_query(
             result["kwic"].extend(kwic)
 
             if incremental:
-                yield {f"progress_{progress_count}": {"corpus": corpus, "hits": nr_hits}}
                 progress_count += 1
+                yield handler.ProgressEvent(
+                    completed=progress_count,
+                    total=len(corpora),
+                    corpus=corpus,
+                    hits=nr_hits,
+                )
 
         if incremental:
             yield result
@@ -725,8 +719,13 @@ async def perform_query(
                     hits_by_corpus[corpus] = nr_hits
                     total_hits += nr_hits
                     if incremental:
-                        yield {f"progress_{progress_count}": {"corpus": corpus, "hits": nr_hits}}
                         progress_count += 1
+                        yield handler.ProgressEvent(
+                            completed=progress_count,
+                            total=len(corpora),
+                            corpus=corpus,
+                            hits=nr_hits,
+                        )
 
     if ctx.common.debug:
         debug["cqp"] = cqp_query
@@ -751,7 +750,7 @@ async def perform_query(
 
 async def _perform_sample_query(
     concordance_params: ConcordanceParameters, ctx: CtxDep, abort_signal: AbortSignal | None
-) -> AsyncGenerator[dict]:
+) -> AsyncGenerator[handler.ResponseFragment]:
     """Search corpora in random order until a sampled concordance row is found.
 
     Yields:
@@ -759,16 +758,33 @@ async def _perform_sample_query(
     """
     corpora = concordance_params.corpora
     random.shuffle(corpora)
+    progress_completed = 0
+    if ctx.common.incremental:
+        yield handler.ProgressEvent(completed=0, total=len(corpora), corpora=corpora)
 
     for corpus in corpora:
         params_corpus = dataclasses.replace(concordance_params, corpora=[corpus])
+        corpus_result: dict[str, Any] = {}
         async for item in perform_query(params_corpus, ctx, abort_signal=abort_signal):
-            if item.get("total_hits", 0) > 0:
-                item.pop("total_hits", None)
-                item.pop("hits_by_corpus", None)
-                item.pop("pagination_state", None)
-                yield item
-                return
+            if isinstance(item, handler.ProgressEvent):
+                continue
+            corpus_result.update(item)
+
+        hits = corpus_result.get("total_hits", 0)
+        if ctx.common.incremental:
+            progress_completed += 1
+            yield handler.ProgressEvent(
+                completed=progress_completed,
+                total=len(corpora),
+                corpus=corpus,
+                hits=hits,
+            )
+        if hits > 0:
+            corpus_result.pop("total_hits", None)
+            corpus_result.pop("hits_by_corpus", None)
+            corpus_result.pop("pagination_state", None)
+            yield corpus_result
+            return
 
     yield {"kwic": []}
 
@@ -799,7 +815,7 @@ async def concordance_sample(
     expand_prequeries: params.ExpandPrequeriesParam = True,
     pagination_state: PaginationStateParam = None,
     abort_signal: AbortDep = None,
-) -> AsyncGenerator[dict]:
+) -> AsyncGenerator[handler.ResponseFragment]:
     """Perform a CQP query and return a random match.
 
     The query is performed sequentially on the selected corpora in random order until a match is found. No total hit
@@ -863,7 +879,7 @@ async def concordance(
     expand_prequeries: params.ExpandPrequeriesParam = True,
     pagination_state: PaginationStateParam = None,
     abort_signal: AbortDep = None,
-) -> AsyncGenerator[dict]:
+) -> AsyncGenerator[handler.ResponseFragment]:
     """Perform a CQP query and return a number of matches.
 
     Returns:

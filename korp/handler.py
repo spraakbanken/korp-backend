@@ -11,9 +11,10 @@ import threading
 import time
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from functools import update_wrapper
 from logging import getLogger
-from typing import Any
+from typing import Any, TypeAlias
 from urllib.parse import parse_qsl, urlencode
 
 from fastapi import FastAPI, HTTPException, Request
@@ -25,6 +26,36 @@ from korp.config import settings
 from korp.dependencies import AbortSignal, Ctx, CtxDep
 
 logger = getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ProgressEvent:
+    """A progress update emitted while producing an incremental response.
+
+    Attributes:
+        completed: Number of completed work items.
+        total: Total number of work items expected.
+        corpus: Corpus whose work item just completed, if applicable.
+        corpora: Corpora covered by the operation, included in the initial event.
+        hits: Number of hits found for the completed corpus, if known.
+    """
+
+    completed: int
+    total: int
+    corpus: str | None = None
+    corpora: list[str] | None = None
+    hits: int | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the public NDJSON event representation."""
+        event: dict[str, Any] = {"event": "progress", "completed": self.completed, "total": self.total}
+        for field_name in ("corpus", "corpora", "hits"):
+            if (value := getattr(self, field_name)) is not None:
+                event[field_name] = value
+        return event
+
+
+ResponseFragment: TypeAlias = dict[str, Any] | ProgressEvent
 
 
 class APIValidationError(HTTPException):
@@ -107,7 +138,23 @@ def docs_response(
     Returns:
         A dictionary suitable for the `responses` parameter of FastAPI route decorators.
     """
-    response: dict[str, Any] = {"model": model}
+    from pydantic import TypeAdapter  # noqa: PLC0415
+
+    from korp.api.schemas import StreamEvent  # noqa: PLC0415
+
+    ndjson_record_schema = TypeAdapter(StreamEvent).json_schema()
+    ndjson_record_schema["description"] = (
+        "Schema for each line in the NDJSON stream returned when `incremental=true`. Result `data` objects are "
+        "fragments of the ordinary JSON response and are merged in the order they are received."
+    )
+    response: dict[str, Any] = {
+        "model": model,
+        "content": {
+            "application/x-ndjson": {
+                "schema": ndjson_record_schema,
+            }
+        },
+    }
     if description is not None:
         response["description"] = description
     return {status_code: response}
@@ -278,8 +325,7 @@ def api_handler(
 
     This decorator is to be used on all API routes. It provides the following features:
 
-    - It produces JSON output, either incrementally or as a whole, depending on common.incremental. Either way, the
-      output is a single JSON object.
+    - It produces a single JSON object normally, or an NDJSON event stream when `common.incremental` is enabled.
     - It prevents proxy timeouts by sending keepalive whitespace regularly.
     - It handles client disconnects and signals the route to abort processing.
     - It formats error responses, including optional tracebacks in debug mode.
@@ -311,8 +357,8 @@ def api_handler(
     To check if abort is requested, use `abort_signal.is_set()`.
 
     Decorated routes can either:
-      - yield dict fragments from a generator or async generator
-      - return a sync or async iterator yielding dict fragments
+      - yield dict result fragments or ProgressEvent objects from a generator or async generator
+      - return a sync or async iterator yielding dict result fragments or ProgressEvent objects
       - return a dict or another value to send as one result
       - return Response to bypass the decorator's JSON streaming, error formatting, and timing output. Cache headers
         and rate-limit headers may still be added.
@@ -482,9 +528,8 @@ def api_handler(
             async def body_iter_incremental() -> AsyncIterator[bytes]:
                 producer_task = asyncio.create_task(producer())
                 finished = False
+                ok = True
                 try:
-                    yield b"{\n"
-
                     while True:
                         try:
                             item = await asyncio.wait_for(queue.get(), timeout=keepalive_seconds)
@@ -493,8 +538,7 @@ def api_handler(
                             if await request.is_disconnected():
                                 abort.set()
                                 return
-                            # Send keepalive whitespace to keep connection open
-                            yield b" \n"
+                            yield b'{"event": "keepalive"}\n'
                             continue
 
                         if item is None:
@@ -502,19 +546,22 @@ def api_handler(
                             break
 
                         if isinstance(item, Exception):
-                            err = _format_error(item, debug=common.debug)
-                            yield (json.dumps(err)[1:-1] + ",\n").encode("utf-8")
+                            ok = False
+                            err = _format_error(item, debug=common.debug)["error"]
+                            yield (json.dumps({"event": "error", "error": err}) + "\n").encode("utf-8")
                             break
 
                         if not item:
-                            # Allow routes to yield empty items as keepalive
-                            yield b" \n"
+                            # Allow routes to yield empty items as keepalive.
+                            yield b'{"event": "keepalive"}\n'
                             continue
 
-                        yield (json.dumps(item)[1:-1] + ",\n").encode("utf-8")
+                        event = item.as_dict() if isinstance(item, ProgressEvent) else {"event": "result", "data": item}
+                        yield (json.dumps(event) + "\n").encode("utf-8")
 
-                    # Always close JSON for connected clients
-                    yield (json.dumps({"elapsed": time.perf_counter() - start})[1:] + "\n").encode("utf-8")
+                    yield (
+                        json.dumps({"event": "complete", "ok": ok, "elapsed": time.perf_counter() - start}) + "\n"
+                    ).encode("utf-8")
                     finished = True
 
                 except asyncio.CancelledError:
@@ -573,6 +620,9 @@ def api_handler(
                             yield b" \n"
                             continue
 
+                        if isinstance(item, ProgressEvent):
+                            continue
+
                         if isinstance(item, dict):
                             result_obj.update(item)
 
@@ -599,7 +649,8 @@ def api_handler(
                         await ticker_task
 
             stream = body_iter_incremental() if common.incremental else body_iter_full()
-            resp = StreamingResponse(stream, media_type="application/json")
+            media_type = "application/x-ndjson" if common.incremental else "application/json"
+            resp = StreamingResponse(stream, media_type=media_type)
 
             if cache_headers and common.cache and not common.debug:
                 max_age = settings.HTTP_CACHE_MAXAGE * 3600

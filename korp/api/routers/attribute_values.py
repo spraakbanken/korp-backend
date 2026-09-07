@@ -43,9 +43,8 @@ By default the result contains value lists. When `include_counts=true`, leaf val
 `split` for set-valued CWB attributes whose values should be split on `|` before being included in the result.
 
 Use `include_combined` and `include_per_corpus` to choose whether to include merged values across all selected corpora,
-per-corpus values, or both. When `incremental=true`, progress keys such as `progress_corpora` and `progress_0` may be
-included
-before the final result in the streamed JSON object.
+per-corpus values, or both. With `incremental=true`, the response is an NDJSON event stream containing progress events,
+result fragments, and a final completion event.
 
 ### Example
 
@@ -111,14 +110,6 @@ class AttrValuesResponse(schemas.CommonResponse):
         ),
         examples=[{"text_author>text_title": {"Söderberg, Hjalmar": {"Doktor Glas": 12345}}}],
     )
-    progress_corpora: list[str] | SkipJsonSchema[None] = Field(
-        None,
-        description=(
-            "Corpora that will produce incremental progress updates. Included only when `incremental=true`; individual "
-            "progress entries are returned as dynamic keys such as `progress_0`."
-        ),
-        examples=[["ROMI", "SUC3"]],
-    )
 
 
 @router.get(
@@ -138,7 +129,7 @@ async def attribute_values(
     include_per_corpus: params.IncludePerCorpusParam = True,
     include_combined: params.IncludeCombinedParam = True,
     split: AttrValuesSplitParam = None,
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[handler.ResponseFragment]:
     """Get all available values for one or more corpus annotations.
 
     Args:
@@ -151,7 +142,7 @@ async def attribute_values(
         split: Comma-separated list of CWB attributes to split values for.
 
     Yields:
-        CWB attribute values (and counts, if requested) for the specified corpora and annotations.
+        Progress events and CWB attribute values for the specified corpora and annotations.
     """
     incremental = ctx.common.incremental
 
@@ -182,9 +173,12 @@ async def attribute_values(
         all_cache = False
 
     if not all_cache:
+        pending_work = [(c, attribute) for c in corpora for attribute in attributes if (c, attribute) not in from_cache]
         progress_count = 0
+        progress_total = len(pending_work)
         if incremental:
-            yield {"progress_corpora": list(corpora)}
+            pending_corpora = list(dict.fromkeys(c for c, _attribute in pending_work))
+            yield handler.ProgressEvent(completed=0, total=progress_total, corpora=pending_corpora)
 
         limiter = CapacityLimiter(settings.PARALLEL_THREADS)
         send, receive = anyio.create_memory_object_stream(0)
@@ -206,10 +200,8 @@ async def attribute_values(
                 await send_channel.send((corpus, attr, lines))
 
         async with anyio.create_task_group() as tg:
-            for c in corpora:
-                for attribute in attributes:
-                    if (c, attribute) not in from_cache:
-                        tg.start_soon(_worker, c, attribute, send.clone())
+            for c, attribute in pending_work:
+                tg.start_soon(_worker, c, attribute, send.clone())
 
             await send.aclose()  # Close the original send channel
 
@@ -267,8 +259,8 @@ async def attribute_values(
                     result["corpora"][c][attribute] = sorted(corpus_stats_set)
 
                 if incremental:
-                    yield {f"progress_{progress_count}": c}
                     progress_count += 1
+                    yield handler.ProgressEvent(completed=progress_count, total=progress_total, corpus=c)
 
     if include_combined:
         for c in result["corpora"]:

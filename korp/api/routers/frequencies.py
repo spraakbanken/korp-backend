@@ -53,8 +53,8 @@ Repeat the `cqp` parameter to run prequeries in sequence. Repeat the `subcqp` pa
 main-query result. `combined` and each entry in `corpora` are always arrays: the first item is the main query result
 and the following items are the subquery results, each with a `cqp` field.
 
-When `incremental=true`, progress keys such as `progress_corpora` and `progress_0` may be included before the final
-statistics in the streamed JSON object.
+With `incremental=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
+final completion event.
 """
 
 CORPUS_FREQUENCIES_DESCRIPTION = """Calculate frequencies for all tokens in the selected corpora, grouped by the
@@ -226,11 +226,6 @@ class FrequenciesResponse(schemas.CommonResponse):
     count: int = Field(
         ..., description="Total number of distinct grouped values before response slicing.", examples=[241]
     )
-    progress_corpora: list[str] | SkipJsonSchema[None] = Field(
-        None,
-        description="Corpora that will produce incremental progress updates, included only when `incremental=true`.",
-        examples=[["ROMI", "SUC3"]],
-    )
 
 
 class CorpusFrequenciesResponse(schemas.CommonResponse):
@@ -242,11 +237,6 @@ class CorpusFrequenciesResponse(schemas.CommonResponse):
     combined: FrequencyStatistics = Field(..., description="Combined statistics for all corpora.")
     count: int = Field(
         ..., description="Total number of distinct grouped values before response slicing.", examples=[241]
-    )
-    progress_corpora: list[str] | SkipJsonSchema[None] = Field(
-        None,
-        description="Corpora that will produce incremental progress updates, included only when `incremental=true`.",
-        examples=[["ROMI", "SUC3"]],
     )
 
 
@@ -294,11 +284,6 @@ class FrequenciesTimeResponse(schemas.CommonResponse):
             "Combined time-series statistics for all corpora, always as an array with the main query first. Omitted "
             "when `include_combined=false`."
         ),
-    )
-    progress_corpora: list[str] | SkipJsonSchema[None] = Field(
-        None,
-        description="Corpora that will produce incremental progress updates, included only when `incremental=true`.",
-        examples=[["ROMI", "SUC3"]],
     )
 
 
@@ -615,7 +600,7 @@ async def perform_frequency_query(
     frequency_params: FrequencyParameters,
     ctx: CtxDep,
     abort_signal: AbortSignal | None,
-) -> AsyncGenerator[dict]:
+) -> AsyncGenerator[handler.ResponseFragment]:
     """Perform the frequency query based on the given parameters.
 
     This is a helper function called by route handlers.
@@ -626,7 +611,7 @@ async def perform_frequency_query(
         abort_signal: Event to signal abortion of the query.
 
     Yields:
-        Frequency results as dictionaries.
+        Progress events and frequency-result dictionaries.
 
     Raises:
         ValueError: If there is an error parsing the results.
@@ -706,10 +691,11 @@ async def perform_frequency_query(
 
     frequency_worker = frequency_query_worker if not simple else simple_frequency_query_worker
 
-    frequency_state.progress_count = 0
+    progress_completed = 0
+    processing_corpora = [c for c in corpora if c not in zero_hits]
     if incremental:
         # Initial yield to indicate which corpora will be processed
-        yield {"progress_corpora": [c for c in corpora if c not in zero_hits]}
+        yield handler.ProgressEvent(completed=0, total=len(processing_corpora), corpora=processing_corpora)
 
     # Add zero-hit corpora to result
     for c in zero_hits:
@@ -822,8 +808,12 @@ async def perform_frequency_query(
             result["corpora"][c] = corpus_stats
 
             if incremental:
-                yield {f"progress_{frequency_state.progress_count}": c}
-                frequency_state.progress_count += 1
+                progress_completed += 1
+                yield handler.ProgressEvent(
+                    completed=progress_completed,
+                    total=len(processing_corpora),
+                    corpus=c,
+                )
 
     result["total_rows"] = len(total_stats[0]["rows"])
 
@@ -879,7 +869,7 @@ async def frequencies(
     max_values_per_set: MaxValuesPerSetParam = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
     abort_signal: AbortDep = None,
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[handler.ResponseFragment]:
     """Perform a CQP query and return a count of the given words/CWB attributes.
 
     Returns:
@@ -935,7 +925,7 @@ async def corpus_frequencies(
     max_values_per_set: MaxValuesPerSetParam = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
     abort_signal: AbortDep = None,
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[handler.ResponseFragment]:
     """Like `/frequencies` but for every single value of the given CWB attributes.
 
     Returns:
@@ -1095,11 +1085,11 @@ async def _frequencies_time_stream(
     include_combined: params.IncludeCombinedParam = True,
     include_per_corpus: params.IncludePerCorpusParam = True,
     abort_signal: AbortDep = None,
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[handler.ResponseFragment]:
     """Stream frequency counts over time from prepared request state.
 
     Yields:
-        Count results as dictionaries.
+        Progress events and count-result dictionaries.
     """
     frequency_params = request_state.frequency_params
 
@@ -1166,9 +1156,13 @@ async def _frequencies_time_stream(
     total_rows = [[] for _ in range(len(frequency_params.subcqp) + 1)]
     ns.total_size = 0
 
-    ns.progress_count = 0
+    progress_completed = 0
     if incremental:
-        yield {"progress_corpora": frequency_params.corpora}
+        yield handler.ProgressEvent(
+            completed=0,
+            total=len(frequency_params.corpora),
+            corpora=frequency_params.corpora,
+        )
 
     limiter = CapacityLimiter(settings.PARALLEL_THREADS)
     send, receive = anyio.create_memory_object_stream(0)
@@ -1246,8 +1240,12 @@ async def _frequencies_time_stream(
                 )
 
             if incremental:
-                yield {f"progress_{ns.progress_count}": c}
-                ns.progress_count += 1
+                progress_completed += 1
+                yield handler.ProgressEvent(
+                    completed=progress_completed,
+                    total=len(frequency_params.corpora),
+                    corpus=c,
+                )
 
     corpus_timedata = await token_distribution.get_token_distribution(
         ctx=ctx,
@@ -1375,7 +1373,7 @@ async def frequencies_time(
     include_combined: params.IncludeCombinedParam = True,
     include_per_corpus: params.IncludePerCorpusParam = True,
     abort_signal: AbortDep = None,
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[handler.ResponseFragment]:
     """Count occurrences per time period.
 
     Returns:

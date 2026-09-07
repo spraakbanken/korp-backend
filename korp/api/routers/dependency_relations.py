@@ -22,7 +22,7 @@ from korp.api import params, schemas
 from korp.api.routers import info
 from korp.config import settings
 from korp.dependencies import AbortDep, AbortSignal, CtxDep
-from korp.handler import APIValidationError, api_handler, docs_response
+from korp.handler import APIValidationError, ProgressEvent, ResponseFragment, api_handler, docs_response
 from korp.memcached import CacheError
 
 from . import concordance, token_distribution
@@ -91,6 +91,9 @@ relative MI.
 By default `/dependency-relations` returns overall relation statistics. Set `include_time=true` to also include
 time-sliced data in `relations_time`; use `/dependency-relations/time` when you only want the time-sliced view.
 
+With `incremental=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
+final completion event.
+
 ### Example
 
 Get dependency relations for the lexeme `ge..vb.1`:
@@ -106,6 +109,9 @@ larger periods, keys are ranges such as `2016-2018`. Undated material is grouped
 Use `period_size` and `period_align` to control how years are grouped. `max_scope=per_period` applies the `max` limit
 inside each period; `max_scope=overall` first selects the top overall relations and then returns time data only for
 those relations.
+
+With `incremental=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
+final completion event.
 """
 
 DEPENDENCY_RELATIONS_SENTENCES_DESCRIPTION = """Return KWIC sentences containing dependency relation sources.
@@ -328,14 +334,6 @@ class RelationsResponse(schemas.CommonResponse):
         None,
         description="Number of years represented by each period key in `relations_time`.",
         examples=[1],
-    )
-    progress_corpora: list[str] | SkipJsonSchema[None] = Field(
-        None,
-        description=(
-            "Corpora that will produce incremental progress updates. Included only when `incremental=true`; individual "
-            "progress entries are returned as dynamic keys such as `progress_0`."
-        ),
-        examples=[["ROMI", "SUC3"]],
     )
 
 
@@ -1670,7 +1668,7 @@ async def _dependency_relations_impl(
     max_scope: MaxScope,
     measures: Container[Measures],
     abort_signal: AbortSignal | None = None,
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[ResponseFragment]:
     """Shared implementation for `/dependency-relations` and `/dependency-relations/time`.
 
     Args:
@@ -1692,8 +1690,7 @@ async def _dependency_relations_impl(
         abort_signal: Optional signal for aborting long-running operations.
 
     Yields:
-        Progress updates as dictionaries with keys like "progress_corpora" or "progress_{index}",
-        and finally a dictionary containing the results.
+        Progress events followed by a dictionary containing the results.
     """
     is_lexeme = term_type == TermType.lexeme
     limit_per_period = max_scope == MaxScope.per_period
@@ -1748,7 +1745,7 @@ async def _dependency_relations_impl(
             return
 
         if corpora_rest and ctx.common.incremental:
-            yield {"progress_corpora": list(corpora_rest)}
+            yield ProgressEvent(completed=0, total=len(corpora_rest), corpora=list(corpora_rest))
 
         progress_index = 0
 
@@ -1777,8 +1774,12 @@ async def _dependency_relations_impl(
                 except CacheError:
                     pass
             if ctx.common.incremental:
-                yield {f"progress_{progress_index}": {"corpus": corpus}}
                 progress_index += 1
+                yield ProgressEvent(
+                    completed=progress_index,
+                    total=len(corpora_rest),
+                    corpus=corpus,
+                )
 
     # Fast path: overall-only with no year filtering
     if overall_only and not use_split_data:
@@ -1982,7 +1983,7 @@ async def relations(
     max_scope: MaxScopeParam = MaxScope.per_period,
     measures: MeasuresParam = tuple(Measures),
     abort_signal: AbortDep = None,
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[ResponseFragment]:
     """Calculate dependency relations data.
 
     Returns:
@@ -2041,7 +2042,7 @@ async def relations_time(
     max_scope: MaxScopeParam = MaxScope.per_period,
     measures: MeasuresParam = tuple(Measures),
     abort_signal: AbortDep = None,
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[ResponseFragment]:
     """Calculate dependency relations data with time splits.
 
     Returns:

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from korp.db import escape_string as _db_escape_string
+from korp.handler import ResponseFragment
 
 QUERY_DELIM = ","
 
@@ -88,11 +89,11 @@ def sync_generator_to_dict(generator: Generator[dict, None, None]) -> dict:
     return result
 
 
-async def async_generator_to_dict(generator: AsyncGenerator[dict, None]) -> dict:
-    """Convert an async generator yielding dicts to a single dict.
+async def async_generator_to_dict(generator: AsyncGenerator[ResponseFragment, None]) -> dict:
+    """Convert an async generator yielding result fragments to a single dict.
 
     Args:
-        generator: Generator yielding dicts.
+        generator: Generator yielding result fragments and optional progress events.
 
     Returns:
         A single dict containing all key-value pairs from the yielded dicts.

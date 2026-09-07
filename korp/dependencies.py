@@ -24,9 +24,9 @@ def common_params(
     incremental: Annotated[
         bool,
         Query(
-            description="Whether to produce incremental JSON output. Not every route supports incremental output. "
-            "For some routes, you will see partial results as they are generated, while other may only give progress "
-            "updates before delivering the final result."
+            description="Whether to return an `application/x-ndjson` event stream instead of one JSON object. Each "
+            "line is a complete `progress`, `result`, `error`, `keepalive`, or `complete` event. Not every route "
+            "emits progress events."
         ),
     ] = False,
 ) -> CommonParams:
@@ -37,7 +37,7 @@ def common_params(
         cache: Whether to use caching for the request.
         debug: Whether to include debug information in responses.
         indent: Number of spaces to indent JSON output.
-        incremental: Whether to produce incremental JSON output.
+        incremental: Whether to produce an NDJSON event stream.
 
     Returns:
         A CommonParams object with the parsed parameters.
@@ -59,7 +59,7 @@ class CommonParams:
     Attributes:
         debug: Whether to include debug information in responses.
         indent: Number of spaces to indent JSON output.
-        incremental: Whether to produce incremental JSON output.
+        incremental: Whether to produce an NDJSON event stream.
         cache: Whether to use caching for the request.
     """
 
