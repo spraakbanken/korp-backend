@@ -711,6 +711,7 @@ def api_handler(
         # `functools.wraps`.
         update_wrapper(wrapper, fn)
         vars(wrapper)["__signature__"] = inspect.signature(fn)
+        vars(wrapper)["_korp_rate_limit"] = rate_limit
         vars(wrapper).pop("__wrapped__", None)
 
         return wrapper

@@ -46,20 +46,21 @@ def _make_test_app(rate_limiter: FakeRateLimiter | None) -> FastAPI:
     app.state.rate_limiter = rate_limiter
 
     @app.get("/open", response_model=None)
-    @api_handler
+    @api_handler(rate_limit=False)
     async def open_route(_ctx: CtxDep) -> dict:
         return {"ok": True}
 
     @app.get("/limited", response_model=None)
-    @api_handler(rate_limit=True)
+    @api_handler
     async def limited_route(_ctx: CtxDep) -> dict:
         return {"ok": True}
 
     return app
 
 
-def test_unlimited_route_skips_rate_limiter() -> None:
-    """Test that routes without `rate_limit` skip the app limiter."""
+def test_unlimited_route_skips_rate_limiter(monkeypatch: Any) -> None:
+    """Test that explicitly exempt routes skip the app limiter despite configured limits."""
+    monkeypatch.setattr("korp.handler.settings", get_test_settings(RATE_LIMIT_DEFAULT="2/minute"))
     limiter = FakeRateLimiter(result=RateLimitCheck(allowed=False, retry_after_seconds=12))
     app = _make_test_app(limiter)
 

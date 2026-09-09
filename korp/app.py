@@ -13,6 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.routing import APIRoute
 
 from korp import auth, caching, handler
 from korp.api.routers import routers
@@ -20,7 +21,7 @@ from korp.config import Settings, settings
 from korp.cwb import CWB
 from korp.db import MySQL
 from korp.memcached import Memcached
-from korp.rate_limit import RequestRateLimiter, resolve_rate_limit_storage_uri
+from korp.rate_limit import RequestRateLimiter, resolve_rate_limit, resolve_rate_limit_storage_uri
 
 logger = getLogger(__name__)
 
@@ -64,10 +65,7 @@ _API_DOCUMENTATION_STRUCTURE = [
     },
 ]
 
-_OPENAPI_TAGS = [
-    {k: v for k, v in tag.items() if k != "routes"}
-    for tag in _API_DOCUMENTATION_STRUCTURE
-]
+_OPENAPI_TAGS = [{k: v for k, v in tag.items() if k != "routes"} for tag in _API_DOCUMENTATION_STRUCTURE]
 
 _DESCRIPTION = """
 # Korp Backend API
@@ -349,6 +347,36 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         if app.openapi_schema is not None:
             return app.openapi_schema
         schema = original_openapi()
+
+        # Add 429 response documentation for rate-limited routes
+        if settings.RATE_LIMIT_ENABLED:
+            from korp.api.schemas import HTTPErrorResponse  # noqa: PLC0415
+
+            for route in app.routes:
+                if not isinstance(route, APIRoute) or not route.include_in_schema:
+                    continue
+                if not getattr(route.endpoint, "_korp_rate_limit", False):
+                    continue
+                limit = resolve_rate_limit(route.path, settings=settings)
+                if limit is None:
+                    continue
+                for method in route.methods:
+                    operation = schema.get("paths", {}).get(route.path_format, {}).get(method.lower())
+                    if operation is None:
+                        continue
+                    operation["responses"].setdefault(
+                        "429",
+                        {
+                            "description": f"Configured rate limit exceeded ({limit}).",
+                            "content": {"application/json": {"schema": HTTPErrorResponse.model_json_schema()}},
+                            "headers": {
+                                "Retry-After": {
+                                    "description": "Seconds to wait before retrying.",
+                                    "schema": {"type": "integer", "minimum": 0},
+                                },
+                            },
+                        },
+                    )
 
         # Reorder response properties
         common_keys = ("elapsed", "debug", "error")
