@@ -1687,6 +1687,9 @@ async def _dependency_relations_impl(
 
     Yields:
         Progress events followed by a dictionary containing the results.
+
+    Raises:
+        APIValidationError: If none of the selected corpora has dependency-relation data.
     """
     is_lexeme = term_type == TermType.lexeme
     limit_per_period = max_scope == MaxScope.per_period
@@ -1730,15 +1733,12 @@ async def _dependency_relations_impl(
 
         # Filter out corpora which don't exist in database
         corpora = [
-            c
-            for c in corpora
-            if f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{c.upper()}{table_suffix}" in tables
+            c for c in corpora if f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{c.upper()}{table_suffix}" in tables
         ]
         corpora_rest = [c for c in corpora if c not in cached_corpora]
 
         if not corpora:
-            yield {"error": "No dependency relations data available for the selected corpora."}
-            return
+            raise APIValidationError("No dependency relations data available for the selected corpora.")
 
         if corpora_rest and ctx.common.stream:
             yield ProgressEvent(completed=0, total=len(corpora_rest), corpora=list(corpora_rest))
