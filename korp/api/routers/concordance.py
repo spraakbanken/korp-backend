@@ -788,7 +788,9 @@ async def _perform_sample_query(
 @router.get(
     "/concordance/sample",
     response_model=None,
-    responses=handler.docs_response(ConcordanceSampleResponse),
+    responses=handler.docs_response(
+        ConcordanceSampleResponse, http_errors={403: "Access to a requested corpus was denied."}
+    ),
     summary="Sample Concordance",
     description=CONCORDANCE_SAMPLE_DESCRIPTION,
 )
@@ -848,7 +850,7 @@ async def concordance_sample(
 @router.get(
     "/concordance",
     response_model=None,
-    responses=handler.docs_response(ConcordanceResponse),
+    responses=handler.docs_response(ConcordanceResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Concordance",
     description=CONCORDANCE_DESCRIPTION,
 )

@@ -308,7 +308,7 @@ async def _log_likelihood_stream(
 @router.get(
     "/log-likelihood",
     response_model=None,
-    responses=docs_response(LogLikelihoodResponse),
+    responses=docs_response(LogLikelihoodResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Log-Likelihood Comparison",
     description=LOGLIKE_DESCRIPTION,
 )

@@ -119,12 +119,45 @@ def _unwrap_error(exc: BaseException) -> BaseException:
     return leaves[0]
 
 
+def docs_error_responses(http_errors: dict[int, str] | None = None) -> dict[int | str, dict[str, Any]]:
+    """Document errors raised before the response starts.
+
+    Args:
+        http_errors: Additional HTTPException status codes mapped to route-specific descriptions, for example
+            `{403: "Access to a requested corpus was denied."}` or `{429: "Configured rate limit exceeded."}`.
+            These declarations describe existing behavior; they do not enable authorization or rate limiting.
+
+    Returns:
+        FastAPI response declarations for validation, unexpected server errors, and the supplied HTTP errors.
+    """
+    from korp.api.schemas import (  # noqa: PLC0415
+        HTTPErrorResponse,
+        PreflightErrorResponse,
+        RequestValidationErrorResponse,
+    )
+
+    responses: dict[int | str, dict[str, Any]] = {
+        422: {
+            "model": PreflightErrorResponse | RequestValidationErrorResponse,
+            "description": "Request validation or preflight processing failed.",
+        },
+        500: {
+            "description": "Unexpected server error before the response started.",
+            "content": {"text/plain": {"schema": {"type": "string"}, "example": "Internal Server Error"}},
+        },
+    }
+    for code, description in (http_errors or {}).items():
+        responses[code] = {"model": HTTPErrorResponse, "description": description}
+    return responses
+
+
 def docs_response(
     model: type[Any],
     *,
     status_code: int = 200,
     description: str | None = None,
     late_json_errors: bool = True,
+    http_errors: dict[int, str] | None = None,
 ) -> dict[int | str, dict[str, Any]]:
     """Build OpenAPI response documentation without enabling response processing.
 
@@ -136,6 +169,7 @@ def docs_response(
         status_code: The HTTP status code for the documented response.
         description: Optional description for the documented response.
         late_json_errors: Whether ordinary JSON can contain an error produced after its HTTP 200 response has started.
+        http_errors: Additional pre-response HTTP errors; see `docs_error_responses`.
 
     Returns:
         A dictionary suitable for the `responses` parameter of FastAPI route decorators.
@@ -144,8 +178,6 @@ def docs_response(
 
     from korp.api.schemas import (  # noqa: PLC0415
         LateJsonErrorResponse,
-        PreflightErrorResponse,
-        RequestValidationErrorResponse,
         StreamEvent,
     )
 
@@ -166,12 +198,8 @@ def docs_response(
     }
     if description is not None:
         response["description"] = description
-    responses: dict[int | str, dict[str, Any]] = {status_code: response}
-    if status_code != 422:  # noqa: PLR2004
-        responses[422] = {
-            "model": PreflightErrorResponse | RequestValidationErrorResponse,
-            "description": "Request validation or preflight processing failed.",
-        }
+    responses = docs_error_responses(http_errors)
+    responses[status_code] = response
     return responses
 
 

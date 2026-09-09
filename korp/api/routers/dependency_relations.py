@@ -1956,7 +1956,7 @@ async def _dependency_relations_impl(
 @router.get(
     "/dependency-relations",
     response_model=None,
-    responses=docs_response(RelationsResponse),
+    responses=docs_response(RelationsResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Dependency Relations",
     description=DEPENDENCY_RELATIONS_DESCRIPTION,
 )
@@ -2016,7 +2016,7 @@ async def relations(
 @router.get(
     "/dependency-relations/time",
     response_model=None,
-    responses=docs_response(RelationsResponse),
+    responses=docs_response(RelationsResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Dependency Relations Over Time",
     description=DEPENDENCY_RELATIONS_TIME_DESCRIPTION,
 )
@@ -2258,7 +2258,7 @@ async def _relations_sentences_stream(
 @router.get(
     "/dependency-relations/sentences",
     response_model=None,
-    responses=docs_response(RelationsSentencesResponse),
+    responses=docs_response(RelationsSentencesResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Dependency Relations Sentences",
     description=DEPENDENCY_RELATIONS_SENTENCES_DESCRIPTION,
 )
@@ -2310,7 +2310,7 @@ async def relations_sentences(
 @router.get(
     "/dependency-relations/time/sentences",
     response_model=None,
-    responses=docs_response(RelationsSentencesResponse),
+    responses=docs_response(RelationsSentencesResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Dependency Relations Time Sentences",
     description=DEPENDENCY_RELATIONS_TIME_SENTENCES_DESCRIPTION,
 )

@@ -10,7 +10,7 @@ from pydantic import Field
 from korp import cqp
 from korp.api import schemas
 from korp.dependencies import CtxDep
-from korp.handler import api_handler, docs_response
+from korp.handler import api_handler, docs_error_responses, docs_response
 
 router = APIRouter()
 
@@ -90,9 +90,7 @@ class OptimizeResponse(schemas.CommonResponse):
     response_model=None,
     responses={
         200: {"model": HealthResponse},
-        422: {
-            "model": schemas.PreflightErrorResponse | schemas.RequestValidationErrorResponse,
-        },
+        **docs_error_responses(),
     },
     summary="Health Check",
     description=HEALTH_DESCRIPTION,

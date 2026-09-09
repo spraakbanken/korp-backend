@@ -44,6 +44,12 @@ class PreflightErrorResponse(ResponseModel):
     error: ErrorDetails
 
 
+class HTTPErrorResponse(ResponseModel):
+    """Error returned by FastAPI for an HTTPException before streaming starts."""
+
+    detail: Any = Field(..., description="HTTP exception details.")
+
+
 class RequestValidationErrorResponse(ResponseModel):
     """Error raised while FastAPI validates a request or dependency."""
 

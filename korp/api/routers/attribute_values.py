@@ -113,7 +113,7 @@ class AttrValuesResponse(schemas.CommonResponse):
 @router.get(
     "/attribute-values",
     response_model=None,
-    responses=handler.docs_response(AttrValuesResponse),
+    responses=handler.docs_response(AttrValuesResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Attribute Values",
     description=ATTRIBUTE_VALUES_DESCRIPTION,
 )

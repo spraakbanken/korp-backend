@@ -838,7 +838,7 @@ async def perform_frequency_query(
 @router.get(
     "/frequencies",
     response_model=None,
-    responses=handler.docs_response(FrequenciesResponse),
+    responses=handler.docs_response(FrequenciesResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Statistics",
     description=FREQUENCIES_DESCRIPTION,
 )
@@ -896,7 +896,9 @@ async def frequencies(
 @router.get(
     "/frequencies/corpus",
     response_model=None,
-    responses=handler.docs_response(CorpusFrequenciesResponse),
+    responses=handler.docs_response(
+        CorpusFrequenciesResponse, http_errors={403: "Access to a requested corpus was denied."}
+    ),
     summary="Complete Statistics",
     description=CORPUS_FREQUENCIES_DESCRIPTION,
 )
@@ -1355,7 +1357,9 @@ async def _frequencies_time_stream(
 @router.get(
     "/frequencies/time",
     response_model=None,
-    responses=handler.docs_response(FrequenciesTimeResponse),
+    responses=handler.docs_response(
+        FrequenciesTimeResponse, http_errors={403: "Access to a requested corpus was denied."}
+    ),
     summary="Statistics Over Time",
     description=FREQUENCIES_TIME_DESCRIPTION,
 )
