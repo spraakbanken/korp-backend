@@ -362,7 +362,7 @@ def api_handler(
     *,
     cache_headers: bool = True,
     keepalive_seconds: float = 60.0,
-    rate_limit: bool = False,
+    rate_limit: bool = True,
 ) -> Callable:
     """Main decorator for API routes.
 
@@ -409,15 +409,15 @@ def api_handler(
     The decorator can be used with or without parentheses:
         @api_handler
         @api_handler(cache_headers=False)
-        @api_handler(rate_limit=True)
+        @api_handler(rate_limit=False)
 
     Args:
         _callable: The route function to decorate.
         cache_headers: Whether to set HTTP cache headers on the response.
         keepalive_seconds: Interval in seconds for sending keepalive whitespace.
-        rate_limit: Mark this route as a rate-limit candidate. The actual limit values are read from configuration
-            (`RATE_LIMIT_DEFAULT` and `RATE_LIMITS`). Has no effect unless the global rate-limiter is enabled
-            and at least one limit is configured.
+        rate_limit: Whether this route is eligible for rate limiting (default `True`). Set to `False` to exempt it.
+            The actual limit values are read from configuration (`RATE_LIMIT_DEFAULT` and `RATE_LIMITS`). Has no effect
+            unless the global rate-limiter is enabled and at least one limit is configured.
 
     Returns:
         The decorated route function.

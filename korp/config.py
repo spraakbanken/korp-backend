@@ -145,8 +145,8 @@ class Settings(BaseSettings):
     # When to include rate limit headers in responses (`none`, `on_reject`, `always`)
     RATE_LIMIT_HEADERS: Literal["none", "on_reject", "always"] = "on_reject"
 
-    # Default rate limit applied to all rate-limited routes (marked with `@api_handler(rate_limit=True)`). Uses `limits`
-    # syntax, e.g. "10/minute" or "1/second;60/minute". Empty string means no limit.
+    # Default rate limit applied to all `@api_handler` routes unless `rate_limit=False`. Uses `limits` syntax, e.g.
+    # "10/minute" or "1/second;60/minute". Empty string means no limit.
     RATE_LIMIT_DEFAULT: str = ""
 
     # Per-route rate limit overrides, keyed by route path (e.g. {"query": "30/minute"}). Overrides
