@@ -124,6 +124,7 @@ def docs_response(
     *,
     status_code: int = 200,
     description: str | None = None,
+    late_json_errors: bool = True,
 ) -> dict[int | str, dict[str, Any]]:
     """Build OpenAPI response documentation without enabling response processing.
 
@@ -134,30 +135,44 @@ def docs_response(
         model: The response model class to document.
         status_code: The HTTP status code for the documented response.
         description: Optional description for the documented response.
+        late_json_errors: Whether ordinary JSON can contain an error produced after its HTTP 200 response has started.
 
     Returns:
         A dictionary suitable for the `responses` parameter of FastAPI route decorators.
     """
     from pydantic import TypeAdapter  # noqa: PLC0415
 
-    from korp.api.schemas import StreamEvent  # noqa: PLC0415
+    from korp.api.schemas import (  # noqa: PLC0415
+        LateJsonErrorResponse,
+        PreflightErrorResponse,
+        RequestValidationErrorResponse,
+        StreamEvent,
+    )
 
+    documented_model = model | LateJsonErrorResponse if late_json_errors else model
+    response: dict[str, Any] = {"model": documented_model}
+
+    # Add NDJSON schema for streaming responses.
+    # The regular application/json schema is added automatically by FastAPI.
     ndjson_record_schema = TypeAdapter(StreamEvent).json_schema()
     ndjson_record_schema["description"] = (
         "Schema for each line in the NDJSON stream returned when `stream=true`. Result `data` objects are "
         "fragments of the ordinary JSON response and are merged in the order they are received."
     )
-    response: dict[str, Any] = {
-        "model": model,
-        "content": {
-            "application/x-ndjson": {
-                "schema": ndjson_record_schema,
-            }
-        },
+    response["content"] = {
+        "application/x-ndjson": {
+            "schema": ndjson_record_schema,
+        }
     }
     if description is not None:
         response["description"] = description
-    return {status_code: response}
+    responses: dict[int | str, dict[str, Any]] = {status_code: response}
+    if status_code != 422:  # noqa: PLR2004
+        responses[422] = {
+            "model": PreflightErrorResponse | RequestValidationErrorResponse,
+            "description": "Request validation or preflight processing failed.",
+        }
+    return responses
 
 
 def _to_query_value(value: Any) -> str:

@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Annotated, Literal, TypeAlias
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from korp import cqp
 from korp.api import schemas
@@ -60,7 +60,7 @@ OptimizeInOrderParam: TypeAlias = Annotated[
 ]
 
 
-class HealthResponse(BaseModel):
+class HealthResponse(schemas.ResponseModel):
     """Response model for `/health` route."""
 
     status: Literal["ok"] = Field(..., description="Service status.", examples=["ok"])
@@ -88,13 +88,21 @@ class OptimizeResponse(schemas.CommonResponse):
 @router.get(
     "/health",
     response_model=None,
-    responses=docs_response(HealthResponse),
+    responses={
+        200: {"model": HealthResponse},
+        422: {
+            "model": schemas.PreflightErrorResponse | schemas.RequestValidationErrorResponse,
+        },
+    },
     summary="Health Check",
     description=HEALTH_DESCRIPTION,
     tags=["Administration"],
 )
 async def health(_ctx: CtxDep) -> dict:
     """Health check endpoint for monitoring.
+
+    This route intentionally does not use `api_handler`, as it is intended to be a minimal health check endpoint. It
+    consequently does not support the NDJSON streaming response format.
 
     Returns:
         A dictionary with the health status.

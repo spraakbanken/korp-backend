@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import Field
 from pydantic.json_schema import SkipJsonSchema
 
 from korp import auth, caching, cqp, handler, utils
@@ -53,7 +53,7 @@ class InfoResponse(schemas.CommonResponse):
     )
 
 
-class CorpusAttributes(BaseModel):
+class CorpusAttributes(schemas.ResponseModel):
     """CWB attribute names available in a corpus."""
 
     positional: list[str] = Field(
@@ -73,7 +73,7 @@ class CorpusAttributes(BaseModel):
     )
 
 
-class CorpusWorkbenchInfo(BaseModel):
+class CorpusWorkbenchInfo(schemas.ResponseModel):
     """Corpus metadata returned by CQP."""
 
     name: str | SkipJsonSchema[None] = Field(
@@ -123,7 +123,7 @@ class CorpusWorkbenchInfo(BaseModel):
     )
 
 
-class CorpusInfoData(BaseModel):
+class CorpusInfoData(schemas.ResponseModel):
     """Information for a single corpus."""
 
     attrs: CorpusAttributes = Field(..., description="CWB attribute names available in the corpus.")

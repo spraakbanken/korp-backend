@@ -7,7 +7,7 @@ from copy import deepcopy
 from functools import partial
 from typing import TYPE_CHECKING, Annotated, Any, TypeAlias
 
-from pydantic import BeforeValidator, ConfigDict, Field
+from pydantic import BeforeValidator, Field
 from pydantic.json_schema import SkipJsonSchema
 
 from korp.api import params, schemas
@@ -89,8 +89,6 @@ AttributeValuesData = dict[str, list[str] | dict[str, Any]]
 
 class AttrValuesResponse(schemas.CommonResponse):
     """Response model for `/attribute-values` route."""
-
-    model_config = ConfigDict(extra="allow")
 
     corpora: dict[str, AttributeValuesData] | SkipJsonSchema[None] = Field(
         None,

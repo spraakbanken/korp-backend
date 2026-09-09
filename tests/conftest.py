@@ -157,9 +157,15 @@ def client_factory(app_factory: Callable[..., FastAPI]) -> Callable[..., Abstrac
 def get_json(client_factory: Callable[..., AbstractContextManager[TestClient]]) -> Callable[..., dict]:
     """Return helper for GET requests returning validated JSON."""
 
-    def _get_json(path: str, *, params: dict | None = None, config: dict | None = None) -> dict:
+    def _get_json(
+        path: str,
+        *,
+        params: dict | None = None,
+        config: dict | None = None,
+        expected_status_code: int = 200,
+    ) -> dict:
         with client_factory(config or {}) as test_client:
-            return get_response_json(test_client, path, params=params)
+            return get_response_json(test_client, path, params=params, expected_status_code=expected_status_code)
 
     return _get_json
 

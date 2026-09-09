@@ -12,7 +12,7 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal, TypeAlias
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BeforeValidator, Field
 from pydantic.json_schema import SkipJsonSchema
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -267,7 +267,7 @@ RelationsDefaultContextParam: TypeAlias = Annotated[
 ]
 
 
-class RelationRow(BaseModel):
+class RelationRow(schemas.ResponseModel):
     """A dependency relation row."""
 
     head: str = Field(..., description="Head word form or lexeme.", examples=["cat"])
@@ -298,7 +298,7 @@ class RelationRow(BaseModel):
     rmi: float | SkipJsonSchema[None] = Field(None, description="Relative MI score.", examples=[0.91])
 
 
-class RelationsRange(BaseModel):
+class RelationsRange(schemas.ResponseModel):
     """Year range covered by time-sliced relation output."""
 
     start: int = Field(..., description="First year covered by the returned time range.", examples=[2010])
@@ -307,8 +307,6 @@ class RelationsRange(BaseModel):
 
 class RelationsResponse(schemas.CommonResponse):
     """Response model for `/dependency-relations` and `/dependency-relations/time` routes."""
-
-    model_config = ConfigDict(extra="allow")
 
     relations: list[RelationRow] | SkipJsonSchema[None] = Field(
         None,
@@ -339,8 +337,6 @@ class RelationsResponse(schemas.CommonResponse):
 
 class RelationsSentencesResponse(schemas.CommonResponse):
     """Response model for relation sentence lookup routes."""
-
-    model_config = ConfigDict(extra="allow")
 
     hits: int | SkipJsonSchema[None] = Field(None, description="Total number of matching relation sentences.")
     corpus_hits: dict[str, int] | SkipJsonSchema[None] = Field(

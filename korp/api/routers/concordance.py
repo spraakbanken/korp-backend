@@ -18,7 +18,7 @@ import anyio
 import anyio.to_thread
 from anyio import CapacityLimiter
 from fastapi import APIRouter, Query
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BeforeValidator, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
 
 from korp import auth, caching, cqp, handler, utils
@@ -202,7 +202,7 @@ MaxHitsPerCorpusParam: TypeAlias = Annotated[
 ]
 
 
-class Match(BaseModel):
+class Match(schemas.ResponseModel):
     """Match position in a KWIC row."""
 
     start: int = Field(..., description="Start token offset of the match within the returned context.", examples=[5])
@@ -216,7 +216,7 @@ class Match(BaseModel):
     )
 
 
-class Token(BaseModel):
+class Token(schemas.ResponseModel):
     """Token and its requested annotations."""
 
     model_config = ConfigDict(extra="allow")
@@ -236,7 +236,7 @@ class Token(BaseModel):
     )
 
 
-class KWICRow(BaseModel):
+class KWICRow(schemas.ResponseModel):
     """A single concordance row."""
 
     corpus: str = Field(..., description="Corpus that produced this KWIC row.", examples=["SUC3"])
@@ -264,8 +264,6 @@ class KWICRow(BaseModel):
 class ConcordanceResponse(schemas.CommonResponse):
     """Response model for `/concordance` route."""
 
-    model_config = ConfigDict(extra="allow")
-
     total_hits: int = Field(..., description="Total number of hits across all selected corpora.", examples=[1422])
     hits_by_corpus: dict[str, int] = Field(
         ..., description="Number of hits grouped by corpus.", examples=[{"ROMI": 1135, "SUC3": 287}]
@@ -291,8 +289,6 @@ class ConcordanceResponse(schemas.CommonResponse):
 
 class ConcordanceSampleResponse(schemas.CommonResponse):
     """Response model for `/concordance/sample` route."""
-
-    model_config = ConfigDict(extra="allow")
 
     corpus_order: list[str] | SkipJsonSchema[None] = Field(
         None, description="Corpus that produced the sample hit, included when a hit is found."

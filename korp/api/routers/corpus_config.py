@@ -9,7 +9,7 @@ from typing import Annotated, Any, TypeAlias
 
 import anyio
 import yaml
-from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import AfterValidator, BeforeValidator, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
 
 from korp.api import schemas
@@ -59,7 +59,7 @@ CorporaParam: TypeAlias = Annotated[
 ]
 
 
-class ModeSummary(BaseModel):
+class ModeSummary(schemas.ResponseModel):
     """Mode entry returned in the `modes` list."""
 
     mode: str = Field(..., description="Mode id.", examples=["default"])
@@ -75,6 +75,7 @@ class ModeSummary(BaseModel):
 class CorpusConfigResponse(schemas.CommonResponse):
     """Response model for `/corpora/config` route."""
 
+    # Mode YAML may deliberately add installation-specific top-level response fields.
     model_config = ConfigDict(extra="allow")
 
     label: Label | SkipJsonSchema[None] = Field(

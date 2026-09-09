@@ -17,7 +17,7 @@ import anyio.to_process
 import anyio.to_thread
 from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Query
-from pydantic import ConfigDict, Field
+from pydantic import Field
 from pydantic.json_schema import SkipJsonSchema
 from sqlalchemy import text
 
@@ -120,8 +120,6 @@ def validate_date_range(date_from: str | None, date_to: str | None) -> Validated
 
 class TokenDistributionResponse(schemas.CommonResponse):
     """Response model for `/token-distribution` route."""
-
-    model_config = ConfigDict(extra="allow")
 
     corpora: dict[str, dict[str, int]] | SkipJsonSchema[None] = Field(
         None,

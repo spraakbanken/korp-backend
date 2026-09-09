@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated, TypeAlias
 
 from fastapi import APIRouter, Query
-from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import AfterValidator, BeforeValidator, Field
 
 from korp import utils
 from korp.api import params, schemas
@@ -88,7 +88,7 @@ MaxResultsParam: TypeAlias = Annotated[
 ]
 
 
-class LogLikelihoodRow(BaseModel):
+class LogLikelihoodRow(schemas.ResponseModel):
     """A log-likelihood result row."""
 
     value: str = Field(..., description="Grouped value being compared.", examples=["cat"])
@@ -106,8 +106,6 @@ class LogLikelihoodRow(BaseModel):
 
 class LogLikelihoodResponse(schemas.CommonResponse):
     """Response model for `/log-likelihood` route."""
-
-    model_config = ConfigDict(extra="allow")
 
     average: float = Field(
         ...,
@@ -262,13 +260,12 @@ async def _log_likelihood_stream(
         sets = [{"total": 0, "freq": defaultdict(int)}, {"total": 0, "freq": defaultdict(int)}]
         for i, cset in enumerate((set1_corpora, set2_corpora)):
             for corpus in cset:
-                sets[i]["total"] += frequency_result["corpora"][corpus]["sums"]["absolute"]
+                corpus_statistics = frequency_result["corpora"][corpus][0]
+                sets[i]["total"] += corpus_statistics["sums"]["absolute"]
                 if len(cset) == 1:
-                    sets[i]["freq"] = {
-                        _make_freq_key(x["value"]): x["absolute"] for x in frequency_result["corpora"][corpus]["rows"]
-                    }
+                    sets[i]["freq"] = {_make_freq_key(x["value"]): x["absolute"] for x in corpus_statistics["rows"]}
                 else:
-                    for x in frequency_result["corpora"][corpus]["rows"]:
+                    for x in corpus_statistics["rows"]:
                         sets[i]["freq"][_make_freq_key(x["value"])] += x["absolute"]
 
     else:
@@ -284,8 +281,9 @@ async def _log_likelihood_stream(
 
         sets = [{}, {}]
         for i, res in enumerate((frequency_result_1, frequency_result_2)):
-            sets[i]["total"] = res["combined"]["sums"]["absolute"]
-            sets[i]["freq"] = {_make_freq_key(row["value"]): row["absolute"] for row in res["combined"]["rows"]}
+            combined_statistics = res["combined"][0]
+            sets[i]["total"] = combined_statistics["sums"]["absolute"]
+            sets[i]["freq"] = {_make_freq_key(row["value"]): row["absolute"] for row in combined_statistics["rows"]}
 
     ll_list = compute_list(sets[0]["freq"], sets[0]["total"], sets[1]["freq"], sets[1]["total"])
     ws, avg = compute_ll_stats(ll_list, max_results, sets)

@@ -6,22 +6,52 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
 
 
-class CommonResponse(BaseModel):
+class ResponseModel(BaseModel):
+    """Base class for documented API response structures."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CommonResponse(ResponseModel):
     """Common response model."""
 
     debug: dict[str, Any] | SkipJsonSchema[None] = Field(
         None, description="Debug information, included only if debug mode is enabled."
     )
     elapsed: float = Field(..., description="Time taken to process the request in seconds.", examples=[0.123])
-    error: str | dict[str, Any] | SkipJsonSchema[None] = Field(
-        None, description="Error message or details, included only if an error occurred."
+
+
+class ErrorDetails(ResponseModel):
+    """Error details returned as part of a JSON response."""
+
+    type: str = Field(..., description="Machine-readable error type.")
+    value: str = Field(..., description="Human-readable error message.")
+    traceback: list[str] | SkipJsonSchema[None] = Field(
+        None, description="Traceback lines, included only in debug mode."
     )
 
 
-class StreamProgressEvent(BaseModel):
-    """Progress made while producing a streamed response."""
+class LateJsonErrorResponse(ResponseModel):
+    """Error returned after an ordinary JSON response has already started."""
 
-    model_config = ConfigDict(extra="forbid")
+    error: ErrorDetails
+    elapsed: float = Field(..., description="Time taken before the request failed, in seconds.", examples=[0.123])
+
+
+class PreflightErrorResponse(ResponseModel):
+    """Error returned before the response body starts."""
+
+    error: ErrorDetails
+
+
+class RequestValidationErrorResponse(ResponseModel):
+    """Error raised while FastAPI validates a request or dependency."""
+
+    detail: Any = Field(..., description="FastAPI request-validation or HTTP-exception details.")
+
+
+class StreamProgressEvent(ResponseModel):
+    """Progress made while producing a streamed response."""
 
     event: Literal["progress"]
     completed: int = Field(..., ge=0, description="Number of completed work items.")
@@ -31,48 +61,34 @@ class StreamProgressEvent(BaseModel):
     hits: int | None = Field(None, ge=0, description="Hits found for the completed corpus, when known.")
 
 
-class StreamResultEvent(BaseModel):
+class StreamResultEvent(ResponseModel):
     """One result fragment from a streamed response."""
-
-    model_config = ConfigDict(extra="forbid")
 
     event: Literal["result"]
     data: dict[str, Any] = Field(..., description="Result fragment to merge with preceding result fragments.")
 
 
-class StreamErrorDetails(BaseModel):
+class StreamErrorDetails(ErrorDetails):
     """Error details for a streamed response."""
 
-    model_config = ConfigDict(extra="forbid")
 
-    type: str = Field(..., description="Machine-readable error type.")
-    value: str = Field(..., description="Human-readable error message.")
-    traceback: list[str] | None = Field(None, description="Traceback lines, included only in debug mode.")
-
-
-class StreamErrorEvent(BaseModel):
+class StreamErrorEvent(ResponseModel):
     """Failure encountered after a streamed response started."""
-
-    model_config = ConfigDict(extra="forbid")
 
     event: Literal["error"]
     error: StreamErrorDetails
 
 
-class StreamCompleteEvent(BaseModel):
+class StreamCompleteEvent(ResponseModel):
     """Final event in a streamed response."""
-
-    model_config = ConfigDict(extra="forbid")
 
     event: Literal["complete"]
     ok: bool = Field(..., description="Whether the operation completed without a streamed error.")
     elapsed: float = Field(..., ge=0, description="Time taken to process the request in seconds.")
 
 
-class StreamKeepaliveEvent(BaseModel):
+class StreamKeepaliveEvent(ResponseModel):
     """Keepalive emitted while a streamed response is otherwise idle."""
-
-    model_config = ConfigDict(extra="forbid")
 
     event: Literal["keepalive"]
 

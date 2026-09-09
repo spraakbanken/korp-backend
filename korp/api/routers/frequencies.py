@@ -14,7 +14,7 @@ import anyio
 from anyio import CapacityLimiter
 from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Query
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BeforeValidator, Field
 from pydantic.json_schema import SkipJsonSchema
 
 from korp import auth, caching, cqp, handler, utils
@@ -178,14 +178,14 @@ MaxValuesPerSetParam: TypeAlias = Annotated[
 ]
 
 
-class FrequencySums(BaseModel):
+class FrequencySums(schemas.ResponseModel):
     """Frequency sums for a statistics result."""
 
     absolute: int = Field(..., description="Absolute frequency sum.", examples=[598])
     relative: float = Field(..., description="Relative frequency sum.", examples=[13.765536])
 
 
-class FrequencyRow(BaseModel):
+class FrequencyRow(schemas.ResponseModel):
     """A grouped frequency row."""
 
     value: dict[str, list[str]] = Field(
@@ -200,7 +200,7 @@ class FrequencyRow(BaseModel):
     relative: float = Field(..., description="Relative frequency per one million tokens.", examples=[13.765536])
 
 
-class FrequencyStatistics(BaseModel):
+class FrequencyStatistics(schemas.ResponseModel):
     """Frequency statistics for one query or subquery."""
 
     rows: list[FrequencyRow] = Field(..., description="Grouped frequency rows.")
@@ -213,8 +213,6 @@ class FrequencyStatistics(BaseModel):
 class FrequenciesResponse(schemas.CommonResponse):
     """Response model for `/frequencies` route."""
 
-    model_config = ConfigDict(extra="allow")
-
     corpora: dict[str, list[FrequencyStatistics]] = Field(
         ...,
         description="Statistics per corpus, always as arrays. The main query is first, followed by `subcqp` results.",
@@ -223,7 +221,7 @@ class FrequenciesResponse(schemas.CommonResponse):
         ...,
         description="Combined statistics for all corpora, always as an array with the main query first.",
     )
-    count: int = Field(
+    total_rows: int = Field(
         ..., description="Total number of distinct grouped values before response slicing.", examples=[241]
     )
 
@@ -231,16 +229,14 @@ class FrequenciesResponse(schemas.CommonResponse):
 class CorpusFrequenciesResponse(schemas.CommonResponse):
     """Response model for `/frequencies/corpus` route."""
 
-    model_config = ConfigDict(extra="allow")
-
     corpora: dict[str, FrequencyStatistics] = Field(..., description="Statistics per corpus.")
     combined: FrequencyStatistics = Field(..., description="Combined statistics for all corpora.")
-    count: int = Field(
+    total_rows: int = Field(
         ..., description="Total number of distinct grouped values before response slicing.", examples=[241]
     )
 
 
-class TimeStatistics(BaseModel):
+class TimeStatistics(schemas.ResponseModel):
     """Time-series statistics for one query or subquery."""
 
     absolute: dict[str, int | None] = Field(
@@ -267,8 +263,6 @@ class TimeStatistics(BaseModel):
 
 class FrequenciesTimeResponse(schemas.CommonResponse):
     """Response model for `/frequencies/time` route."""
-
-    model_config = ConfigDict(extra="allow")
 
     corpora: dict[str, list[TimeStatistics]] | SkipJsonSchema[None] = Field(
         None,
@@ -952,7 +946,24 @@ async def corpus_frequencies(
         limit=limit,
     )
 
-    return perform_frequency_query(frequency_params, ctx, abort_signal)
+    return _perform_corpus_frequency_query(frequency_params, ctx, abort_signal)
+
+
+async def _perform_corpus_frequency_query(
+    frequency_params: FrequencyParameters,
+    ctx: CtxDep,
+    abort_signal: AbortSignal | None,
+) -> AsyncGenerator[handler.ResponseFragment]:
+    """Return single statistics objects for each corpus rather than arrays of one-element statistics.
+
+    Yields:
+        Progress events and a result with one statistics object rather than a one-element query array.
+    """
+    async for fragment in perform_frequency_query(frequency_params, ctx, abort_signal):
+        if isinstance(fragment, dict):
+            fragment["corpora"] = {corpus: statistics[0] for corpus, statistics in fragment["corpora"].items()}
+            fragment["combined"] = fragment["combined"][0]
+        yield fragment
 
 
 DateFromParam: TypeAlias = Annotated[

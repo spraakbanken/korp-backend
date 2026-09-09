@@ -14,14 +14,19 @@ def concordance_testcorpus(get_json: Callable, corpora: list[str]) -> Callable[.
     parameters (and cache=false).
     """
 
-    def _concordance_testcorpus(cqp: str, params: dict | None = None, config: dict | None = None) -> dict:
+    def _concordance_testcorpus(
+        cqp: str,
+        params: dict | None = None,
+        config: dict | None = None,
+        expected_status_code: int = 200,
+    ) -> dict:
         query = {
             "corpora": "testcorpus",
             "cqp": cqp,
             "cache": "false",
         }
         query.update(params or {})
-        return get_json("/concordance", params=query, config=config)
+        return get_json("/concordance", params=query, config=config, expected_status_code=expected_status_code)
 
     return _concordance_testcorpus
 
@@ -45,7 +50,7 @@ def concordance_sample_testcorpus(get_json: Callable, corpora: list[str]) -> Cal
 @pytest.fixture
 def concordance_testcorpus_kwic_rows(
     concordance_testcorpus: Callable[..., dict],
-) -> Callable[[int, int], dict]:
+) -> Callable[..., dict]:
     """Return a function to test the effect of `MAX_KWIC_ROWS`.
 
     The returned function takes as its parameters the value for `MAX_KWIC_ROWS` and the number of rows to request. It
@@ -54,7 +59,7 @@ def concordance_testcorpus_kwic_rows(
     the corpus (offset=0).
     """
 
-    def _concordance_testcorpus_kwic_rows(max_rows: int, request_rows: int) -> dict:
+    def _concordance_testcorpus_kwic_rows(max_rows: int, request_rows: int, expected_status_code: int = 200) -> dict:
         return concordance_testcorpus(
             "[]",
             {
@@ -62,6 +67,7 @@ def concordance_testcorpus_kwic_rows(
                 "limit": str(request_rows),
             },
             {"MAX_KWIC_ROWS": max_rows},
+            expected_status_code,
         )
 
     return _concordance_testcorpus_kwic_rows
@@ -85,10 +91,10 @@ class TestConcordance:
         assert len(data["kwic"]) == num
 
     @staticmethod
-    def test_concordance_max_kwic_exceeded(concordance_testcorpus_kwic_rows: Callable[[int, int], dict]) -> None:
+    def test_concordance_max_kwic_exceeded(concordance_testcorpus_kwic_rows: Callable[..., dict]) -> None:
         """Test a concordance search requesting `MAX_KWIC_ROWS` + 1 results."""
         num = 1
-        data = concordance_testcorpus_kwic_rows(num, num + 1)
+        data = concordance_testcorpus_kwic_rows(num, num + 1, 422)
         errmsg = f"At most {num} KWIC rows can be returned per call."
         assert "error" in data
         assert errmsg in data["error"]["value"]
