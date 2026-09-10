@@ -118,6 +118,9 @@ class Settings(BaseSettings):
     # If REQUEST_SLOW_LOG_SECONDS is enabled, keep logging the request at this interval until it completes
     REQUEST_STUCK_LOG_INTERVAL_SECONDS: float = 60.0
 
+    # Allow tracebacks in error responses when the request also has debug=true
+    ERROR_TRACEBACKS_ENABLED: bool = False
+
     # Minimum number of rows for timespan calculation to use a separate process (0 = always use thread)
     TIMESPAN_PROCESS_THRESHOLD_ROWS: int = 100_000
 

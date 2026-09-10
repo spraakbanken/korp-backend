@@ -101,21 +101,20 @@ supports `POST` requests with parameters sent in the request body, encoded as ei
 or `application/json`. This makes it possible to send long queries that might otherwise exceed URL length limits. If a
 parameter is sent both in the query string and the body, the query string value takes precedence.
 
-All responses are returned as JSON.
+Responses are ordinary JSON by default. Requests with `stream=true` return an `application/x-ndjson` event stream.
 
 ## Return Codes
 
-Most API routes stream the response body. Streaming lets the backend send keepalive whitespace while long-running CQP or
-database work is still in progress, which helps avoid proxy and browser timeouts.
+Ordinary responses are buffered so failures can use their proper HTTP 4xx or 5xx status. All such failures use a shared
+Problem Details-style JSON object with `code`, `title`, `status`, and `detail` fields. The `code` is a stable API value,
+not a Python exception class name.
 
-Because HTTP status and headers are sent before the full result has been computed, errors that happen after streaming
-has started cannot be reported by changing the HTTP status code. In those cases the response still has status `200`,
-and the JSON object contains an `error` field with the error details. Clients should therefore check the response body
-for `error` instead of treating HTTP `200` alone as a successful API result. When `debug=true`, errors may include extra
-debug information such as tracebacks.
+With `stream=true`, progress, early results, and keepalives are returned as typed NDJSON events. An error after the
+stream has started remains HTTP 200 because its headers are already committed; it is represented by an `error` event
+containing the same error object, followed by `complete` with `ok=false`.
 
-Errors that happen before the route starts streaming may still use normal HTTP status codes, for example malformed
-requests, unknown routes, validation errors, or rate limiting.
+Tracebacks are excluded by default. A traceback is returned only when `ERROR_TRACEBACKS_ENABLED=true` on the server and
+the request also uses `debug=true`.
 
 ## CQP Queries
 
@@ -303,6 +302,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
     app.state.memcached = Memcached()
     app.state.testing = testing
     app.state.rate_limiter = None
+    handler.install_error_handlers(app)
 
     @app.middleware("http")
     async def support_post_params(request: Request, call_next: Any) -> Any:
@@ -350,7 +350,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
 
         # Add 429 response documentation for rate-limited routes
         if settings.RATE_LIMIT_ENABLED:
-            from korp.api.schemas import HTTPErrorResponse  # noqa: PLC0415
+            from korp.api.schemas import ErrorResponse  # noqa: PLC0415
 
             for route in app.routes:
                 if not isinstance(route, APIRoute) or not route.include_in_schema:
@@ -368,7 +368,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
                         "429",
                         {
                             "description": f"Configured rate limit exceeded ({limit}).",
-                            "content": {"application/json": {"schema": HTTPErrorResponse.model_json_schema()}},
+                            "content": {"application/json": {"schema": ErrorResponse.model_json_schema()}},
                             "headers": {
                                 "Retry-After": {
                                     "description": "Seconds to wait before retrying.",
@@ -379,7 +379,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
                     )
 
         # Reorder response properties
-        common_keys = ("elapsed", "debug", "error")
+        common_keys = ("elapsed", "debug", "error", "traceback")
         comps = schema.get("components", {}).get("schemas", {})
         for s in comps.values():
             props = s.get("properties")

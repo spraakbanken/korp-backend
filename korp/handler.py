@@ -19,13 +19,20 @@ from urllib.parse import parse_qsl, urlencode
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.dependencies.utils import get_flat_dependant
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
+from sqlalchemy.exc import SQLAlchemyError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from korp.config import settings
 from korp.dependencies import AbortSignal, Ctx, CtxDep
 
 logger = getLogger(__name__)
+
+HTTP_INTERNAL_SERVER_ERROR = 500
+HTTP_BAD_REQUEST = 400
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,9 +84,10 @@ class APIValidationError(HTTPException):
                 raise APIValidationError("date_from must be before or equal to date_to.")
     """
 
-    def __init__(self, detail: str) -> None:
+    def __init__(self, detail: str, *, field: str | None = None) -> None:
         """Create a validation error with HTTP status 422 and the given detail message."""
         super().__init__(status_code=422, detail=detail)
+        self.field = field
 
     def __str__(self) -> str:
         """Return the validation detail without the HTTP status prefix."""
@@ -130,24 +138,28 @@ def docs_error_responses(http_errors: dict[int, str] | None = None) -> dict[int 
     Returns:
         FastAPI response declarations for validation, unexpected server errors, and the supplied HTTP errors.
     """
-    from korp.api.schemas import (  # noqa: PLC0415
-        HTTPErrorResponse,
-        PreflightErrorResponse,
-        RequestValidationErrorResponse,
-    )
+    from korp.api.schemas import ErrorResponse  # noqa: PLC0415
 
     responses: dict[int | str, dict[str, Any]] = {
+        400: {
+            "model": ErrorResponse,
+            "description": "The request or CQP query was invalid.",
+        },
         422: {
-            "model": PreflightErrorResponse | RequestValidationErrorResponse,
+            "model": ErrorResponse,
             "description": "Request validation or preflight processing failed.",
         },
         500: {
+            "model": ErrorResponse,
             "description": "Unexpected server error before the response started.",
-            "content": {"text/plain": {"schema": {"type": "string"}, "example": "Internal Server Error"}},
+        },
+        503: {
+            "model": ErrorResponse,
+            "description": "A required backend service was unavailable.",
         },
     }
     for code, description in (http_errors or {}).items():
-        responses[code] = {"model": HTTPErrorResponse, "description": description}
+        responses[code] = {"model": ErrorResponse, "description": description}
     return responses
 
 
@@ -156,7 +168,6 @@ def docs_response(
     *,
     status_code: int = 200,
     description: str | None = None,
-    late_json_errors: bool = True,
     http_errors: dict[int, str] | None = None,
 ) -> dict[int | str, dict[str, Any]]:
     """Build OpenAPI response documentation without enabling response processing.
@@ -168,7 +179,6 @@ def docs_response(
         model: The response model class to document.
         status_code: The HTTP status code for the documented response.
         description: Optional description for the documented response.
-        late_json_errors: Whether ordinary JSON can contain an error produced after its HTTP 200 response has started.
         http_errors: Additional pre-response HTTP errors; see `docs_error_responses`.
 
     Returns:
@@ -176,13 +186,9 @@ def docs_response(
     """
     from pydantic import TypeAdapter  # noqa: PLC0415
 
-    from korp.api.schemas import (  # noqa: PLC0415
-        LateJsonErrorResponse,
-        StreamEvent,
-    )
+    from korp.api.schemas import StreamEvent  # noqa: PLC0415
 
-    documented_model = model | LateJsonErrorResponse if late_json_errors else model
-    response: dict[str, Any] = {"model": documented_model}
+    response: dict[str, Any] = {"model": model}
 
     # Add NDJSON schema for streaming responses.
     # The regular application/json schema is added automatically by FastAPI.
@@ -330,19 +336,115 @@ def enforce_ctx_dependency(
         raise RuntimeError("\nCtx dependency check failed.\n\n" + "\n\n".join(violations))
 
 
-def _format_error(exc: BaseException, *, debug: bool) -> dict[str, Any]:
-    """Format an error response dictionary.
+def _problem_details(exc: BaseException, *, debug: bool) -> dict[str, Any]:
+    """Convert an exception to the public Problem Details-style error shape.
 
     Returns:
-        A dictionary representing the error response.
+        The serialized public error object.
     """
+    from korp import cqp  # noqa: PLC0415
+    from korp.memcached import CacheError  # noqa: PLC0415
+
     error = _unwrap_error(exc)
-    error_type = "validation_error" if isinstance(error, APIValidationError) else type(error).__name__
-    err: dict[str, Any] = {"error": {"type": error_type, "value": str(error)}}
-    if debug:
+    field: str | None = None
+    errors: list[dict[str, Any]] | None = None
+
+    if isinstance(error, RequestValidationError):
+        code = "invalid_request"
+        title = "Invalid request"
+        status = 422
+        detail = "Request validation failed."
+        errors = jsonable_encoder(error.errors())
+    elif isinstance(error, APIValidationError):
+        code = "invalid_request"
+        title = "Invalid request"
+        status = error.status_code
+        detail = error.detail
+        field = error.field
+    elif isinstance(error, StarletteHTTPException):
+        status = error.status_code
+        code, title = {
+            400: ("invalid_request", "Invalid request"),
+            401: ("authentication_required", "Authentication required"),
+            403: ("access_denied", "Access denied"),
+            404: ("not_found", "Not found"),
+            409: ("conflict", "Conflict"),
+            422: ("invalid_request", "Invalid request"),
+            429: ("rate_limit_exceeded", "Rate limit exceeded"),
+        }.get(status, ("http_error", "HTTP error"))
+        detail = error.detail
+    elif isinstance(error, cqp.CQPError):
+        code = "cqp_error"
+        title = "CQP query failed"
+        status = 400
+        detail = str(error)
+    elif isinstance(error, SQLAlchemyError):
+        code = "database_unavailable"
+        title = "Database unavailable"
+        status = 503
+        detail = "The database backend is unavailable."
+    elif isinstance(error, CacheError):
+        code = "cache_unavailable"
+        title = "Cache unavailable"
+        status = 503
+        detail = "The cache backend is unavailable."
+    else:
+        code = "backend_error"
+        title = "Backend error"
+        status = 500
+        detail = "An unexpected backend error occurred."
+
+    problem: dict[str, Any] = {"code": code, "title": title, "status": status, "detail": detail}
+    if field is not None:
+        problem["field"] = field
+    if errors is not None:
+        problem["errors"] = errors
+    if settings.ERROR_TRACEBACKS_ENABLED and debug:
         tb = traceback.format_exception(type(error), error, error.__traceback__)
-        err["error"]["traceback"] = [line.rstrip("\n") for line in tb]
-    return err
+        problem["traceback"] = [line.rstrip("\n") for line in tb]
+    return problem
+
+
+def _problem_response(exc: BaseException, *, debug: bool) -> JSONResponse:
+    """Create a JSON error response, preserving headers from HTTP exceptions.
+
+    Returns:
+        A response carrying the public error object and its associated status.
+    """
+    problem = _problem_details(exc, debug=debug)
+    error = _unwrap_error(exc)
+    headers = error.headers if isinstance(error, StarletteHTTPException) else None
+    return JSONResponse(status_code=problem["status"], content=problem, headers=headers)
+
+
+def _request_debug_enabled(request: Request) -> bool:
+    """Return whether the request explicitly enabled debug output."""
+    return request.query_params.get("debug", "").lower() in {"1", "true", "yes", "on"}
+
+
+def install_error_handlers(app: FastAPI) -> None:
+    """Install the API's unified JSON exception handlers on the FastAPI app."""
+
+    async def request_validation_handler(request: Request, exc: Exception) -> JSONResponse:  # noqa: RUF029
+        assert isinstance(exc, RequestValidationError)
+        return _problem_response(exc, debug=_request_debug_enabled(request))
+
+    async def http_exception_handler(request: Request, exc: Exception) -> JSONResponse:  # noqa: RUF029
+        assert isinstance(exc, StarletteHTTPException)
+        return _problem_response(exc, debug=_request_debug_enabled(request))
+
+    async def unexpected_exception_handler(request: Request, exc: Exception) -> JSONResponse:  # noqa: RUF029
+        logger.error(
+            "Unhandled API error: %s %s",
+            request.method,
+            request.url.path,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        return _problem_response(exc, debug=_request_debug_enabled(request))
+
+    app.add_exception_handler(RequestValidationError, request_validation_handler)
+    app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+    app.add_exception_handler(Exception, unexpected_exception_handler)
 
 
 def _set_cache_headers(resp: Response, *, max_age_seconds: int) -> None:
@@ -369,9 +471,9 @@ def api_handler(
     This decorator is to be used on all API routes. It provides the following features:
 
     - It produces a single JSON object normally, or an NDJSON event stream when `common.stream` is enabled.
-    - It prevents proxy timeouts by sending keepalive whitespace regularly.
+    - In NDJSON mode, it prevents proxy timeouts by sending typed keepalive events regularly.
     - It handles client disconnects and signals the route to abort processing.
-    - It formats error responses, including optional tracebacks in debug mode.
+    - It returns ordinary failures with HTTP error statuses and a shared JSON error model.
     - It sets HTTP cache headers if enabled.
     - It adds timing information to the output.
     - It indents JSON output if requested (only for non-streaming responses).
@@ -380,11 +482,11 @@ def api_handler(
     avoid blocking the event loop. Async endpoints run in the event loop as usual.
 
     Output and keepalive behavior:
-    - Async generators and sync generators, whether yielded directly by the route or returned by it, stream results and
-      enable keepalive output.
+    - Async generators and sync generators, whether yielded directly by the route or returned by it, are consumed before
+      an ordinary JSON response is created. With `stream=true`, they stream results and enable keepalive events.
     - A regular route coroutine can perform preflight validation and setup, then return an async or sync iterator for
-      the long-running work. Work done before that iterator is returned cannot send keepalive output, so long-running
-      work should happen in the returned iterator.
+      the long-running work. Work done before that iterator is returned cannot send NDJSON keepalive events, so
+      long-running streamed work should happen in the returned iterator.
     - A route can also return a single dictionary or another non-iterator value. Such a value is sent as one result, and
       keepalive output cannot be sent while the route computes it.
 
@@ -414,7 +516,7 @@ def api_handler(
     Args:
         _callable: The route function to decorate.
         cache_headers: Whether to set HTTP cache headers on the response.
-        keepalive_seconds: Interval in seconds for sending keepalive whitespace.
+        keepalive_seconds: Interval in seconds for sending NDJSON keepalive events.
         rate_limit: Whether this route is eligible for rate limiting (default `True`). Set to `False` to exempt it.
             The actual limit values are read from configuration (`RATE_LIMIT_DEFAULT` and `RATE_LIMITS`). Has no effect
             unless the global rate-limiter is enabled and at least one limit is configured.
@@ -486,25 +588,21 @@ def api_handler(
                         result = await result
                 else:
                     result = await asyncio.to_thread(fn, *args, **kwargs)
-            except APIValidationError as exc:
+            except asyncio.CancelledError:
+                abort.set()
+                await stop_watchdog()
+                raise
+            except Exception as exc:
                 elapsed = time.perf_counter() - start
                 if slow_request_threshold > 0 and elapsed >= slow_request_threshold:
                     logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
                 await stop_watchdog()
-                response = JSONResponse(
-                    status_code=exc.status_code,
-                    content=_format_error(exc, debug=common.debug),
-                    headers=exc.headers,
-                )
+                response = _problem_response(exc, debug=common.debug)
+                if response.status_code >= HTTP_INTERNAL_SERVER_ERROR:
+                    logger.exception("API route failed before producing a result: %s %s", method, route, exc_info=exc)
                 for header_name, header_value in rate_limit_headers.items():
                     response.headers[header_name] = header_value
                 return response
-            except BaseException:
-                elapsed = time.perf_counter() - start
-                if slow_request_threshold > 0 and elapsed >= slow_request_threshold:
-                    logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
-                await stop_watchdog()
-                raise
 
             # Pass-through if Response explicitly returned
             if isinstance(result, Response):
@@ -512,7 +610,7 @@ def api_handler(
                 if slow_request_threshold > 0 and elapsed >= slow_request_threshold:
                     logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
                 await stop_watchdog()
-                if cache_headers and common.cache and not common.debug:
+                if result.status_code < HTTP_BAD_REQUEST and cache_headers and common.cache and not common.debug:
                     max_age = settings.HTTP_CACHE_MAXAGE * 3600
                     if max_age > 0:
                         _set_cache_headers(result, max_age_seconds=max_age)
@@ -521,6 +619,61 @@ def api_handler(
                 return result
 
             fragments = result  # dict OR iterator/generator OR other value
+
+            if not common.stream:
+                result_obj: dict[str, Any] = {}
+                try:
+                    if isinstance(fragments, dict):
+                        result_obj.update(fragments)
+                    elif hasattr(fragments, "__aiter__"):
+                        async for item in fragments:
+                            if item and isinstance(item, dict):
+                                result_obj.update(item)
+                    elif hasattr(fragments, "__iter__") and not isinstance(
+                        fragments, (str, bytes, bytearray, list, tuple)
+                    ):
+
+                        def consume_sync_iter() -> dict[str, Any]:
+                            merged: dict[str, Any] = {}
+                            for item in fragments:
+                                if abort.is_set():
+                                    break
+                                if item and isinstance(item, dict):
+                                    merged.update(item)
+                            return merged
+
+                        # Run the synchronous iterator in a thread to avoid blocking the event loop
+                        result_obj.update(await asyncio.to_thread(consume_sync_iter))
+                    else:
+                        result_obj["data"] = fragments
+                except asyncio.CancelledError:
+                    abort.set()
+                    await stop_watchdog()
+                    raise
+                except Exception as exc:
+                    response = _problem_response(exc, debug=common.debug)
+                    if response.status_code >= HTTP_INTERNAL_SERVER_ERROR:
+                        logger.exception("API route failed: %s %s", method, route, exc_info=exc)
+                else:
+                    result_obj["elapsed"] = time.perf_counter() - start
+                    if common.indent > 0:
+                        response = Response(
+                            content=json.dumps(result_obj, indent=common.indent), media_type="application/json"
+                        )
+                    else:
+                        response = JSONResponse(content=result_obj)
+
+                elapsed = time.perf_counter() - start
+                if slow_request_threshold > 0 and elapsed >= slow_request_threshold:
+                    logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
+                await stop_watchdog()
+                if response.status_code < HTTP_BAD_REQUEST and cache_headers and common.cache and not common.debug:
+                    max_age = settings.HTTP_CACHE_MAXAGE * 3600
+                    if max_age > 0:
+                        _set_cache_headers(response, max_age_seconds=max_age)
+                for header_name, header_value in rate_limit_headers.items():
+                    response.headers[header_name] = header_value
+                return response
 
             queue: asyncio.Queue[Any] = asyncio.Queue()
 
@@ -590,8 +743,15 @@ def api_handler(
 
                         if isinstance(item, Exception):
                             ok = False
-                            err = _format_error(item, debug=common.debug)["error"]
-                            yield (json.dumps({"event": "error", "error": err}) + "\n").encode("utf-8")
+                            problem = _problem_details(item, debug=common.debug)
+                            if problem["status"] >= HTTP_INTERNAL_SERVER_ERROR:
+                                logger.error(
+                                    "API stream failed: %s %s",
+                                    method,
+                                    route,
+                                    exc_info=(type(item), item, item.__traceback__),
+                                )
+                            yield (json.dumps({"event": "error", "error": problem}) + "\n").encode("utf-8")
                             break
 
                         if not item:
@@ -623,77 +783,7 @@ def api_handler(
                     with contextlib.suppress(asyncio.CancelledError, Exception):
                         await producer_task
 
-            keepalive = object()
-
-            # We need a separate keepalive ticker task for non-streaming responses, since we can't rely on queue
-            # timeouts in that case (the route might still be producing output, but we won't be sending it
-            # until the end)
-            async def ticker() -> None:
-                try:
-                    while True:
-                        await asyncio.sleep(keepalive_seconds)
-                        await queue.put(keepalive)
-                except asyncio.CancelledError:
-                    pass
-
-            async def body_iter_full() -> AsyncIterator[bytes]:
-                producer_task = asyncio.create_task(producer())
-                ticker_task = asyncio.create_task(ticker())
-                result_obj: dict[str, Any] = {}
-                finished = False
-                try:
-                    while True:
-                        item = await queue.get()
-
-                        if item is None:
-                            break
-
-                        if item is keepalive:
-                            if await request.is_disconnected():
-                                abort.set()
-                                return
-                            yield b" \n"
-                            continue
-
-                        if isinstance(item, Exception):
-                            result_obj = _format_error(item, debug=common.debug)
-                            break
-
-                        if not item:
-                            yield b" \n"
-                            continue
-
-                        if isinstance(item, ProgressEvent):
-                            continue
-
-                        if isinstance(item, dict):
-                            result_obj.update(item)
-
-                    result_obj["elapsed"] = time.perf_counter() - start
-                    indent = common.indent if common.indent > 0 else None
-                    yield json.dumps(result_obj, indent=indent).encode("utf-8")
-                    finished = True
-
-                except asyncio.CancelledError:
-                    abort.set()
-                    raise
-                finally:
-                    if not finished:
-                        abort.set()
-                    producer_task.cancel()
-                    ticker_task.cancel()
-                    elapsed = time.perf_counter() - start
-                    if slow_request_threshold > 0 and elapsed >= slow_request_threshold:
-                        logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
-                    await stop_watchdog()
-                    with contextlib.suppress(asyncio.CancelledError, Exception):
-                        await producer_task
-                    with contextlib.suppress(asyncio.CancelledError, Exception):
-                        await ticker_task
-
-            response_stream = body_iter_stream() if common.stream else body_iter_full()
-            media_type = "application/x-ndjson" if common.stream else "application/json"
-            resp = StreamingResponse(response_stream, media_type=media_type)
+            resp = StreamingResponse(body_iter_stream(), media_type="application/x-ndjson")
 
             if cache_headers and common.cache and not common.debug:
                 max_age = settings.HTTP_CACHE_MAXAGE * 3600

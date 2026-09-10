@@ -65,7 +65,7 @@ class CacheResponse(schemas.CommonResponse):
 @router.get(
     "/cache",
     response_model=None,
-    responses=docs_response(CacheResponse, late_json_errors=False),
+    responses=docs_response(CacheResponse),
     summary="Refresh Cache",
     description=CACHE_DESCRIPTION,
 )

@@ -101,6 +101,9 @@ For browser-based cross-origin access (CORS), configure explicitly per deploymen
 - `CORS_ALLOW_CREDENTIALS` (must be `false` if `CORS_ALLOW_ORIGINS` contains `"*"`)
 - `CORS_ALLOW_METHODS` and `CORS_ALLOW_HEADERS`
 
+Error tracebacks are disabled by default. For local development they can be enabled with
+`ERROR_TRACEBACKS_ENABLED=true`; an individual request must also set `debug=true` before a traceback is returned.
+
 Optional route-level rate limiting can be enabled with:
 
 - `RATE_LIMIT_ENABLED=true`

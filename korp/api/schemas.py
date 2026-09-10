@@ -21,39 +21,23 @@ class CommonResponse(ResponseModel):
     elapsed: float = Field(..., description="Time taken to process the request in seconds.", examples=[0.123])
 
 
-class ErrorDetails(ResponseModel):
-    """Error details returned as part of a JSON response."""
+class ErrorResponse(ResponseModel):
+    """Problem Details-style error returned by the API."""
 
-    type: str = Field(..., description="Machine-readable error type.")
-    value: str = Field(..., description="Human-readable error message.")
-    traceback: list[str] | SkipJsonSchema[None] = Field(
-        None, description="Traceback lines, included only in debug mode."
+    code: str = Field(..., description="Stable Korp machine-readable error identifier.")
+    title: str = Field(..., description="Short human-readable summary of the problem type.")
+    status: int = Field(..., ge=400, le=599, description="HTTP status associated with the error.")
+    detail: str = Field(..., description="Human-readable details about this occurrence of the problem.")
+    field: str | SkipJsonSchema[None] = Field(None, description="Related request field, when known.")
+    errors: list[dict[str, Any]] | SkipJsonSchema[None] = Field(
+        None, description="Structured parameter errors supplied when request validation fails."
     )
-
-
-class LateJsonErrorResponse(ResponseModel):
-    """Error returned after an ordinary JSON response has already started."""
-
-    error: ErrorDetails
-    elapsed: float = Field(..., description="Time taken before the request failed, in seconds.", examples=[0.123])
-
-
-class PreflightErrorResponse(ResponseModel):
-    """Error returned before the response body starts."""
-
-    error: ErrorDetails
-
-
-class HTTPErrorResponse(ResponseModel):
-    """Error returned by FastAPI for an HTTPException before streaming starts."""
-
-    detail: Any = Field(..., description="HTTP exception details.")
-
-
-class RequestValidationErrorResponse(ResponseModel):
-    """Error raised while FastAPI validates a request or dependency."""
-
-    detail: Any = Field(..., description="FastAPI request-validation or HTTP-exception details.")
+    traceback: list[str] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Traceback lines, included only when server-side traceback exposure and request debug mode are enabled."
+        ),
+    )
 
 
 class StreamProgressEvent(ResponseModel):
@@ -74,15 +58,11 @@ class StreamResultEvent(ResponseModel):
     data: dict[str, Any] = Field(..., description="Result fragment to merge with preceding result fragments.")
 
 
-class StreamErrorDetails(ErrorDetails):
-    """Error details for a streamed response."""
-
-
 class StreamErrorEvent(ResponseModel):
     """Failure encountered after a streamed response started."""
 
     event: Literal["error"]
-    error: StreamErrorDetails
+    error: ErrorResponse
 
 
 class StreamCompleteEvent(ResponseModel):
