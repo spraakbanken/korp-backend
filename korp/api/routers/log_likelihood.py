@@ -88,10 +88,20 @@ MaxResultsParam: TypeAlias = Annotated[
 ]
 
 
+_FrequencyKey: TypeAlias = tuple[tuple[str, tuple[str, ...]], ...]
+
+
 class LogLikelihoodRow(schemas.ResponseModel):
     """A log-likelihood result row."""
 
-    value: str = Field(..., description="Grouped value being compared.", examples=["cat"])
+    value: dict[str, list[str]] = Field(
+        ...,
+        description=(
+            "Grouped CWB attribute values. Every value is an array: positional values contain one value per token in "
+            "the match, while structural values normally contain one value."
+        ),
+        examples=[{"word": ["cat"]}, {"word": ["run"], "pos": ["VB"]}],
+    )
     score: float = Field(
         ...,
         description=(
@@ -115,7 +125,7 @@ class LogLikelihoodResponse(schemas.CommonResponse):
     results: list[LogLikelihoodRow] = Field(
         ...,
         description="Log-likelihood rows for the returned values.",
-        examples=[[{"value": "cat", "score": -5.43, "set1": 447, "set2": 254}]],
+        examples=[[{"value": {"word": ["cat"]}, "score": -5.43, "set1": 447, "set2": 254}]],
     )
 
 
@@ -151,7 +161,7 @@ async def _log_likelihood_stream(
 
     same_cqp = set1_cqp == set2_cqp
 
-    def _make_freq_key(value: dict[str, list[str]]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    def _make_freq_key(value: dict[str, list[str]]) -> _FrequencyKey:
         """Create a hashable frequency key from a frequency result row's value dict.
 
         Args:
@@ -188,17 +198,19 @@ async def _log_likelihood_stream(
         loglike = 2 * (l1 + l2)
         return round(loglike, 2)
 
-    def compute_list(d1: dict, tot1: int, ref: dict, reftot: int) -> list[tuple[float, str]]:
-        """Compute log-likelihood for lists.
+    def compute_list(
+        d1: dict[_FrequencyKey, int], tot1: int, ref: dict[_FrequencyKey, int], reftot: int
+    ) -> list[tuple[float, _FrequencyKey]]:
+        """Compute log-likelihood for grouped values.
 
         Args:
-            d1: Word frequency dictionary for set 1.
+            d1: Grouped-value frequency dictionary for set 1.
             tot1: Total word count for set 1.
-            ref: Word frequency dictionary for set 2.
+            ref: Grouped-value frequency dictionary for set 2.
             reftot: Total word count for set 2.
 
         Returns:
-            List of tuples (log-likelihood, word), sorted by log-likelihood descending.
+            List of tuples (log-likelihood, grouped value key), sorted by log-likelihood descending.
         """
         all_words = d1.keys() | ref.keys()
         result = [(compute_loglike(d1.get(w, 0), tot1, ref.get(w, 0), reftot), w) for w in all_words]
@@ -206,22 +218,22 @@ async def _log_likelihood_stream(
         return result
 
     def compute_ll_stats(
-        ll_list: list[tuple[float, str]],
+        ll_list: list[tuple[float, _FrequencyKey]],
         count: int,
         sets: list[dict],
-    ) -> tuple[list[tuple[float, str]], float]:
-        """Calculate average and truncate word list.
+    ) -> tuple[list[tuple[float, _FrequencyKey]], float]:
+        """Calculate average and truncate the grouped-value list.
 
-        Words more prominent in set 1 get a negated log-likelihood value.
+        Values more prominent in set 1 get a negated log-likelihood value.
 
         Args:
-            ll_list: List of tuples (log-likelihood, word).
-            count: Maximum number of words to include from each set. 0 means no limit.
+            ll_list: List of tuples (log-likelihood, grouped value key).
+            count: Maximum number of values to include from each set. 0 means no limit.
             sets: List of two dictionaries with 'total' and 'freq' keys for each set.
 
         Returns:
             A tuple containing:
-                - Truncated list of tuples (log-likelihood, word).
+                - Truncated list of tuples (log-likelihood, grouped value key).
                 - Average log-likelihood.
         """
         new_list = []
@@ -292,10 +304,9 @@ async def _log_likelihood_stream(
     result["results"] = []
 
     for ll, w in ws:
-        w_formatted = " ".join(w[0][1])
         result["results"].append(
             {
-                "value": w_formatted,
+                "value": {attribute: list(values) for attribute, values in w},
                 "score": ll,
                 "set1": sets[0]["freq"].get(w, 0),
                 "set2": sets[1]["freq"].get(w, 0),
