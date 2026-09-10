@@ -674,11 +674,11 @@ async def perform_frequency_query(
         )
         relative_to_freqs = {"combined": {}, "corpora": defaultdict(dict)}
 
-        for row in relative_to_result["combined"]["rows"]:
+        for row in relative_to_result["combined"][0]["rows"]:
             relative_to_freqs["combined"][tuple(tuple(v) for k, v in sorted(row["value"].items()))] = row["absolute"]
 
         for c in relative_to_result["corpora"]:
-            for row in relative_to_result["corpora"][c]["rows"]:
+            for row in relative_to_result["corpora"][c][0]["rows"]:
                 relative_to_freqs["corpora"][c][tuple(tuple(v) for k, v in sorted(row["value"].items()))] = row[
                     "absolute"
                 ]
