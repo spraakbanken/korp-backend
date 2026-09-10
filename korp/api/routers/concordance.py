@@ -805,13 +805,12 @@ async def concordance_sample(
     random_seed: RandomSeedParam = None,
     in_order: InOrderParam = True,
     within: params.WithinParam = None,
-    default_within: params.DefaultWithinParam | None = None,
-    context: params.ContextParam | None = None,
+    default_within: params.DefaultWithinParam = None,
+    context: params.ContextParam = None,
     default_context: params.DefaultContextParam = "10 words",
-    left_context: LeftContextParam | None = None,
-    right_context: RightContextParam | None = None,
+    left_context: LeftContextParam = None,
+    right_context: RightContextParam = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
-    pagination_state: PaginationStateParam = None,
     abort_signal: AbortDep = None,
 ) -> AsyncGenerator[handler.ResponseFragment]:
     """Perform a CQP query and return a random match.
@@ -841,7 +840,7 @@ async def concordance_sample(
         right_context=right_context,
         context=context,
         expand_prequeries=expand_prequeries,
-        pagination_state=pagination_state,
+        pagination_state=None,
     )
 
     return _perform_sample_query(concordance_params, ctx, abort_signal)
