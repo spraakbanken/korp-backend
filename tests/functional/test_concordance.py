@@ -96,8 +96,8 @@ class TestConcordance:
         num = 1
         data = concordance_testcorpus_kwic_rows(num, num + 1, 422)
         errmsg = f"At most {num} KWIC rows can be returned per call."
-        assert "error" in data
-        assert errmsg in data["error"]["value"]
+        assert data["code"] == "invalid_request"
+        assert errmsg in data["detail"]
 
     @staticmethod
     def test_concordance_max_kwic_unlimited(concordance_testcorpus_kwic_rows: Callable[[int, int], dict]) -> None:
@@ -110,10 +110,10 @@ class TestConcordance:
     @staticmethod
     def test_concordance_invalid_cqp_surfaces_cqp_error(concordance_testcorpus: Callable[..., dict]) -> None:
         """Test that invalid CQP in parallel concordance search exposes the underlying CQP error."""
-        data = concordance_testcorpus("unquoted")
+        data = concordance_testcorpus("unquoted", config={"MAX_KWIC_ROWS": 0}, expected_status_code=400)
 
-        assert data["error"]["type"] == "CQPError"
-        assert "Corpus ``unquoted'' is undefined" in data["error"]["value"]
+        assert data["code"] == "cqp_error"
+        assert "Corpus ``unquoted'' is undefined" in data["detail"]
 
 
 class TestConcordanceSample:

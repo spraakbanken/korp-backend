@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from korp.dependencies import CtxDep
-from korp.handler import api_handler
+from korp.handler import api_handler, install_error_handlers
 from korp.rate_limit import RateLimitCheck
 from tests.configutils import get_test_settings
 
@@ -39,6 +39,7 @@ class FakeRateLimiter:
 
 def _make_test_app(rate_limiter: FakeRateLimiter | None) -> FastAPI:
     app = FastAPI()
+    install_error_handlers(app)
     app.state.cache_enabled = False
     app.state.memcached = object()
     app.state.db = object()
@@ -114,7 +115,12 @@ def test_limited_route_returns_429_when_quota_exceeded() -> None:
         response = client.get("/limited")
 
     assert response.status_code == HTTP_TOO_MANY_REQUESTS
-    assert response.json() == {"detail": "Rate limit exceeded."}
+    assert response.json() == {
+        "code": "rate_limit_exceeded",
+        "title": "Rate limit exceeded",
+        "status": HTTP_TOO_MANY_REQUESTS,
+        "detail": "Rate limit exceeded.",
+    }
     assert response.headers["retry-after"] == "5"
     assert response.headers["x-ratelimit-limit"] == "2"
     assert response.headers["x-ratelimit-remaining"] == "0"

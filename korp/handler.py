@@ -66,22 +66,16 @@ ResponseFragment: TypeAlias = dict[str, Any] | ProgressEvent
 
 
 class APIValidationError(HTTPException):
-    """Report invalid request input before the response body begins.
+    """Signal a request validation failure with the API's standard error representation.
 
-    Raise this exception from a FastAPI dependency when validation must happen before the route callable is entered,
-    for example when validating a relationship between multiple query parameters. FastAPI resolves dependencies before
-    invoking the route and recognizes this exception as an intentional HTTP error, returning status 422 instead of
-    treating the validation failure as an unhandled server exception.
+    Use this exception to indicate that the request was invalid, for example incomplete or inconsistent parameters. This
+    is distinct from FastAPI's built-in validation errors, which are raised automatically. Raising this exception will
+    result in a JSON response with HTTP status 422 and the `invalid_request` error code. The optional `field` value
+    identifies the related request field in the error response.
 
-    It may also be raised directly by a route during its initial setup. In that case, `api_handler` catches it before
-    creating the streaming response and returns a formatted 422 response. Errors raised by dependencies use FastAPI's
-    standard HTTP-exception response body instead. Validation that happens after the response has started cannot change
-    the HTTP status and is handled as a streamed error instead.
-
-    Example:
-        def validate_dates(date_from: str | None, date_to: str | None) -> None:
-            if date_from and date_to and date_from > date_to:
-                raise APIValidationError("date_from must be before or equal to date_to.")
+    This can be raised either by a FastAPI dependency or by a route before response processing begins. In both cases,
+    the error is formatted into the same public error shape. An exception raised after a streaming response has started
+    cannot change the HTTP status and is emitted as a streamed error event instead.
     """
 
     def __init__(self, detail: str, *, field: str | None = None) -> None:
@@ -97,7 +91,7 @@ class APIValidationError(HTTPException):
 def _unwrap_error(exc: BaseException) -> BaseException:
     """Return the most useful leaf exception from a wrapped error.
 
-    AnyIO task groups can surface failures as ``ExceptionGroup`` instances, which are too generic to expose directly in
+    AnyIO task groups can surface failures as `ExceptionGroup` instances, which are too generic to expose directly in
     API responses. Prefer the first non-cancellation leaf with a message, and fall back to the original exception if we
     cannot find a better candidate.
 
