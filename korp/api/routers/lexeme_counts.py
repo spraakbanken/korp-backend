@@ -4,12 +4,12 @@ from collections.abc import AsyncIterator
 from typing import Annotated, TypeAlias
 
 from fastapi import APIRouter, Query
-from pydantic import AfterValidator, BeforeValidator, Field
-from pydantic.json_schema import SkipJsonSchema
+from pydantic import BeforeValidator, Field
 from sqlalchemy import text
 
 from korp import auth, utils
 from korp.api import schemas
+from korp.api.params import CorporaParam
 from korp.api.requests import QueryRequestModel, RequestModel
 from korp.config import settings
 from korp.dependencies import CtxDep, QueryCtxDep
@@ -20,7 +20,7 @@ router = APIRouter(tags=["Statistics"])
 LEXEME_COUNT_DESCRIPTION = """Return absolute frequencies for one or more lexemes.
 
 The response contains a `lexeme_counts` object where each returned lexeme is a key and the value is the total frequency
-in the selected corpora. If `corpora` is omitted, counts are summed over all corpora present in the lexeme counts table.
+in the selected corpora.
 
 Only exact lexeme lookups are supported. Lexemes that are not found are omitted from the response rather than returned
 with `0`.
@@ -31,16 +31,6 @@ Get the number of occurrences of two lexemes in one corpus:
 
 `/lexeme-counts?lexemes=ge..vb.1,ta..vb.1&corpora=ROMI`
 """
-
-CorporaParamOptional: TypeAlias = Annotated[
-    list[str] | SkipJsonSchema[None],
-    Query(
-        description=("Corpora to count in. If omitted, counts are summed over all corpora in the lexeme counts table."),
-        examples=[["ROMI"], ["ROMI", "SUC3"]],
-    ),
-    BeforeValidator(utils.split_csv),
-    AfterValidator(lambda v: [x.upper() for x in v]),
-]
 
 LexemesParam: TypeAlias = Annotated[
     list[str],
@@ -65,10 +55,10 @@ class LexemeCountResponse(schemas.CommonResponse):
 class LexemeCountsRequest(RequestModel):
     """Request for lexeme counts."""
 
-    json_array_fields = frozenset({"lexemes", "corpora"})
+    json_array_fields = frozenset({"corpora", "lexemes"})
 
+    corpora: CorporaParam
     lexemes: LexemesParam
-    corpora: CorporaParamOptional = None
 
 
 class LexemeCountsQuery(QueryRequestModel, LexemeCountsRequest):
@@ -88,12 +78,10 @@ async def _lexeme_counts_stream(ctx: CtxDep, lexemes: list[str], corpora: list[s
     for i, lexeme in enumerate(lexemes):
         bind_params[f"lexeme_{i}"] = lexeme
 
-    corpora_sql = ""
-    if corpora:
-        corpus_placeholders = ", ".join(f":corpus_{i}" for i in range(len(corpora)))
-        for i, c in enumerate(corpora):
-            bind_params[f"corpus_{i}"] = c
-        corpora_sql = f" AND corpus IN ({corpus_placeholders})"
+    corpus_placeholders = ", ".join(f":corpus_{i}" for i in range(len(corpora)))
+    for i, c in enumerate(corpora):
+        bind_params[f"corpus_{i}"] = c
+    corpora_sql = f" AND corpus IN ({corpus_placeholders})"
 
     sql = text(f"""
         SELECT lexeme, SUM(freq) AS freq
@@ -149,6 +137,5 @@ async def _lexeme_counts(ctx: CtxDep, request: LexemeCountsRequest) -> AsyncIter
     Returns:
         An async iterator yielding a dictionary with lexeme counts.
     """
-    corpora = request.corpora or []
-    await auth.check_authorization(corpora, ctx)
-    return _lexeme_counts_stream(ctx, request.lexemes, corpora)
+    await auth.check_authorization(request.corpora, ctx)
+    return _lexeme_counts_stream(ctx, request.lexemes, request.corpora)
