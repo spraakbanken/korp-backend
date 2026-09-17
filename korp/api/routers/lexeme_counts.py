@@ -111,7 +111,7 @@ async def _lexeme_counts_stream(ctx: CtxDep, lexemes: list[str], corpora: list[s
 @router.get(
     "/lexeme-counts",
     response_model=None,
-    responses=docs_response(LexemeCountResponse, http_errors={403: "Access to a requested corpus was denied."}),
+    responses=docs_response(LexemeCountResponse, corpus_authorization=True),
     summary="Lexeme Statistics",
     description=LEXEME_COUNT_DESCRIPTION,
     operation_id="get_lexeme_counts",
@@ -128,7 +128,7 @@ async def lexeme_counts_get(
 @router.post(
     "/lexeme-counts",
     response_model=None,
-    responses=docs_response(LexemeCountResponse, http_errors={403: "Access to a requested corpus was denied."}),
+    responses=docs_response(LexemeCountResponse, corpus_authorization=True),
     summary="Lexeme Statistics",
     description=LEXEME_COUNT_DESCRIPTION,
     operation_id="post_lexeme_counts",

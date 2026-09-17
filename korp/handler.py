@@ -10,7 +10,7 @@ import json
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from functools import update_wrapper
 from logging import getLogger
@@ -121,12 +121,12 @@ def _unwrap_error(exc: BaseException) -> BaseException:
     return leaves[0]
 
 
-def docs_error_responses(http_errors: dict[int, str] | None = None) -> dict[int | str, dict[str, Any]]:
+def docs_error_responses(http_errors: Mapping[int, str] | None = None) -> dict[int | str, dict[str, Any]]:
     """Document errors raised before the response starts.
 
     Args:
         http_errors: Additional HTTPException status codes mapped to route-specific descriptions, for example
-            `{403: "Access to a requested corpus was denied."}` or `{429: "Configured rate limit exceeded."}`.
+            `{404: "The requested resource was not found."}` or `{429: "Configured rate limit exceeded."}`.
             These declarations describe existing behavior; they do not enable authorization or rate limiting.
 
     Returns:
@@ -162,7 +162,8 @@ def docs_response(
     *,
     status_code: int = 200,
     description: str | None = None,
-    http_errors: dict[int, str] | None = None,
+    corpus_authorization: bool = False,
+    http_errors: Mapping[int, str] | None = None,
 ) -> dict[int | str, dict[str, Any]]:
     """Build OpenAPI response documentation without enabling response processing.
 
@@ -173,6 +174,8 @@ def docs_response(
         model: The response model class to document.
         status_code: The HTTP status code for the documented response.
         description: Optional description for the documented response.
+        corpus_authorization: Whether to document the HTTP 403 response from corpus authorization. This only describes
+            existing behavior; it does not enable authorization.
         http_errors: Additional pre-response HTTP errors; see `docs_error_responses`.
 
     Returns:
@@ -198,7 +201,9 @@ def docs_response(
     }
     if description is not None:
         response["description"] = description
-    responses = docs_error_responses(http_errors)
+    errors = {403: "Access to a requested corpus was denied."} if corpus_authorization else {}
+    errors.update(http_errors or {})
+    responses = docs_error_responses(errors)
     responses[status_code] = response
     return responses
 

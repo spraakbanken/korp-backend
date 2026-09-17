@@ -870,9 +870,7 @@ async def _perform_sample_query(
 @router.get(
     "/concordance/sample",
     response_model=None,
-    responses=handler.docs_response(
-        ConcordanceSampleResponse, http_errors={403: "Access to a requested corpus was denied."}
-    ),
+    responses=handler.docs_response(ConcordanceSampleResponse, corpus_authorization=True),
     summary="Sample Concordance",
     description=CONCORDANCE_SAMPLE_DESCRIPTION,
     operation_id="get_concordance_sample",
@@ -894,9 +892,7 @@ async def concordance_sample_get(
 @router.post(
     "/concordance/sample",
     response_model=None,
-    responses=handler.docs_response(
-        ConcordanceSampleResponse, http_errors={403: "Access to a requested corpus was denied."}
-    ),
+    responses=handler.docs_response(ConcordanceSampleResponse, corpus_authorization=True),
     summary="Sample Concordance",
     description=CONCORDANCE_SAMPLE_DESCRIPTION,
     operation_id="post_concordance_sample",
@@ -956,7 +952,7 @@ async def _concordance_sample(
 @router.get(
     "/concordance",
     response_model=None,
-    responses=handler.docs_response(ConcordanceResponse, http_errors={403: "Access to a requested corpus was denied."}),
+    responses=handler.docs_response(ConcordanceResponse, corpus_authorization=True),
     summary="Concordance",
     description=CONCORDANCE_DESCRIPTION,
     operation_id="get_concordance",
@@ -978,7 +974,7 @@ async def concordance_get(
 @router.post(
     "/concordance",
     response_model=None,
-    responses=handler.docs_response(ConcordanceResponse, http_errors={403: "Access to a requested corpus was denied."}),
+    responses=handler.docs_response(ConcordanceResponse, corpus_authorization=True),
     summary="Concordance",
     description=CONCORDANCE_DESCRIPTION,
     operation_id="post_concordance",

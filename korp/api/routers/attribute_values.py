@@ -133,7 +133,7 @@ class AttributeValuesQuery(QueryRequestModel, AttributeValuesRequest):
 @router.get(
     "/attribute-values",
     response_model=None,
-    responses=handler.docs_response(AttrValuesResponse, http_errors={403: "Access to a requested corpus was denied."}),
+    responses=handler.docs_response(AttrValuesResponse, corpus_authorization=True),
     summary="Attribute Values",
     description=ATTRIBUTE_VALUES_DESCRIPTION,
     operation_id="get_attribute_values",
@@ -154,7 +154,7 @@ async def attribute_values_get(
 @router.post(
     "/attribute-values",
     response_model=None,
-    responses=handler.docs_response(AttrValuesResponse, http_errors={403: "Access to a requested corpus was denied."}),
+    responses=handler.docs_response(AttrValuesResponse, corpus_authorization=True),
     summary="Attribute Values",
     description=ATTRIBUTE_VALUES_DESCRIPTION,
     operation_id="post_attribute_values",
