@@ -33,8 +33,11 @@ class ExampleAuth(auth.Authorizer):
     on a request header containing allowed corpora.
     """
 
-    @staticmethod
-    async def _fetch_protection_info(corpora: list[str], _auth_ctx: AuthContext) -> dict[str, auth.ProtectionInfo]:
+    async def _fetch_protection_info(  # noqa: PLR6301
+        self,
+        corpora: list[str],
+        auth_ctx: AuthContext,  # noqa: ARG002
+    ) -> dict[str, auth.ProtectionInfo]:
         """Build protection metadata from plugin configuration.
 
         Returns:

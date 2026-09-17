@@ -12,7 +12,8 @@ from pydantic import AfterValidator, BeforeValidator, Field
 
 from korp import utils
 from korp.api import params, schemas
-from korp.dependencies import AbortDep, CtxDep
+from korp.api.requests import QueryRequestModel, RequestModel
+from korp.dependencies import AbortDep, AbortSignal, CtxDep, QueryCtxDep
 from korp.handler import api_handler, docs_response
 
 from . import frequencies
@@ -66,14 +67,14 @@ Set2CQPParam: TypeAlias = Annotated[
 
 Set1CorporaParam: TypeAlias = Annotated[
     list[str],
-    Query(description="Comma-separated list of corpora for set 1.", examples=[["ROMI,SUC3"]]),
+    Query(description="Corpora for set 1.", examples=[["ROMI", "SUC3"]]),
     BeforeValidator(utils.split_csv),
     AfterValidator(lambda v: [x.upper() for x in v]),
 ]
 
 Set2CorporaParam: TypeAlias = Annotated[
     list[str],
-    Query(description="Comma-separated list of corpora for set 2.", examples=[["GP2012"]]),
+    Query(description="Corpora for set 2.", examples=[["GP2012"]]),
     BeforeValidator(utils.split_csv),
     AfterValidator(lambda v: [x.upper() for x in v]),
 ]
@@ -127,6 +128,47 @@ class LogLikelihoodResponse(schemas.CommonResponse):
         description="Log-likelihood rows for the returned values.",
         examples=[[{"value": {"word": ["cat"]}, "score": -5.43, "set1": 447, "set2": 254}]],
     )
+
+
+class LogLikelihoodRequest(RequestModel):
+    """Request for a log-likelihood comparison."""
+
+    json_array_fields = frozenset(
+        {
+            "set1_corpora",
+            "set2_corpora",
+            "group_by",
+            "group_by_struct",
+            "within",
+            "ignore_case",
+            "relative_to_struct",
+            "split",
+            "strip_pointer_suffix",
+            "max_values_per_set",
+        }
+    )
+
+    set1_cqp: Set1CQPParam
+    set2_cqp: Set2CQPParam
+    set1_corpora: Set1CorporaParam
+    set2_corpora: Set2CorporaParam
+    max_results: MaxResultsParam = 15
+    group_by: frequencies.GroupByParam = None
+    group_by_struct: frequencies.GroupByStructParam = None
+    within: params.WithinParam = None
+    default_within: params.DefaultWithinParam = None
+    ignore_case: frequencies.IgnoreCaseParam = None
+    relative_to_struct: frequencies.RelativeToStructParam = None
+    split: params.SplitParam = None
+    strip_pointer_suffix: frequencies.StripPointerSuffixParam = None
+    max_values_per_set: frequencies.MaxValuesPerSetParam = None
+    expand_prequeries: params.ExpandPrequeriesParam = True
+
+
+class LogLikelihoodQuery(QueryRequestModel, LogLikelihoodRequest):
+    """GET query for a log-likelihood comparison."""
+
+    csv_fields = LogLikelihoodRequest.json_array_fields
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -322,34 +364,51 @@ async def _log_likelihood_stream(
     responses=docs_response(LogLikelihoodResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Log-Likelihood Comparison",
     description=LOGLIKE_DESCRIPTION,
+    operation_id="get_log_likelihood",
 )
-@router.post("/log-likelihood", response_model=None, include_in_schema=False)
 @api_handler
-async def log_likelihood(
-    ctx: CtxDep,
-    set1_cqp: Set1CQPParam,
-    set2_cqp: Set2CQPParam,
-    set1_corpora: Set1CorporaParam,
-    set2_corpora: Set2CorporaParam,
-    max_results: MaxResultsParam = 15,
-    group_by: frequencies.GroupByParam = None,
-    group_by_struct: frequencies.GroupByStructParam = None,
-    within: params.WithinParam = None,
-    default_within: params.DefaultWithinParam = None,
-    ignore_case: frequencies.IgnoreCaseParam = None,
-    relative_to_struct: frequencies.RelativeToStructParam = None,
-    split: params.SplitParam = None,
-    strip_pointer_suffix: frequencies.StripPointerSuffixParam = None,
-    max_values_per_set: frequencies.MaxValuesPerSetParam = None,
-    expand_prequeries: params.ExpandPrequeriesParam = True,
+async def log_likelihood_get(
+    ctx: QueryCtxDep,
+    query: Annotated[LogLikelihoodQuery, Query()],
     abort_signal: AbortDep = None,
+) -> AsyncIterator[dict]:
+    """Compare searches with log-likelihood.
+
+    Returns:
+        The log-likelihood result stream.
+    """
+    return await _log_likelihood(ctx, query.to_request(LogLikelihoodRequest), abort_signal)
+
+
+@router.post(
+    "/log-likelihood",
+    response_model=None,
+    responses=docs_response(LogLikelihoodResponse, http_errors={403: "Access to a requested corpus was denied."}),
+    summary="Log-Likelihood Comparison",
+    description=LOGLIKE_DESCRIPTION,
+    operation_id="post_log_likelihood",
+)
+@api_handler
+async def log_likelihood_post(
+    ctx: CtxDep, request: LogLikelihoodRequest, abort_signal: AbortDep = None
+) -> AsyncIterator[dict]:
+    """Compare searches with log-likelihood.
+
+    Returns:
+        The log-likelihood result stream.
+    """
+    return await _log_likelihood(ctx, request, abort_signal)
+
+
+async def _log_likelihood(
+    ctx: CtxDep, request: LogLikelihoodRequest, abort_signal: AbortSignal | None
 ) -> AsyncIterator[dict]:
     """Do a log-likelihood comparison on two queries.
 
     Returns:
         An async iterator yielding a dictionary with log-likelihood results.
     """
-    corpora = set(set1_corpora).union(set2_corpora)
+    corpora = set(request.set1_corpora).union(request.set2_corpora)
 
     # This also performs authorization for the selected corpora
     frequency_params = await frequencies.parse_frequency_parameters(
@@ -357,31 +416,31 @@ async def log_likelihood(
         corpora=list(corpora),
         cqp_query=[],
         subcqp=None,
-        group_by=group_by,
-        group_by_struct=group_by_struct,
-        within=within,
-        default_within=default_within,
+        group_by=request.group_by,
+        group_by_struct=request.group_by_struct,
+        within=request.within,
+        default_within=request.default_within,
         cut=None,
-        ignore_case=ignore_case,
-        relative_to_struct=relative_to_struct,
-        split=split,
-        strip_pointer_suffix=strip_pointer_suffix,
-        max_values_per_set=max_values_per_set,
+        ignore_case=request.ignore_case,
+        relative_to_struct=request.relative_to_struct,
+        split=request.split,
+        strip_pointer_suffix=request.strip_pointer_suffix,
+        max_values_per_set=request.max_values_per_set,
         simple=False,
-        expand_prequeries=expand_prequeries,
+        expand_prequeries=request.expand_prequeries,
         offset=0,
         limit=0,
     )
     request_state = _LogLikelihoodRequestState(
         frequency_params=frequency_params,
-        set1_corpora=set1_corpora,
-        set2_corpora=set2_corpora,
+        set1_corpora=request.set1_corpora,
+        set2_corpora=request.set2_corpora,
     )
     return _log_likelihood_stream(
         ctx=ctx,
         request_state=request_state,
-        set1_cqp=set1_cqp,
-        set2_cqp=set2_cqp,
-        max_results=max_results,
+        set1_cqp=request.set1_cqp,
+        set2_cqp=request.set2_cqp,
+        max_results=request.max_results,
         abort_signal=abort_signal,
     )

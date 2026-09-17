@@ -2,15 +2,16 @@
 
 import importlib.metadata
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import Field
 from pydantic.json_schema import SkipJsonSchema
 
 from korp import auth, caching, cqp, handler, utils
 from korp.api import params, schemas
-from korp.dependencies import CtxDep
+from korp.api.requests import QueryRequestModel, RequestModel
+from korp.dependencies import CtxDep, QueryCtxDep
 from korp.handler import api_handler
 from korp.memcached import CacheError
 
@@ -193,6 +194,7 @@ def _normalize_cwb_info(raw_info: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+# The "/" alias is just for convenience and is not documented. API clients should use "/info" instead.
 @router.get("/", response_model=None, include_in_schema=False)
 @router.get(
     "/info",
@@ -201,8 +203,8 @@ def _normalize_cwb_info(raw_info: Mapping[str, Any]) -> dict[str, Any]:
     responses=handler.docs_response(InfoResponse),
     summary="General Information",
     description=INFO_DESCRIPTION,
+    operation_id="get_info",
 )
-@router.post("/info", response_model=None, include_in_schema=False)
 @api_handler
 async def info(
     ctx: CtxDep,
@@ -248,6 +250,20 @@ async def info(
     yield result
 
 
+class CorpusInfoRequest(RequestModel):
+    """Request for information about selected corpora."""
+
+    json_array_fields = frozenset({"corpora"})
+
+    corpora: params.CorporaParam
+
+
+class CorpusInfoQuery(QueryRequestModel, CorpusInfoRequest):
+    """GET query for information about selected corpora."""
+
+    csv_fields = CorpusInfoRequest.json_array_fields
+
+
 @router.get(
     "/corpora/info",
     response_model=None,
@@ -255,23 +271,38 @@ async def info(
     name="Corpus Information",
     summary="Corpus Information",
     description=CORPUS_INFO_DESCRIPTION,
+    operation_id="get_corpora_info",
 )
-@router.post("/corpora/info", response_model=None, include_in_schema=False)
 @api_handler
-async def corpus_info(
-    ctx: CtxDep,
-    corpora: params.CorporaParam,
+async def corpus_info_get(
+    ctx: QueryCtxDep,
+    query: Annotated[CorpusInfoQuery, Query()],
 ) -> AsyncIterator[dict]:
     """Get information about a specific corpus or corpora.
-
-    Args:
-        ctx: The request context.
-        corpora: Comma-separated list of corpora.
 
     Yields:
         Information about the specified corpus or corpora.
     """
-    yield await get_corpus_info(ctx, corpora)
+    yield await get_corpus_info(ctx, query.corpora)
+
+
+@router.post(
+    "/corpora/info",
+    response_model=None,
+    responses=handler.docs_response(CorpusInfoResponse),
+    name="Corpus Information",
+    summary="Corpus Information",
+    description=CORPUS_INFO_DESCRIPTION,
+    operation_id="post_corpora_info",
+)
+@api_handler
+async def corpus_info_post(ctx: CtxDep, request: CorpusInfoRequest) -> AsyncIterator[dict]:
+    """Get information about a specific corpus or corpora.
+
+    Yields:
+        Information about the selected corpora.
+    """
+    yield await get_corpus_info(ctx, request.corpora)
 
 
 async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bool = False) -> dict:

@@ -28,7 +28,7 @@ If caching is disabled, the response contains only the common response fields. D
 
 
 class CacheResponse(schemas.CommonResponse):
-    """Response model for `/cache` route."""
+    """Response model for `/admin/cache/refresh` route."""
 
     initial_setup: bool | SkipJsonSchema[None] = Field(
         None,
@@ -62,15 +62,15 @@ class CacheResponse(schemas.CommonResponse):
     )
 
 
-@router.get(
-    "/cache",
+@router.post(
+    "/admin/cache/refresh",
     response_model=None,
     responses=docs_response(CacheResponse),
     summary="Refresh Cache",
     description=CACHE_DESCRIPTION,
+    operation_id="post_admin_cache_refresh",
 )
-@router.post("/cache", response_model=None, include_in_schema=False)
-@api_handler
+@api_handler(cache_headers=False)
 async def cache_handler(ctx: CtxDep) -> dict:
     """Check for updated corpora and invalidate caches where needed, and remove old cache files.
 

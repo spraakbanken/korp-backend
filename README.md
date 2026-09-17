@@ -157,8 +157,8 @@ For improved performance with Gunicorn or Uvicorn, we recommend also installing 
 Most caching is done using Memcached, except for CWB query results which are temporarily saved to disk to speed up KWIC
 pagination.
 While Memcached handles removing old cache by itself, you will still have to tell it to invalidate parts of the cache
-when one or more corpora are updated or added. This, and cleaning up the disk cache, is easily done by accessing the
-`/cache` endpoint. We recommend setting up a cronjob or similar to regularly do this, making the cache
+when one or more corpora are updated or added. This, and cleaning up the disk cache, is done with
+`POST /admin/cache/refresh`. We recommend setting up a cronjob or similar to regularly call this route, making the cache
 maintenance fully automatic.
 
 ## API documentation

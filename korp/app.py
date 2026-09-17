@@ -11,7 +11,7 @@ from logging import getLogger
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 
@@ -62,6 +62,7 @@ _API_DOCUMENTATION_STRUCTURE = [
     {
         "name": "Administration",
         "description": "Routes for administrative tasks.",
+        "routes": ["/admin/cache/refresh", "/health"],
     },
 ]
 
@@ -87,21 +88,23 @@ Available corpora, annotations, and optional features depend on the Korp install
 
 The [source code](https://github.com/spraakbanken/korp-backend) is available on GitHub under the MIT license.
 
-## Request Basics
+## Request Methods
 
-A typical API request is an HTTP `GET` request following the pattern:
+Most data-retrieval routes support both `GET` and `POST`. They perform the same operation and return the same response:
 
-> `/command?parameter=value&parameter=value...`
+- Use `GET` with query parameters for short requests that should be easy to try in a browser, bookmark, or share.
+- Use `POST` with an `application/json` body for large requests that may exceed URL length limits, such as searches or
+  metadata lookups involving many corpora.
 
-Parameters are typically sent as query parameters. Parameters that accept multiple values usually support both
-comma-separated values and repeated parameters.
+In POST requests, route-specific inputs belong in the JSON body. The response controls `cache`, `debug`, `indent`, and
+`stream` remain query parameters for both methods. JSON collections are arrays. GET uses comma-separated values for
+unordered collections and repeated parameters for ordered query stages such as `cqp` and `subcqp`.
 
-While the API documentation only presents endpoints as accepting `GET` requests with query parameters, the backend also
-supports `POST` requests with parameters sent in the request body, encoded as either `application/x-www-form-urlencoded`
-or `application/json`. This makes it possible to send long queries that might otherwise exceed URL length limits. If a
-parameter is sent both in the query string and the body, the query string value takes precedence.
+## Response Format
 
-Responses are ordinary JSON by default. Requests with `stream=true` return an `application/x-ndjson` event stream.
+Responses are ordinary JSON by default. Requests with `stream=true` return an `application/x-ndjson` event stream
+instead. Use streaming for long-running queries to receive progress updates, early results, and to keep the connection
+alive.
 
 ## Return Codes
 
@@ -304,23 +307,6 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
     app.state.rate_limiter = None
     handler.install_error_handlers(app)
 
-    @app.middleware("http")
-    async def support_post_params(request: Request, call_next: Any) -> Any:
-        """Convert POST body parameters to query parameters.
-
-        This allows clients to send parameters in the body of POST requests instead of the URL query string, to
-        avoid issues with URL length limits.
-
-        Args:
-            request: The incoming HTTP request.
-            call_next: The next middleware or route handler to call.
-
-        Returns:
-            The response from the next handler.
-        """
-        await handler.convert_post_body_to_query_params(request)
-        return await call_next(request)
-
     # Enable CORS, with support for credentials and an Access-Control-Max-Age (for preflight requests)
     app.add_middleware(
         CORSMiddleware,
@@ -392,14 +378,21 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
                     new_props[k] = props[k]
             s["properties"] = new_props
 
-        # Remove auto-generated titles from parameters
+        # Remove auto-generated titles from parameters and set serialization for array parameters in GET requests.
         for path_item in schema.get("paths", {}).values():
-            for operation in path_item.values():
+            for method, operation in path_item.items():
                 if not isinstance(operation, dict):
                     continue
                 for parameter in operation.get("parameters", []):
                     if isinstance(parameter, dict):
                         parameter.get("schema", {}).pop("title", None)
+                        parameter_schema = parameter.get("schema", {})
+                        schema_options = [parameter_schema, *parameter_schema.get("anyOf", [])]
+                        if method == "get" and any(option.get("type") == "array" for option in schema_options):
+                            parameter["style"] = "form"
+                            # Move "explode" from schema to parameter level, where it belongs, and default to `False`
+                            # (comma-delimited instead of repeated parameters) if not specified.
+                            parameter["explode"] = parameter_schema.pop("explode", False)
 
         # Reorder routes according to _API_DOCUMENTATION_STRUCTURE
         routes_order = [r for t in _API_DOCUMENTATION_STRUCTURE for r in t.get("routes", [])]

@@ -11,11 +11,10 @@ import threading
 import time
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import update_wrapper
 from logging import getLogger
 from typing import Any, TypeAlias
-from urllib.parse import parse_qsl, urlencode
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.dependencies.utils import get_flat_dependant
@@ -26,8 +25,9 @@ from fastapi.routing import APIRoute
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from korp.api.requests import CommonQueryControls, QueryRequestModel, RequestModel
 from korp.config import settings
-from korp.dependencies import AbortSignal, Ctx, CtxDep
+from korp.dependencies import AbortSignal, Ctx, CtxDep, QueryCtxDep, build_common_params
 
 logger = getLogger(__name__)
 
@@ -203,75 +203,6 @@ def docs_response(
     return responses
 
 
-def _to_query_value(value: Any) -> str:
-    """Convert JSON scalar values to query-string values.
-
-    Args:
-        value: The value to convert.
-
-    Returns:
-        The string representation of the value for use in query parameters.
-    """
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if value is None:
-        return ""
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, separators=(",", ":"), ensure_ascii=True)
-    return str(value)
-
-
-async def convert_post_body_to_query_params(request: Request) -> None:
-    """For POST body params, copy fields into query params.
-
-    This modifies the request in-place.
-
-    Supported content types:
-    - application/json (top-level JSON object)
-    - application/x-www-form-urlencoded
-
-    Existing query params take precedence over body fields.
-
-    Args:
-        request: The FastAPI Request object.
-    """
-    if request.method != "POST":
-        return
-
-    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    if content_type not in {"application/json", "application/x-www-form-urlencoded"}:
-        return
-
-    if not (body := await request.body()):
-        return
-
-    pairs = parse_qsl(request.scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
-    existing_keys = {key for key, _ in pairs}
-    body_pairs: list[tuple[str, str]] = []
-
-    if content_type == "application/json":
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
-            return
-        if not isinstance(payload, dict):
-            return
-        for key, raw_value in payload.items():
-            if isinstance(raw_value, list):
-                body_pairs.extend((key, _to_query_value(item)) for item in raw_value)
-            else:
-                body_pairs.append((key, _to_query_value(raw_value)))
-    else:  # application/x-www-form-urlencoded
-        body_pairs = parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)
-
-    for key, value in body_pairs:
-        if key in existing_keys:
-            continue
-        pairs.append((key, value))
-
-    request.scope["query_string"] = urlencode(pairs, doseq=True).encode("latin-1")
-
-
 def forbid_extra_query_params(request: Request) -> None:
     """Raise HTTP 422 if the request contains unexpected query parameters.
 
@@ -285,7 +216,13 @@ def forbid_extra_query_params(request: Request) -> None:
     if not isinstance(route, APIRoute):
         return
     flat = get_flat_dependant(route.dependant, skip_repeats=True)
-    allowed = {p.alias for p in flat.query_params}
+    allowed: set[str] = set()
+    for parameter in flat.query_params:
+        annotation = parameter.field_info.annotation
+        if isinstance(annotation, type) and issubclass(annotation, CommonQueryControls):
+            allowed.update(field.alias or name for name, field in annotation.model_fields.items())
+        else:
+            allowed.add(parameter.alias)
     extra = set(request.query_params) - allowed
     if extra:
         raise HTTPException(422, f"Unexpected query params: {', '.join(sorted(extra))}")
@@ -296,15 +233,16 @@ def enforce_ctx_dependency(
 ) -> None:
     """Strictly enforce that every APIRoute endpoint has the required 'ctx' parameter.
 
-    Every route is expected to have a parameter named 'ctx' or '_ctx' with the annotation 'CtxDep', which injects
-    the request context, containing common parameters and other commonly used objects.
+    Every route is expected to have a parameter named 'ctx' or '_ctx' with the annotation 'CtxDep' or 'QueryCtxDep',
+    which injects the request context, containing common parameters and other commonly used objects. GET routes using a
+    query request model need to use 'QueryCtxDep'.
 
     Raises:
-        RuntimeError: If any route is missing the required 'ctx' parameter or has incorrect annotation.
+        RuntimeError: If any route is missing the required 'ctx' or '_ctx' parameter or has incorrect annotation.
     """
     param_name = "ctx"
-    ctx_dependency = CtxDep
-    ctx_dependency_name = "CtxDep"  # For error messages
+    ctx_dependencies = {CtxDep, QueryCtxDep}
+    ctx_dependency_name = "CtxDep or QueryCtxDep"  # For error messages
     violations: list[str] = []
 
     for r in app.routes:
@@ -320,11 +258,22 @@ def enforce_ctx_dependency(
             violations.append(f"{where}\n  - missing required parameter `{param_name}: {ctx_dependency_name}`")
             continue
 
-        if p.annotation is not ctx_dependency:
+        if p.annotation not in ctx_dependencies:
             violations.append(
                 f"{where}\n  - `{param_name}` requires annotation `{ctx_dependency_name}`, found `{p.annotation}`"
             )
             continue
+
+        # If a route uses QueryCtxDep, it must have exactly one parameter that is a subclass of QueryRequestModel.
+        if p.annotation is QueryCtxDep:
+            query_models = [
+                parameter.field_info.annotation
+                for parameter in r.dependant.query_params
+                if isinstance(parameter.field_info.annotation, type)
+                and issubclass(parameter.field_info.annotation, QueryRequestModel)
+            ]
+            if len(query_models) != 1:
+                violations.append(f"{where}\n  - `QueryCtxDep` requires exactly one `QueryRequestModel` parameter")
 
     if violations:
         raise RuntimeError("\nCtx dependency check failed.\n\n" + "\n\n".join(violations))
@@ -411,6 +360,12 @@ def _problem_response(exc: BaseException, *, debug: bool) -> JSONResponse:
     return JSONResponse(status_code=problem["status"], content=problem, headers=headers)
 
 
+def _route_disables_cache(request: Request) -> bool:
+    """Return whether the matched route opts out of public response caching."""
+    route = request.scope.get("route")
+    return isinstance(route, APIRoute) and getattr(route.endpoint, "_korp_cache_headers", True) is False
+
+
 def _request_debug_enabled(request: Request) -> bool:
     """Return whether the request explicitly enabled debug output."""
     return request.query_params.get("debug", "").lower() in {"1", "true", "yes", "on"}
@@ -421,11 +376,17 @@ def install_error_handlers(app: FastAPI) -> None:
 
     async def request_validation_handler(request: Request, exc: Exception) -> JSONResponse:  # noqa: RUF029
         assert isinstance(exc, RequestValidationError)
-        return _problem_response(exc, debug=_request_debug_enabled(request))
+        response = _problem_response(exc, debug=_request_debug_enabled(request))
+        if _route_disables_cache(request):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     async def http_exception_handler(request: Request, exc: Exception) -> JSONResponse:  # noqa: RUF029
         assert isinstance(exc, StarletteHTTPException)
-        return _problem_response(exc, debug=_request_debug_enabled(request))
+        response = _problem_response(exc, debug=_request_debug_enabled(request))
+        if _route_disables_cache(request):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     async def unexpected_exception_handler(request: Request, exc: Exception) -> JSONResponse:  # noqa: RUF029
         logger.error(
@@ -434,7 +395,10 @@ def install_error_handlers(app: FastAPI) -> None:
             request.url.path,
             exc_info=(type(exc), exc, exc.__traceback__),
         )
-        return _problem_response(exc, debug=_request_debug_enabled(request))
+        response = _problem_response(exc, debug=_request_debug_enabled(request))
+        if _route_disables_cache(request):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     app.add_exception_handler(RequestValidationError, request_validation_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
@@ -485,7 +449,8 @@ def api_handler(
       keepalive output cannot be sent while the route computes it.
 
     Every route is required to have the following parameter (named either "ctx" or "_ctx"), which injects the request
-    context, containing common parameters and other commonly used objects:
+    context, containing common parameters and other commonly used objects. GET routes using a query request model
+    (usually routes with corresponding POST routes) need to use `QueryCtxDep`; all other routes use `CtxDep`:
 
         ctx: CtxDep
 
@@ -509,7 +474,8 @@ def api_handler(
 
     Args:
         _callable: The route function to decorate.
-        cache_headers: Whether to set HTTP cache headers on the response.
+        cache_headers: Whether successful responses may receive public cache headers. When false, responses use
+            `Cache-Control: no-store`.
         keepalive_seconds: Interval in seconds for sending NDJSON keepalive events.
         rate_limit: Whether this route is eligible for rate limiting (default `True`). Set to `False` to exempt it.
             The actual limit values are read from configuration (`RATE_LIMIT_DEFAULT` and `RATE_LIMITS`). Has no effect
@@ -520,12 +486,32 @@ def api_handler(
     """
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Awaitable[Response]]:
+        uses_query_ctx = any(
+            parameter.annotation is QueryCtxDep for parameter in inspect.signature(fn).parameters.values()
+        )
+        expects_json_body = any(
+            isinstance(parameter.annotation, type) and issubclass(parameter.annotation, RequestModel)
+            for parameter in inspect.signature(fn).parameters.values()
+        )
+
         async def wrapper(*args: Any, **kwargs: Any) -> Response:
             ctx: Ctx = kwargs.get("ctx") or kwargs["_ctx"]  # Support both "ctx" and "_ctx"
             request = ctx.request
+            if uses_query_ctx:
+                query = next((value for value in kwargs.values() if isinstance(value, QueryRequestModel)), None)
+                if query is None:
+                    raise RuntimeError("QueryCtxDep requires a QueryRequestModel parameter")
+                # Build the common controls from the query model and replace the placeholder in the context
+                ctx = replace(ctx, common=build_common_params(request, query))
+                kwargs["ctx" if "ctx" in kwargs else "_ctx"] = ctx
             common = ctx.common
             route = request.url.path
             method = request.method
+
+            if expects_json_body and method == "POST":
+                content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                if content_type != "application/json":
+                    raise HTTPException(422, "POST request bodies must use application/json.")
 
             # Check for unexpected query parameters
             forbid_extra_query_params(request)
@@ -592,6 +578,8 @@ def api_handler(
                     logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
                 await stop_watchdog()
                 response = _problem_response(exc, debug=common.debug)
+                if not cache_headers:
+                    response.headers["Cache-Control"] = "no-store"
                 if response.status_code >= HTTP_INTERNAL_SERVER_ERROR:
                     logger.exception("API route failed before producing a result: %s %s", method, route, exc_info=exc)
                 for header_name, header_value in rate_limit_headers.items():
@@ -604,7 +592,9 @@ def api_handler(
                 if slow_request_threshold > 0 and elapsed >= slow_request_threshold:
                     logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
                 await stop_watchdog()
-                if result.status_code < HTTP_BAD_REQUEST and cache_headers and common.cache and not common.debug:
+                if not cache_headers:
+                    result.headers["Cache-Control"] = "no-store"
+                elif result.status_code < HTTP_BAD_REQUEST and common.cache and not common.debug:
                     max_age = settings.HTTP_CACHE_MAXAGE * 3600
                     if max_age > 0:
                         _set_cache_headers(result, max_age_seconds=max_age)
@@ -661,7 +651,9 @@ def api_handler(
                 if slow_request_threshold > 0 and elapsed >= slow_request_threshold:
                     logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
                 await stop_watchdog()
-                if response.status_code < HTTP_BAD_REQUEST and cache_headers and common.cache and not common.debug:
+                if not cache_headers:
+                    response.headers["Cache-Control"] = "no-store"
+                elif response.status_code < HTTP_BAD_REQUEST and common.cache and not common.debug:
                     max_age = settings.HTTP_CACHE_MAXAGE * 3600
                     if max_age > 0:
                         _set_cache_headers(response, max_age_seconds=max_age)
@@ -779,7 +771,9 @@ def api_handler(
 
             resp = StreamingResponse(body_iter_stream(), media_type="application/x-ndjson")
 
-            if cache_headers and common.cache and not common.debug:
+            if not cache_headers:
+                resp.headers["Cache-Control"] = "no-store"
+            elif common.cache and not common.debug:
                 max_age = settings.HTTP_CACHE_MAXAGE * 3600
                 if max_age > 0:
                     _set_cache_headers(resp, max_age_seconds=max_age)
@@ -796,6 +790,7 @@ def api_handler(
         update_wrapper(wrapper, fn)
         vars(wrapper)["__signature__"] = inspect.signature(fn)
         vars(wrapper)["_korp_rate_limit"] = rate_limit
+        vars(wrapper)["_korp_cache_headers"] = cache_headers
         vars(wrapper).pop("__wrapped__", None)
 
         return wrapper

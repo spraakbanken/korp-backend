@@ -13,6 +13,7 @@ from pydantic import AfterValidator, BeforeValidator, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
 
 from korp.api import schemas
+from korp.api.requests import QueryRequestModel, RequestModel
 from korp.config import settings
 from korp.memcached import CacheError, Memcached
 
@@ -24,7 +25,7 @@ except ImportError:
 from fastapi import APIRouter, Query
 
 from korp import caching, utils
-from korp.dependencies import CtxDep
+from korp.dependencies import CtxDep, QueryCtxDep
 from korp.handler import api_handler, docs_response
 
 router = APIRouter(tags=["Corpus Information"])
@@ -49,10 +50,9 @@ CorporaParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
         description=(
-            "Comma-separated list of corpora to include in the configuration. If specified, this overrides the "
-            "corpus list from `mode`."
+            "Corpora to include in the configuration. If specified, this overrides the corpus list from `mode`."
         ),
-        examples=[["ROMI,SUC3"]],
+        examples=[["ROMI", "SUC3"]],
     ),
     BeforeValidator(utils.split_csv),
     AfterValidator(lambda v: [x.upper() for x in v]),
@@ -119,6 +119,24 @@ class CorpusConfigResponse(schemas.CommonResponse):
     )
 
 
+class CorpusConfigRequest(RequestModel):
+    """Request for a corpus configuration selection."""
+
+    json_array_fields = frozenset({"corpora"})
+
+    mode: Annotated[
+        str,
+        Query(description="Mode to build configuration for. Defaults to `default`.", examples=["default"]),
+    ] = "default"
+    corpora: CorporaParam = None
+
+
+class CorpusConfigQuery(QueryRequestModel, CorpusConfigRequest):
+    """GET query for a corpus configuration selection."""
+
+    csv_fields = CorpusConfigRequest.json_array_fields
+
+
 @router.get(
     "/corpora/config",
     response_model=None,
@@ -126,20 +144,42 @@ class CorpusConfigResponse(schemas.CommonResponse):
     name="Corpus Configuration",
     summary="Corpus Configuration",
     description=CORPUS_CONFIG_DESCRIPTION,
+    operation_id="get_corpora_config",
 )
-@router.post("/corpora/config", response_model=None, include_in_schema=False)
 @api_handler
-async def corpus_config(
-    ctx: CtxDep,
-    mode: Annotated[
-        str,
-        Query(
-            description="Mode to build configuration for. Defaults to `default`.",
-            examples=["default"],
-        ),
-    ] = "default",
-    corpora: CorporaParam = None,
+async def corpus_config_get(
+    ctx: QueryCtxDep,
+    query: Annotated[CorpusConfigQuery, Query()],
 ) -> AsyncIterator[dict]:
+    """Get corpus configuration for a given mode or list of corpora.
+
+    Returns:
+        The corpus-configuration result stream.
+    """
+    request = query.to_request(CorpusConfigRequest)
+    return _corpus_config(ctx, request.mode, request.corpora)
+
+
+@router.post(
+    "/corpora/config",
+    response_model=None,
+    responses=docs_response(CorpusConfigResponse),
+    name="Corpus Configuration",
+    summary="Corpus Configuration",
+    description=CORPUS_CONFIG_DESCRIPTION,
+    operation_id="post_corpora_config",
+)
+@api_handler
+async def corpus_config_post(ctx: CtxDep, request: CorpusConfigRequest) -> AsyncIterator[dict]:
+    """Get corpus configuration for a given mode or list of corpora.
+
+    Returns:
+        The corpus-configuration result stream.
+    """
+    return _corpus_config(ctx, request.mode, request.corpora)
+
+
+async def _corpus_config(ctx: CtxDep, mode: str, corpora: list[str] | None) -> AsyncIterator[dict]:
     """Get corpus configuration for a given mode or list of corpora. To be used by the Korp frontend.
 
     If no mode or corpora are specified, the mode 'default' is used.
@@ -147,8 +187,7 @@ async def corpus_config(
     Args:
         ctx: Request context.
         mode: Mode to get configuration for.
-        corpora: Comma-separated list of corpora to include in configuration. If specified, overrides the mode's corpus
-            list.
+        corpora: Corpora to include in configuration. If specified, overrides the mode's corpus list.
 
     Yields:
         Corpus configuration structure.

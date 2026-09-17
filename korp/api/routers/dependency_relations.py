@@ -19,9 +19,10 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from korp import auth, caching, utils
 from korp.api import params, schemas
+from korp.api.requests import QueryRequestModel, RequestModel
 from korp.api.routers import info
 from korp.config import settings
-from korp.dependencies import AbortDep, AbortSignal, CtxDep
+from korp.dependencies import AbortDep, AbortSignal, CtxDep, QueryCtxDep
 from korp.handler import APIValidationError, ProgressEvent, ResponseFragment, api_handler, docs_response
 from korp.memcached import CacheError
 
@@ -116,7 +117,7 @@ final completion event.
 
 DEPENDENCY_RELATIONS_SENTENCES_DESCRIPTION = """Return KWIC sentences containing dependency relation sources.
 
-Use the `source` ids returned by `/dependency-relations` as the comma-separated `sources` parameter to retrieve the
+Use the `source` ids returned by `/dependency-relations` as the `sources` collection to retrieve the
 corpus sentences where those relation instances occur. The sentence rows use the same KWIC structure as `/concordance`,
 with the relation span highlighted as the match.
 """
@@ -218,10 +219,9 @@ MeasuresParam: TypeAlias = Annotated[
     Sequence[Measures],
     Query(
         description=(
-            "Comma-separated list of measures to include on each relation row. The relation identifiers and `source` "
-            "are always included."
+            "Measures to include on each relation row. The relation identifiers and `source` are always included."
         ),
-        examples=[["freq,mi"], ["freq,freq_relative,mi,rmi"]],
+        examples=[["freq", "mi"], ["freq", "freq_relative", "mi", "rmi"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -237,25 +237,27 @@ RelationsLimitParam: TypeAlias = Annotated[
 ]
 
 RelationsAttributesParam: TypeAlias = Annotated[
-    str,
+    list[str],
     Query(
         description=(
-            "Comma-separated list of CWB attributes to include with each returned token. Positional attributes "
+            "CWB attributes to include with each returned token. Positional attributes "
             "represent token annotations; structural attributes are returned as inline structural annotations."
         ),
-        examples=["word,lemma,pos"],
+        examples=[["word", "lemma", "pos"]],
     ),
+    BeforeValidator(utils.split_csv),
 ]
 
 RelationsStructAttributesParam: TypeAlias = Annotated[
-    str,
+    list[str],
     Query(
         description=(
-            "Comma-separated list of structural CWB attributes (usually sentence or document annotations) to include "
+            "Structural CWB attributes (usually sentence or document annotations) to include "
             "for each KWIC row. `sentence_id` is included by default."
         ),
-        examples=["text_title,text_author"],
+        examples=[["text_title", "text_author"]],
     ),
+    BeforeValidator(utils.split_csv),
 ]
 
 RelationsDefaultContextParam: TypeAlias = Annotated[
@@ -1615,8 +1617,8 @@ def _limit_rows_per_bucket(
 SourcesParam: TypeAlias = Annotated[
     list[str],
     Query(
-        description="Source ids in the format `CORPUS:ID`, repeated or comma-separated.",
-        examples=[["ROMI:253662,ROMI:253663"]],
+        description="Source ids in the format `CORPUS:ID`.",
+        examples=[["ROMI:253662", "ROMI:253663"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -1953,32 +1955,103 @@ async def _dependency_relations_impl(
     yield result
 
 
+class DependencyRelationsRequest(RequestModel):
+    """Request for dependency relation statistics."""
+
+    json_array_fields = frozenset({"corpora", "measures"})
+
+    corpora: params.CorporaParam
+    term: TermParam
+    term_type: TermTypeParam = TermType.word
+    min_freq: MinFreqParam = None
+    max_results: MaxResultsParam = 15
+    sort: RelationsSortParam = DependencyRelationsSort.mi
+    include_time: RelationsIncludeTimeParam = False
+    period_size: PeriodSizeParam = 1
+    period_align: PeriodAlignParam = PeriodAlign.newest
+    start_year: YearParam = None
+    end_year: YearParam = None
+    include_overall: IncludeOverallParam = True
+    max_scope: MaxScopeParam = MaxScope.per_period
+    measures: MeasuresParam = tuple(Measures)
+
+
+class DependencyRelationsTimeRequest(RequestModel):
+    """Request for dependency relation statistics over time."""
+
+    json_array_fields = frozenset({"corpora", "measures"})
+
+    corpora: params.CorporaParam
+    term: TermParam
+    term_type: TermTypeParam = TermType.word
+    min_freq: MinFreqParam = None
+    max_results: MaxResultsParam = 15
+    sort: RelationsSortParam = DependencyRelationsSort.mi
+    period_size: PeriodSizeParam = 1
+    period_align: PeriodAlignParam = PeriodAlign.newest
+    start_year: YearParam = None
+    end_year: YearParam = None
+    include_overall: IncludeOverallParam = False
+    max_scope: MaxScopeParam = MaxScope.per_period
+    measures: MeasuresParam = tuple(Measures)
+
+
+class DependencyRelationsQuery(QueryRequestModel, DependencyRelationsRequest):
+    """GET query for dependency relation statistics."""
+
+    csv_fields = DependencyRelationsRequest.json_array_fields
+
+
+class DependencyRelationsTimeQuery(QueryRequestModel, DependencyRelationsTimeRequest):
+    """GET query for dependency relation statistics over time."""
+
+    csv_fields = DependencyRelationsTimeRequest.json_array_fields
+
+
 @router.get(
     "/dependency-relations",
     response_model=None,
     responses=docs_response(RelationsResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Dependency Relations",
     description=DEPENDENCY_RELATIONS_DESCRIPTION,
+    operation_id="get_dependency_relations",
 )
-@router.post("/dependency-relations", response_model=None, include_in_schema=False)
 @api_handler
-async def relations(
-    ctx: CtxDep,
-    corpora: params.CorporaParam,
-    term: TermParam,
-    term_type: TermTypeParam = TermType.word,
-    min_freq: MinFreqParam = None,
-    max_results: MaxResultsParam = 15,
-    sort: RelationsSortParam = DependencyRelationsSort.mi,
-    include_time: RelationsIncludeTimeParam = False,
-    period_size: PeriodSizeParam = 1,
-    period_align: PeriodAlignParam = PeriodAlign.newest,
-    start_year: YearParam = None,
-    end_year: YearParam = None,
-    include_overall: IncludeOverallParam = True,
-    max_scope: MaxScopeParam = MaxScope.per_period,
-    measures: MeasuresParam = tuple(Measures),
+async def relations_get(
+    ctx: QueryCtxDep,
+    query: Annotated[DependencyRelationsQuery, Query()],
     abort_signal: AbortDep = None,
+) -> AsyncIterator[ResponseFragment]:
+    """Calculate dependency relations with the given query parameters.
+
+    Returns:
+        The dependency-relation result stream.
+    """
+    return await _relations(ctx, query.to_request(DependencyRelationsRequest), abort_signal)
+
+
+@router.post(
+    "/dependency-relations",
+    response_model=None,
+    responses=docs_response(RelationsResponse, http_errors={403: "Access to a requested corpus was denied."}),
+    summary="Dependency Relations",
+    description=DEPENDENCY_RELATIONS_DESCRIPTION,
+    operation_id="post_dependency_relations",
+)
+@api_handler
+async def relations_post(
+    ctx: CtxDep, request: DependencyRelationsRequest, abort_signal: AbortDep = None
+) -> AsyncIterator[ResponseFragment]:
+    """Calculate dependency relations with the given parameters.
+
+    Returns:
+        The dependency-relation result stream.
+    """
+    return await _relations(ctx, request, abort_signal)
+
+
+async def _relations(
+    ctx: CtxDep, request: DependencyRelationsRequest, abort_signal: AbortSignal | None
 ) -> AsyncIterator[ResponseFragment]:
     """Calculate dependency relations data.
 
@@ -1987,28 +2060,28 @@ async def relations(
     """
     await _validate_dependency_relations_request(
         ctx=ctx,
-        corpora=corpora,
-        include_split=include_time,
-        include_overall=include_overall,
-        start_year=start_year,
-        end_year=end_year,
+        corpora=request.corpora,
+        include_split=request.include_time,
+        include_overall=request.include_overall,
+        start_year=request.start_year,
+        end_year=request.end_year,
     )
     return _dependency_relations_impl(
         ctx=ctx,
-        corpora=corpora,
-        term=term,
-        term_type=term_type,
-        min_freq=min_freq,
-        sort_field=sort,
-        max_results=max_results,
-        include_split=include_time,
-        period_size=period_size,
-        period_align=period_align,
-        start_year=start_year,
-        end_year=end_year,
-        include_overall=include_overall,
-        max_scope=max_scope,
-        measures=measures,
+        corpora=request.corpora,
+        term=request.term,
+        term_type=request.term_type,
+        min_freq=request.min_freq,
+        sort_field=request.sort,
+        max_results=request.max_results,
+        include_split=request.include_time,
+        period_size=request.period_size,
+        period_align=request.period_align,
+        start_year=request.start_year,
+        end_year=request.end_year,
+        include_overall=request.include_overall,
+        max_scope=request.max_scope,
+        measures=request.measures,
         abort_signal=abort_signal,
     )
 
@@ -2019,25 +2092,44 @@ async def relations(
     responses=docs_response(RelationsResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Dependency Relations Over Time",
     description=DEPENDENCY_RELATIONS_TIME_DESCRIPTION,
+    operation_id="get_dependency_relations_time",
 )
-@router.post("/dependency-relations/time", response_model=None, include_in_schema=False)
 @api_handler
-async def relations_time(
-    ctx: CtxDep,
-    corpora: params.CorporaParam,
-    term: TermParam,
-    term_type: TermTypeParam = TermType.word,
-    min_freq: MinFreqParam = None,
-    max_results: MaxResultsParam = 15,
-    sort: RelationsSortParam = DependencyRelationsSort.mi,
-    period_size: PeriodSizeParam = 1,
-    period_align: PeriodAlignParam = PeriodAlign.newest,
-    start_year: YearParam = None,
-    end_year: YearParam = None,
-    include_overall: IncludeOverallParam = False,
-    max_scope: MaxScopeParam = MaxScope.per_period,
-    measures: MeasuresParam = tuple(Measures),
+async def relations_time_get(
+    ctx: QueryCtxDep,
+    query: Annotated[DependencyRelationsTimeQuery, Query()],
     abort_signal: AbortDep = None,
+) -> AsyncIterator[ResponseFragment]:
+    """Calculate time-split dependency relations with the given query parameters.
+
+    Returns:
+        The dependency-relation result stream.
+    """
+    return await _relations_time(ctx, query.to_request(DependencyRelationsTimeRequest), abort_signal)
+
+
+@router.post(
+    "/dependency-relations/time",
+    response_model=None,
+    responses=docs_response(RelationsResponse, http_errors={403: "Access to a requested corpus was denied."}),
+    summary="Dependency Relations Over Time",
+    description=DEPENDENCY_RELATIONS_TIME_DESCRIPTION,
+    operation_id="post_dependency_relations_time",
+)
+@api_handler
+async def relations_time_post(
+    ctx: CtxDep, request: DependencyRelationsTimeRequest, abort_signal: AbortDep = None
+) -> AsyncIterator[ResponseFragment]:
+    """Calculate time-split dependency relations with the given parameters.
+
+    Returns:
+        The dependency-relation result stream.
+    """
+    return await _relations_time(ctx, request, abort_signal)
+
+
+async def _relations_time(
+    ctx: CtxDep, request: DependencyRelationsTimeRequest, abort_signal: AbortSignal | None
 ) -> AsyncIterator[ResponseFragment]:
     """Calculate dependency relations data with time splits.
 
@@ -2046,28 +2138,28 @@ async def relations_time(
     """
     await _validate_dependency_relations_request(
         ctx=ctx,
-        corpora=corpora,
+        corpora=request.corpora,
         include_split=True,
-        include_overall=include_overall,
-        start_year=start_year,
-        end_year=end_year,
+        include_overall=request.include_overall,
+        start_year=request.start_year,
+        end_year=request.end_year,
     )
     return _dependency_relations_impl(
         ctx=ctx,
-        corpora=corpora,
-        term=term,
-        term_type=term_type,
-        min_freq=min_freq,
-        sort_field=sort,
-        max_results=max_results,
+        corpora=request.corpora,
+        term=request.term,
+        term_type=request.term_type,
+        min_freq=request.min_freq,
+        sort_field=request.sort,
+        max_results=request.max_results,
         include_split=True,
-        period_size=period_size,
-        period_align=period_align,
-        start_year=start_year,
-        end_year=end_year,
-        include_overall=include_overall,
-        max_scope=max_scope,
-        measures=measures,
+        period_size=request.period_size,
+        period_align=request.period_align,
+        start_year=request.start_year,
+        end_year=request.end_year,
+        include_overall=request.include_overall,
+        max_scope=request.max_scope,
+        measures=request.measures,
         abort_signal=abort_signal,
     )
 
@@ -2095,8 +2187,8 @@ async def _prepare_relation_sentence_request(
     ctx: CtxDep,
     sources: list[str],
     limit: int,
-    attributes: str,
-    struct_attributes: str,
+    attributes: Sequence[str],
+    struct_attributes: Sequence[str],
     default_context: str,
 ) -> _RelationSentenceRequestState:
     """Parse, authorize, and validate relation-sentence parameters before streaming.
@@ -2111,8 +2203,8 @@ async def _prepare_relation_sentence_request(
         cqp_query=["[]"],
         offset=0,
         limit=limit,
-        attributes=utils.split_csv(attributes or "word"),
-        struct_attributes=["sentence_id", *set(utils.split_csv(struct_attributes))],
+        attributes=attributes or ["word"],
+        struct_attributes=["sentence_id", *set(struct_attributes)],
         default_context=default_context,
     )
     return _RelationSentenceRequestState(source_map=source_map, concordance_params=concordance_params)
@@ -2255,35 +2347,92 @@ async def _relations_sentences_stream(
     )
 
 
+class RelationSentencesRequest(RequestModel):
+    """Request for dependency relation example sentences."""
+
+    json_array_fields = frozenset({"sources", "attributes", "struct_attributes"})
+
+    sources: SourcesParam
+    offset: RelationsOffsetParam = 0
+    limit: RelationsLimitParam = 10
+    attributes: RelationsAttributesParam = Field(["word"])
+    struct_attributes: RelationsStructAttributesParam = Field([])
+    default_context: RelationsDefaultContextParam = "1 sentence"
+
+
+class RelationTimeSentencesRequest(RelationSentencesRequest):
+    """Request for time-split dependency relation example sentences."""
+
+
+class RelationSentencesQuery(QueryRequestModel, RelationSentencesRequest):
+    """GET query for dependency relation example sentences."""
+
+    csv_fields = RelationSentencesRequest.json_array_fields
+
+
+class RelationTimeSentencesQuery(QueryRequestModel, RelationTimeSentencesRequest):
+    """GET query for time-split dependency relation example sentences."""
+
+    csv_fields = RelationTimeSentencesRequest.json_array_fields
+
+
 @router.get(
     "/dependency-relations/sentences",
     response_model=None,
     responses=docs_response(RelationsSentencesResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Dependency Relations Sentences",
     description=DEPENDENCY_RELATIONS_SENTENCES_DESCRIPTION,
+    operation_id="get_dependency_relations_sentences",
 )
-@router.post("/dependency-relations/sentences", response_model=None, include_in_schema=False)
 @api_handler
-async def relations_sentences(
-    ctx: CtxDep,
-    sources: SourcesParam,
-    offset: RelationsOffsetParam = 0,
-    limit: RelationsLimitParam = 10,
-    attributes: RelationsAttributesParam = "word",
-    struct_attributes: RelationsStructAttributesParam = "",
-    default_context: RelationsDefaultContextParam = "1 sentence",
+async def relations_sentences_get(
+    ctx: QueryCtxDep,
+    query: Annotated[RelationSentencesQuery, Query()],
     abort_signal: AbortDep = None,
+) -> AsyncIterator[dict]:
+    """Find dependency relation sentences selected with query parameters.
+
+    Returns:
+        The relation-sentence result stream.
+    """
+    return await _relations_sentences(
+        ctx, query.to_request(RelationSentencesRequest), yearly=False, abort_signal=abort_signal
+    )
+
+
+@router.post(
+    "/dependency-relations/sentences",
+    response_model=None,
+    responses=docs_response(RelationsSentencesResponse, http_errors={403: "Access to a requested corpus was denied."}),
+    summary="Dependency Relations Sentences",
+    description=DEPENDENCY_RELATIONS_SENTENCES_DESCRIPTION,
+    operation_id="post_dependency_relations_sentences",
+)
+@api_handler
+async def relations_sentences_post(
+    ctx: CtxDep, request: RelationSentencesRequest, abort_signal: AbortDep = None
+) -> AsyncIterator[dict]:
+    """Find dependency relation sentences selected with the given parameters.
+
+    Returns:
+        The relation-sentence result stream.
+    """
+    return await _relations_sentences(ctx, request, yearly=False, abort_signal=abort_signal)
+
+
+async def _relations_sentences(
+    ctx: CtxDep,
+    request: RelationSentencesRequest,
+    *,
+    yearly: bool,
+    abort_signal: AbortSignal | None,
 ) -> AsyncIterator[dict]:
     """Find sentences containing relations from dependency relations source IDs.
 
     Args:
         ctx: Common dependencies.
-        sources: Comma-separated list of source IDs in the format `CORPUS:ID`.
-        offset: Number of sentence rows to skip.
-        limit: Maximum number of sentence rows to return.
-        attributes: Comma-separated list of CWB attributes to include with the token results.
-        struct_attributes: Comma-separated list of structural CWB attributes to include.
-        default_context: Default context size for query results (e.g., "1 sentence").
+        request: Validated relation-sentence request.
+        yearly: Whether to use time-split relation tables.
         abort_signal: Optional signal for aborting long-running operations.
 
     Returns:
@@ -2291,18 +2440,18 @@ async def relations_sentences(
     """
     request_state = await _prepare_relation_sentence_request(
         ctx,
-        sources,
-        limit,
-        attributes,
-        struct_attributes,
-        default_context,
+        request.sources,
+        request.limit,
+        request.attributes,
+        request.struct_attributes,
+        request.default_context,
     )
     return _relations_sentences_stream(
         ctx=ctx,
         request_state=request_state,
-        offset=offset,
-        limit=limit,
-        yearly=False,
+        offset=request.offset,
+        limit=request.limit,
+        yearly=yearly,
         abort_signal=abort_signal,
     )
 
@@ -2313,47 +2462,39 @@ async def relations_sentences(
     responses=docs_response(RelationsSentencesResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Dependency Relations Time Sentences",
     description=DEPENDENCY_RELATIONS_TIME_SENTENCES_DESCRIPTION,
+    operation_id="get_dependency_relations_time_sentences",
 )
-@router.post("/dependency-relations/time/sentences", response_model=None, include_in_schema=False)
 @api_handler
-async def relations_time_sentences(
-    ctx: CtxDep,
-    sources: SourcesParam,
-    offset: RelationsOffsetParam = 0,
-    limit: RelationsLimitParam = 10,
-    attributes: RelationsAttributesParam = "word",
-    struct_attributes: RelationsStructAttributesParam = "",
-    default_context: RelationsDefaultContextParam = "1 sentence",
+async def relations_time_sentences_get(
+    ctx: QueryCtxDep,
+    query: Annotated[RelationTimeSentencesQuery, Query()],
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
-    """Find time-split sentences containing relations from dependency relations source IDs.
-
-    Args:
-        ctx: Common dependencies.
-        sources: Comma-separated list of source IDs in the format `CORPUS:ID`.
-        offset: Number of sentence rows to skip.
-        limit: Maximum number of sentence rows to return.
-        attributes: Comma-separated list of CWB attributes to include with the token results.
-        struct_attributes: Comma-separated list of structural CWB attributes to include.
-        default_context: Default context size for query results (e.g., "1 sentence").
-        abort_signal: Optional signal for aborting long-running operations.
+    """Find time-split dependency relation sentences selected with query parameters.
 
     Returns:
-        An async iterator yielding the sentences and related metadata.
+        The relation-sentence result stream.
     """
-    request_state = await _prepare_relation_sentence_request(
-        ctx,
-        sources,
-        limit,
-        attributes,
-        struct_attributes,
-        default_context,
+    return await _relations_sentences(
+        ctx, query.to_request(RelationTimeSentencesRequest), yearly=True, abort_signal=abort_signal
     )
-    return _relations_sentences_stream(
-        ctx=ctx,
-        request_state=request_state,
-        offset=offset,
-        limit=limit,
-        yearly=True,
-        abort_signal=abort_signal,
-    )
+
+
+@router.post(
+    "/dependency-relations/time/sentences",
+    response_model=None,
+    responses=docs_response(RelationsSentencesResponse, http_errors={403: "Access to a requested corpus was denied."}),
+    summary="Dependency Relations Time Sentences",
+    description=DEPENDENCY_RELATIONS_TIME_SENTENCES_DESCRIPTION,
+    operation_id="post_dependency_relations_time_sentences",
+)
+@api_handler
+async def relations_time_sentences_post(
+    ctx: CtxDep, request: RelationTimeSentencesRequest, abort_signal: AbortDep = None
+) -> AsyncIterator[dict]:
+    """Find time-split dependency relation sentences selected with the given parameters.
+
+    Returns:
+        The relation-sentence result stream.
+    """
+    return await _relations_sentences(ctx, request, yearly=True, abort_signal=abort_signal)

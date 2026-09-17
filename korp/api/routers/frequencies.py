@@ -19,8 +19,9 @@ from pydantic.json_schema import SkipJsonSchema
 
 from korp import auth, caching, cqp, handler, utils
 from korp.api import params, schemas
+from korp.api.requests import QueryRequestModel, RequestModel
 from korp.config import settings
-from korp.dependencies import AbortDep, AbortSignal, CtxDep
+from korp.dependencies import AbortDep, AbortSignal, CtxDep, QueryCtxDep
 from korp.handler import APIValidationError, api_handler
 from korp.memcached import CacheError, MemcachedSyncClient
 
@@ -89,10 +90,10 @@ GroupByParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
         description=(
-            "Comma-separated list of positional CWB attributes (token annotations) to group results by. "
+            "Positional CWB attributes (token annotations) to group results by. "
             "Defaults to `word` if neither `group_by` nor `group_by_struct` is supplied."
         ),
-        examples=[["word"], ["pos,lemma"]],
+        examples=[["word"], ["pos", "lemma"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -101,10 +102,10 @@ GroupByStructParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
         description=(
-            "Comma-separated list of structural CWB attributes (usually sentence or document annotations) to group "
+            "Structural CWB attributes (usually sentence or document annotations) to group "
             "results by. The value at the first token of the match is used."
         ),
-        examples=[["text_author"], ["text_author,text_title"]],
+        examples=[["text_author"], ["text_author", "text_title"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -126,8 +127,8 @@ LimitParam: TypeAlias = Annotated[
 IgnoreCaseParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
-        description="Comma-separated list of CWB attributes whose values should be lowercased before counting.",
-        examples=[["word"], ["word,lemma"]],
+        description="CWB attributes whose values should be lowercased before counting.",
+        examples=[["word"], ["word", "lemma"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -139,6 +140,7 @@ SubCQPParam: TypeAlias = Annotated[
             "CQP subqueries to perform over the final main-query result. Repeat the `subcqp` parameter to provide "
             "multiple subqueries."
         ),
+        explode=True,
         examples=[['[lex contains "tsunami..nn.1"]', '[lex contains "flodvåg..nn.1"]']],
     ),
 ]
@@ -159,7 +161,7 @@ RelativeToStructParam: TypeAlias = Annotated[
 StripPointerSuffixParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
-        description="Comma-separated list of CWB attributes whose multi-word pointer suffixes should be stripped.",
+        description="CWB attributes whose multi-word pointer suffixes should be stripped.",
         examples=[["sense"]],
     ),
     BeforeValidator(utils.split_csv),
@@ -169,10 +171,10 @@ MaxValuesPerSetParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
         description=(
-            "Comma-separated list of CWB attributes for which only the first N values in a set should be counted. "
+            "CWB attributes for which only the first N values in a set should be counted. "
             "Use `attr:n`; if `:n` is omitted, N defaults to 1. Usually used together with `split`."
         ),
-        examples=[["sense:3"], ["sense:3,lemma"]],
+        examples=[["sense:3"], ["sense:3", "lemma"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -835,34 +837,119 @@ async def perform_frequency_query(
     yield result
 
 
+class FrequenciesRequest(RequestModel):
+    """Request for query frequency statistics."""
+
+    json_array_fields = frozenset(
+        {
+            "corpora",
+            "cqp_query",
+            "subcqp",
+            "group_by",
+            "group_by_struct",
+            "within",
+            "ignore_case",
+            "relative_to_struct",
+            "split",
+            "strip_pointer_suffix",
+            "max_values_per_set",
+        }
+    )
+    json_array_fields_allowing_commas = frozenset({"cqp_query", "subcqp"})
+
+    corpora: params.CorporaParam
+    cqp_query: params.CQPParam
+    subcqp: SubCQPParam = None
+    group_by: GroupByParam = None
+    group_by_struct: GroupByStructParam = None
+    within: params.WithinParam = None
+    default_within: params.DefaultWithinParam = None
+    offset: OffsetParam = 0
+    limit: LimitParam = 0
+    ignore_case: IgnoreCaseParam = None
+    relative_to_struct: RelativeToStructParam = None
+    split: params.SplitParam = None
+    strip_pointer_suffix: StripPointerSuffixParam = None
+    max_values_per_set: MaxValuesPerSetParam = None
+    expand_prequeries: params.ExpandPrequeriesParam = True
+
+
+class CorpusFrequenciesRequest(RequestModel):
+    """Request for complete corpus frequency statistics."""
+
+    json_array_fields = FrequenciesRequest.json_array_fields - {"cqp_query", "subcqp"}
+
+    corpora: params.CorporaParam
+    group_by: GroupByParam = None
+    group_by_struct: GroupByStructParam = None
+    within: params.WithinParam = None
+    default_within: params.DefaultWithinParam = None
+    offset: OffsetParam = 0
+    limit: LimitParam = 0
+    ignore_case: IgnoreCaseParam = None
+    relative_to_struct: RelativeToStructParam = None
+    split: params.SplitParam = None
+    strip_pointer_suffix: StripPointerSuffixParam = None
+    max_values_per_set: MaxValuesPerSetParam = None
+    expand_prequeries: params.ExpandPrequeriesParam = True
+
+
+class FrequenciesQuery(QueryRequestModel, FrequenciesRequest):
+    """GET query for query frequency statistics."""
+
+    csv_fields = FrequenciesRequest.json_array_fields - FrequenciesRequest.json_array_fields_allowing_commas
+
+
+class CorpusFrequenciesQuery(QueryRequestModel, CorpusFrequenciesRequest):
+    """GET query for complete corpus frequency statistics."""
+
+    csv_fields = CorpusFrequenciesRequest.json_array_fields
+
+
 @router.get(
     "/frequencies",
     response_model=None,
     responses=handler.docs_response(FrequenciesResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Statistics",
     description=FREQUENCIES_DESCRIPTION,
+    operation_id="get_frequencies",
 )
-@router.post("/frequencies", response_model=None, include_in_schema=False)
 @api_handler
-async def frequencies(
-    ctx: CtxDep,
-    corpora: params.CorporaParam,
-    cqp_query: params.CQPParam,
-    subcqp: SubCQPParam = None,
-    group_by: GroupByParam = None,
-    group_by_struct: GroupByStructParam = None,
-    within: params.WithinParam = None,
-    default_within: params.DefaultWithinParam = None,
-    # cut: int | None = None,
-    offset: OffsetParam = 0,
-    limit: LimitParam = 0,
-    ignore_case: IgnoreCaseParam = None,
-    relative_to_struct: RelativeToStructParam = None,
-    split: params.SplitParam = None,
-    strip_pointer_suffix: StripPointerSuffixParam = None,
-    max_values_per_set: MaxValuesPerSetParam = None,
-    expand_prequeries: params.ExpandPrequeriesParam = True,
+async def frequencies_get(
+    ctx: QueryCtxDep,
+    query: Annotated[FrequenciesQuery, Query()],
     abort_signal: AbortDep = None,
+) -> AsyncIterator[handler.ResponseFragment]:
+    """Calculate frequency statistics for a CQP query.
+
+    Returns:
+        The frequency result stream.
+    """
+    return await _frequencies(ctx, query.to_request(FrequenciesRequest), abort_signal)
+
+
+@router.post(
+    "/frequencies",
+    response_model=None,
+    responses=handler.docs_response(FrequenciesResponse, http_errors={403: "Access to a requested corpus was denied."}),
+    summary="Statistics",
+    description=FREQUENCIES_DESCRIPTION,
+    operation_id="post_frequencies",
+)
+@api_handler
+async def frequencies_post(
+    ctx: CtxDep, request: FrequenciesRequest, abort_signal: AbortDep = None
+) -> AsyncIterator[handler.ResponseFragment]:
+    """Calculate frequency statistics for a CQP query.
+
+    Returns:
+        The frequency result stream.
+    """
+    return await _frequencies(ctx, request, abort_signal)
+
+
+async def _frequencies(
+    ctx: CtxDep, request: FrequenciesRequest, abort_signal: AbortSignal | None
 ) -> AsyncIterator[handler.ResponseFragment]:
     """Perform a CQP query and return a count of the given words/CWB attributes.
 
@@ -871,23 +958,23 @@ async def frequencies(
     """
     frequency_params = await parse_frequency_parameters(
         ctx=ctx,
-        corpora=corpora,
-        cqp_query=cqp_query,
-        subcqp=subcqp,
-        group_by=group_by,
-        group_by_struct=group_by_struct,
-        within=within,
-        default_within=default_within,
+        corpora=request.corpora,
+        cqp_query=request.cqp_query,
+        subcqp=request.subcqp,
+        group_by=request.group_by,
+        group_by_struct=request.group_by_struct,
+        within=request.within,
+        default_within=request.default_within,
         cut=None,
-        ignore_case=ignore_case,
-        relative_to_struct=relative_to_struct,
-        split=split,
-        strip_pointer_suffix=strip_pointer_suffix,
-        max_values_per_set=max_values_per_set,
+        ignore_case=request.ignore_case,
+        relative_to_struct=request.relative_to_struct,
+        split=request.split,
+        strip_pointer_suffix=request.strip_pointer_suffix,
+        max_values_per_set=request.max_values_per_set,
         simple=False,
-        expand_prequeries=expand_prequeries,
-        offset=offset,
-        limit=limit,
+        expand_prequeries=request.expand_prequeries,
+        offset=request.offset,
+        limit=request.limit,
     )
 
     return perform_frequency_query(frequency_params, ctx, abort_signal)
@@ -901,26 +988,46 @@ async def frequencies(
     ),
     summary="Complete Statistics",
     description=CORPUS_FREQUENCIES_DESCRIPTION,
+    operation_id="get_corpus_frequencies",
 )
-@router.post("/frequencies/corpus", response_model=None, include_in_schema=False)
 @api_handler
-async def corpus_frequencies(
-    ctx: CtxDep,
-    corpora: params.CorporaParam,
-    group_by: GroupByParam = None,
-    group_by_struct: GroupByStructParam = None,
-    within: params.WithinParam = None,
-    default_within: params.DefaultWithinParam = None,
-    # cut: int | None = None,
-    offset: OffsetParam = 0,
-    limit: LimitParam = 0,
-    ignore_case: IgnoreCaseParam = None,
-    relative_to_struct: RelativeToStructParam = None,
-    split: params.SplitParam = None,
-    strip_pointer_suffix: StripPointerSuffixParam = None,
-    max_values_per_set: MaxValuesPerSetParam = None,
-    expand_prequeries: params.ExpandPrequeriesParam = True,
+async def corpus_frequencies_get(
+    ctx: QueryCtxDep,
+    query: Annotated[CorpusFrequenciesQuery, Query()],
     abort_signal: AbortDep = None,
+) -> AsyncIterator[handler.ResponseFragment]:
+    """Calculate corpus frequency statistics for all tokens, grouped by the given CWB attributes.
+
+    Returns:
+        The corpus-frequency result stream.
+    """
+    return await _corpus_frequencies(ctx, query.to_request(CorpusFrequenciesRequest), abort_signal)
+
+
+@router.post(
+    "/frequencies/corpus",
+    response_model=None,
+    responses=handler.docs_response(
+        CorpusFrequenciesResponse, http_errors={403: "Access to a requested corpus was denied."}
+    ),
+    summary="Complete Statistics",
+    description=CORPUS_FREQUENCIES_DESCRIPTION,
+    operation_id="post_corpus_frequencies",
+)
+@api_handler
+async def corpus_frequencies_post(
+    ctx: CtxDep, request: CorpusFrequenciesRequest, abort_signal: AbortDep = None
+) -> AsyncIterator[handler.ResponseFragment]:
+    """Calculate corpus frequency statistics for all tokens, grouped by the given CWB attributes.
+
+    Returns:
+        The corpus-frequency result stream.
+    """
+    return await _corpus_frequencies(ctx, request, abort_signal)
+
+
+async def _corpus_frequencies(
+    ctx: CtxDep, request: CorpusFrequenciesRequest, abort_signal: AbortSignal | None
 ) -> AsyncIterator[handler.ResponseFragment]:
     """Like `/frequencies` but for every single value of the given CWB attributes.
 
@@ -929,23 +1036,23 @@ async def corpus_frequencies(
     """
     frequency_params = await parse_frequency_parameters(
         ctx=ctx,
-        corpora=corpora,
+        corpora=request.corpora,
         cqp_query=["[]"],
         subcqp=None,
-        group_by=group_by,
-        group_by_struct=group_by_struct,
-        within=within,
-        default_within=default_within,
+        group_by=request.group_by,
+        group_by_struct=request.group_by_struct,
+        within=request.within,
+        default_within=request.default_within,
         cut=None,
-        ignore_case=ignore_case,
-        relative_to_struct=relative_to_struct,
-        split=split,
-        strip_pointer_suffix=strip_pointer_suffix,
-        max_values_per_set=max_values_per_set,
+        ignore_case=request.ignore_case,
+        relative_to_struct=request.relative_to_struct,
+        split=request.split,
+        strip_pointer_suffix=request.strip_pointer_suffix,
+        max_values_per_set=request.max_values_per_set,
         simple=True,
-        expand_prequeries=expand_prequeries,
-        offset=offset,
-        limit=limit,
+        expand_prequeries=request.expand_prequeries,
+        offset=request.offset,
+        limit=request.limit,
     )
 
     return _perform_corpus_frequency_query(frequency_params, ctx, abort_signal)
@@ -990,6 +1097,32 @@ DateToParam: TypeAlias = Annotated[
         examples=["20201231235959", "2020-12-31"],
     ),
 ]
+
+
+class FrequenciesTimeRequest(RequestModel):
+    """Request for query frequencies over time."""
+
+    json_array_fields = frozenset({"corpora", "cqp_query", "subcqp", "within"})
+    json_array_fields_allowing_commas = frozenset({"cqp_query", "subcqp"})
+
+    corpora: params.CorporaParam
+    cqp_query: params.CQPParam
+    subcqp: SubCQPParam = None
+    within: params.WithinParam = None
+    default_within: params.DefaultWithinParam = None
+    expand_prequeries: params.ExpandPrequeriesParam = True
+    granularity: params.GranularityParam = params.GranularityValues.year
+    date_from: DateFromParam = None
+    date_to: DateToParam = None
+    strategy: params.StrategyParam = params.StrategyValues.some_overlaps
+    include_combined: params.IncludeCombinedParam = True
+    include_per_corpus: params.IncludePerCorpusParam = True
+
+
+class FrequenciesTimeQuery(QueryRequestModel, FrequenciesTimeRequest):
+    """GET query for query frequencies over time."""
+
+    csv_fields = FrequenciesTimeRequest.json_array_fields - FrequenciesTimeRequest.json_array_fields_allowing_commas
 
 
 @dataclass(frozen=True, slots=True)
@@ -1355,24 +1488,46 @@ async def _frequencies_time_stream(
     ),
     summary="Statistics Over Time",
     description=FREQUENCIES_TIME_DESCRIPTION,
+    operation_id="get_frequencies_time",
 )
-@router.post("/frequencies/time", response_model=None, include_in_schema=False)
 @api_handler
-async def frequencies_time(
-    ctx: CtxDep,
-    corpora: params.CorporaParam,
-    cqp_query: params.CQPParam,
-    subcqp: SubCQPParam = None,
-    within: params.WithinParam = None,
-    default_within: params.DefaultWithinParam = None,
-    expand_prequeries: params.ExpandPrequeriesParam = True,
-    granularity: params.GranularityParam = params.GranularityValues.year,
-    date_from: DateFromParam = None,
-    date_to: DateToParam = None,
-    strategy: params.StrategyParam = params.StrategyValues.some_overlaps,
-    include_combined: params.IncludeCombinedParam = True,
-    include_per_corpus: params.IncludePerCorpusParam = True,
+async def frequencies_time_get(
+    ctx: QueryCtxDep,
+    query: Annotated[FrequenciesTimeQuery, Query()],
     abort_signal: AbortDep = None,
+) -> AsyncIterator[handler.ResponseFragment]:
+    """Calculate time frequencies for a CQP query.
+
+    Returns:
+        The time-frequency result stream.
+    """
+    return await _frequencies_time(ctx, query.to_request(FrequenciesTimeRequest), abort_signal)
+
+
+@router.post(
+    "/frequencies/time",
+    response_model=None,
+    responses=handler.docs_response(
+        FrequenciesTimeResponse, http_errors={403: "Access to a requested corpus was denied."}
+    ),
+    summary="Statistics Over Time",
+    description=FREQUENCIES_TIME_DESCRIPTION,
+    operation_id="post_frequencies_time",
+)
+@api_handler
+async def frequencies_time_post(
+    ctx: CtxDep, request: FrequenciesTimeRequest, abort_signal: AbortDep = None
+) -> AsyncIterator[handler.ResponseFragment]:
+    """Calculate time frequencies for a CQP query.
+
+    Returns:
+        The time-frequency result stream.
+    """
+    return await _frequencies_time(ctx, request, abort_signal)
+
+
+async def _frequencies_time(
+    ctx: CtxDep, request: FrequenciesTimeRequest, abort_signal: AbortSignal | None
 ) -> AsyncIterator[handler.ResponseFragment]:
     """Count occurrences per time period.
 
@@ -1381,23 +1536,23 @@ async def frequencies_time(
     """
     request_state = await _resolve_frequencies_time_request(
         ctx=ctx,
-        corpora=corpora,
-        cqp_query=cqp_query,
-        subcqp=subcqp,
-        within=within,
-        default_within=default_within,
-        expand_prequeries=expand_prequeries,
-        granularity=granularity,
-        date_from=date_from,
-        date_to=date_to,
+        corpora=request.corpora,
+        cqp_query=request.cqp_query,
+        subcqp=request.subcqp,
+        within=request.within,
+        default_within=request.default_within,
+        expand_prequeries=request.expand_prequeries,
+        granularity=request.granularity,
+        date_from=request.date_from,
+        date_to=request.date_to,
     )
     return _frequencies_time_stream(
         ctx=ctx,
         request_state=request_state,
-        granularity=granularity,
-        strategy=strategy,
-        include_combined=include_combined,
-        include_per_corpus=include_per_corpus,
+        granularity=request.granularity,
+        strategy=request.strategy,
+        include_combined=request.include_combined,
+        include_per_corpus=request.include_per_corpus,
         abort_signal=abort_signal,
     )
 

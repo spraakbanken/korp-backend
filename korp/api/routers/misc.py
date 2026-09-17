@@ -1,7 +1,7 @@
 """Miscellaneous routes."""
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncIterator
 from typing import Annotated, Literal, TypeAlias
 
 from fastapi import APIRouter, Query
@@ -9,7 +9,8 @@ from pydantic import Field
 
 from korp import cqp
 from korp.api import schemas
-from korp.dependencies import CtxDep
+from korp.api.requests import QueryRequestModel, RequestModel
+from korp.dependencies import CtxDep, QueryCtxDep
 from korp.handler import api_handler, docs_error_responses, docs_response
 
 router = APIRouter()
@@ -84,7 +85,18 @@ class OptimizeResponse(schemas.CommonResponse):
     )
 
 
-@router.post("/health", response_model=None, include_in_schema=False)
+class OptimizeRequest(RequestModel):
+    """Request for CQP query optimization."""
+
+    cqp_query: OptimizeCQPParam
+    within: OptimizeWithinParam = None
+    in_order: OptimizeInOrderParam = True
+
+
+class OptimizeQuery(QueryRequestModel, OptimizeRequest):
+    """GET query for CQP query optimization."""
+
+
 @router.get(
     "/health",
     response_model=None,
@@ -95,6 +107,7 @@ class OptimizeResponse(schemas.CommonResponse):
     summary="Health Check",
     description=HEALTH_DESCRIPTION,
     tags=["Administration"],
+    operation_id="get_health",
 )
 async def health(_ctx: CtxDep) -> dict:
     """Health check endpoint for monitoring.
@@ -134,34 +147,58 @@ async def sleep(_ctx: CtxDep, t: int = 5) -> AsyncIterator[dict]:
     summary="Optimize CQP Query",
     description=OPTIMIZE_DESCRIPTION,
     tags=["Miscellaneous"],
+    operation_id="get_optimize",
 )
-@router.post("/optimize", response_model=None, include_in_schema=False)
 @api_handler
-async def optimize(
-    _ctx: CtxDep,
-    cqp_query: OptimizeCQPParam,
-    within: OptimizeWithinParam = None,
-    in_order: OptimizeInOrderParam = True,
-) -> AsyncGenerator[dict]:
+async def optimize_get(
+    _ctx: QueryCtxDep,
+    query: Annotated[OptimizeQuery, Query()],
+) -> dict:
+    """Optimize a query.
+
+    Returns:
+        The optimization result.
+    """
+    return _optimize(query.to_request(OptimizeRequest))
+
+
+@router.post(
+    "/optimize",
+    response_model=None,
+    responses=docs_response(OptimizeResponse),
+    summary="Optimize CQP Query",
+    description=OPTIMIZE_DESCRIPTION,
+    tags=["Miscellaneous"],
+    operation_id="post_optimize",
+)
+@api_handler
+async def optimize_post(_ctx: CtxDep, request: OptimizeRequest) -> dict:
+    """Optimize a query.
+
+    Returns:
+        The optimization result.
+    """
+    return _optimize(request)
+
+
+def _optimize(request: OptimizeRequest) -> dict:
     """Optimize a CQP query.
 
     Args:
-        cqp_query: The CQP query to optimize.
-        within: The structural unit to limit the search to.
-        in_order: Whether the query terms should be in order.
+        request: Validated optimization request.
 
-    Yields:
+    Returns:
         A dictionary with the optimized CQP query (or the original if optimization was not possible) and the
             optimization status.
     """
-    cqp_params: dict[str, str | int] = {"within": within or "sentence"}
-    free_search = not in_order
+    cqp_params: dict[str, str | int] = {"within": request.within or "sentence"}
+    free_search = not request.in_order
 
     optimization_status, optimized_cqp = cqp.optimize_query(
-        cqp_query, cqp_params, find_match=False, expand=False, free_search=free_search
+        request.cqp_query, cqp_params, find_match=False, expand=False, free_search=free_search
     )
 
-    yield {
-        "cqp": optimized_cqp if optimization_status == cqp.QueryOptimizeResult.SUCCESS else cqp_query,
+    return {
+        "cqp": optimized_cqp if optimization_status == cqp.QueryOptimizeResult.SUCCESS else request.cqp_query,
         "status": optimization_status.name,
     }

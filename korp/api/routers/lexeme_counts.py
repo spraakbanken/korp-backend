@@ -10,8 +10,9 @@ from sqlalchemy import text
 
 from korp import auth, utils
 from korp.api import schemas
+from korp.api.requests import QueryRequestModel, RequestModel
 from korp.config import settings
-from korp.dependencies import CtxDep
+from korp.dependencies import CtxDep, QueryCtxDep
 from korp.handler import api_handler, docs_response
 
 router = APIRouter(tags=["Statistics"])
@@ -34,11 +35,8 @@ Get the number of occurrences of two lexemes in one corpus:
 CorporaParamOptional: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
-        description=(
-            "Comma-separated list of corpora to count in. If omitted, counts are summed over all corpora in the "
-            "lexeme counts table."
-        ),
-        examples=[["ROMI"], ["ROMI,SUC3"]],
+        description=("Corpora to count in. If omitted, counts are summed over all corpora in the lexeme counts table."),
+        examples=[["ROMI"], ["ROMI", "SUC3"]],
     ),
     BeforeValidator(utils.split_csv),
     AfterValidator(lambda v: [x.upper() for x in v]),
@@ -47,8 +45,8 @@ CorporaParamOptional: TypeAlias = Annotated[
 LexemesParam: TypeAlias = Annotated[
     list[str],
     Query(
-        description="Comma-separated list of lexemes to look up.",
-        examples=[["ge..vb.1,ta..vb.1"]],
+        description="Lexemes to look up.",
+        examples=[["ge..vb.1", "ta..vb.1"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -62,6 +60,21 @@ class LexemeCountResponse(schemas.CommonResponse):
         description="Frequencies keyed by lexeme. Lexemes that are not found are omitted.",
         examples=[{"ge..vb.1": 354, "ta..vb.1": 85}],
     )
+
+
+class LexemeCountsRequest(RequestModel):
+    """Request for lexeme counts."""
+
+    json_array_fields = frozenset({"lexemes", "corpora"})
+
+    lexemes: LexemesParam
+    corpora: CorporaParamOptional = None
+
+
+class LexemeCountsQuery(QueryRequestModel, LexemeCountsRequest):
+    """GET query for lexeme counts."""
+
+    csv_fields = LexemeCountsRequest.json_array_fields
 
 
 async def _lexeme_counts_stream(ctx: CtxDep, lexemes: list[str], corpora: list[str]) -> AsyncIterator[dict]:
@@ -101,24 +114,41 @@ async def _lexeme_counts_stream(ctx: CtxDep, lexemes: list[str], corpora: list[s
     responses=docs_response(LexemeCountResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Lexeme Statistics",
     description=LEXEME_COUNT_DESCRIPTION,
+    operation_id="get_lexeme_counts",
 )
-@router.post("/lexeme-counts", response_model=None, include_in_schema=False)
 @api_handler
-async def lexeme_counts(
-    ctx: CtxDep,
-    lexemes: LexemesParam,
-    corpora: CorporaParamOptional = None,
+async def lexeme_counts_get(
+    ctx: QueryCtxDep,
+    query: Annotated[LexemeCountsQuery, Query()],
 ) -> AsyncIterator[dict]:
+    """Return lexeme counts for the given lexemes and corpora."""
+    return await _lexeme_counts(ctx, query.to_request(LexemeCountsRequest))
+
+
+@router.post(
+    "/lexeme-counts",
+    response_model=None,
+    responses=docs_response(LexemeCountResponse, http_errors={403: "Access to a requested corpus was denied."}),
+    summary="Lexeme Statistics",
+    description=LEXEME_COUNT_DESCRIPTION,
+    operation_id="post_lexeme_counts",
+)
+@api_handler
+async def lexeme_counts_post(ctx: CtxDep, request: LexemeCountsRequest) -> AsyncIterator[dict]:
+    """Return lexeme counts for the given lexemes and corpora."""
+    return await _lexeme_counts(ctx, request)
+
+
+async def _lexeme_counts(ctx: CtxDep, request: LexemeCountsRequest) -> AsyncIterator[dict]:
     """Return lexeme statistics per corpus.
 
     Args:
         ctx: Request context.
-        lexemes: Comma-separated list of lexemes.
-        corpora: Comma-separated list of corpora.
+        request: Validated lexeme-count request.
 
     Returns:
         An async iterator yielding a dictionary with lexeme counts.
     """
-    corpora = corpora or []
+    corpora = request.corpora or []
     await auth.check_authorization(corpora, ctx)
-    return _lexeme_counts_stream(ctx, lexemes, corpora)
+    return _lexeme_counts_stream(ctx, request.lexemes, corpora)

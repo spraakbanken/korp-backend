@@ -12,9 +12,7 @@ from korp import utils
 CorporaParam: TypeAlias = Annotated[
     list[str],
     Query(
-        description=(
-            "Comma-separated list of corpus ids to query. Corpus ids are case-insensitive."
-        ),
+        description=("Corpus ids to query. Corpus ids are case-insensitive."),
         examples=[["ROMI", "SUC3"]],
     ),
     BeforeValidator(utils.split_csv),
@@ -29,6 +27,7 @@ CQPParam: TypeAlias = Annotated[
             "query is executed on the result of the previous query, in the order it appears in the request."
         ),
         alias="cqp",
+        explode=True,  # Document as a repeated query parameter rather than a CSV list.
         examples=[['[word="flower"]'], ['[word="flower"]', '[pos="NN"]']],
     ),
 ]
@@ -49,9 +48,9 @@ WithinParam: TypeAlias = Annotated[
     Query(
         description=(
             "Per-corpus structural unit that query matches must stay inside, overriding `default_within` for the "
-            "specified corpora. Use `CORPUS:structure`; multiple overrides can be comma-separated."
+            "specified corpora. Each value uses `CORPUS:structure`."
         ),
-        examples=[["ROMI:paragraph,SUC3:sentence"]],
+        examples=[["ROMI:paragraph", "SUC3:sentence"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -73,9 +72,9 @@ ContextParam: TypeAlias = Annotated[
     Query(
         description=(
             "Per-corpus context to return around each match, overriding `default_context` for the specified corpora. "
-            "Use `CORPUS:<number> <unit>`; multiple overrides can be comma-separated."
+            "Each value uses `CORPUS:<number> <unit>`."
         ),
-        examples=[["ROMI:1 sentence,SUC3:10 word"]],
+        examples=[["ROMI:1 sentence", "SUC3:10 word"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -105,11 +104,7 @@ class GranularityValues(StrEnum):
 
 GranularityParam: TypeAlias = Annotated[
     GranularityValues,
-    Query(
-        description=(
-            "Time resolution for returned buckets: `year`, `month`, `day`, `hour`, `minute`, or `second`."
-        )
-    ),
+    Query(description=("Time resolution for returned buckets: `year`, `month`, `day`, `hour`, `minute`, or `second`.")),
 ]
 
 
@@ -168,10 +163,10 @@ SplitParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
         description=(
-            "Comma-separated list of set-valued CWB attributes whose values should be split on `|` before counting. "
+            "Set-valued CWB attributes whose values should be split on `|` before counting. "
             "Each split value is treated as a separate value in the result."
         ),
-        examples=[["sense"], ["text_topic,sense"]],
+        examples=[["sense"], ["text_topic", "sense"]],
     ),
     BeforeValidator(utils.split_csv),
 ]

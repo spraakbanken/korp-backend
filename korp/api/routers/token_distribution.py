@@ -24,8 +24,9 @@ from sqlalchemy import text
 from korp import caching, utils
 from korp.api import params, schemas
 from korp.api.params import GranularityValues
+from korp.api.requests import QueryRequestModel, RequestModel
 from korp.config import settings
-from korp.dependencies import CtxDep
+from korp.dependencies import CtxDep, QueryCtxDep
 from korp.handler import APIValidationError, api_handler, docs_response
 from korp.memcached import CacheError
 
@@ -78,6 +79,26 @@ DateToParam: TypeAlias = Annotated[
         examples=["20201231235959", "2020-12-31"],
     ),
 ]
+
+
+class TokenDistributionRequest(RequestModel):
+    """Request for corpus token distribution data."""
+
+    json_array_fields = frozenset({"corpora"})
+
+    corpora: params.CorporaParam
+    granularity: params.GranularityParam = GranularityValues.year
+    include_combined: params.IncludeCombinedParam = True
+    include_per_corpus: params.IncludePerCorpusParam = True
+    strategy: params.StrategyParam = params.StrategyValues.some_overlaps
+    date_from: DateFromParam = None
+    date_to: DateToParam = None
+
+
+class TokenDistributionQuery(QueryRequestModel, TokenDistributionRequest):
+    """GET query for corpus token distribution data."""
+
+    csv_fields = TokenDistributionRequest.json_array_fields
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,43 +256,58 @@ async def _token_distribution_stream(
     responses=docs_response(TokenDistributionResponse),
     summary="Token Distribution",
     description=TOKEN_DISTRIBUTION_DESCRIPTION,
+    operation_id="get_token_distribution",
 )
-@router.post("/token-distribution", response_model=None, include_in_schema=False)
 @api_handler
-async def token_distribution(
-    ctx: CtxDep,
-    corpora: params.CorporaParam,
-    granularity: params.GranularityParam = GranularityValues.year,
-    include_combined: params.IncludeCombinedParam = True,
-    include_per_corpus: params.IncludePerCorpusParam = True,
-    strategy: params.StrategyParam = params.StrategyValues.some_overlaps,
-    date_from: DateFromParam = None,
-    date_to: DateToParam = None,
+async def token_distribution_get(
+    ctx: QueryCtxDep,
+    query: Annotated[TokenDistributionQuery, Query()],
 ) -> AsyncIterator[dict]:
+    """Calculate token distribution information for corpora.
+
+    Returns:
+        The token-distribution result stream.
+    """
+    return _token_distribution(ctx, query.to_request(TokenDistributionRequest))
+
+
+@router.post(
+    "/token-distribution",
+    response_model=None,
+    responses=docs_response(TokenDistributionResponse),
+    summary="Token Distribution",
+    description=TOKEN_DISTRIBUTION_DESCRIPTION,
+    operation_id="post_token_distribution",
+)
+@api_handler
+async def token_distribution_post(ctx: CtxDep, request: TokenDistributionRequest) -> AsyncIterator[dict]:
+    """Calculate token distribution information for corpora.
+
+    Returns:
+        The token-distribution result stream.
+    """
+    return _token_distribution(ctx, request)
+
+
+def _token_distribution(ctx: CtxDep, request: TokenDistributionRequest) -> AsyncIterator[dict]:
     """Calculate token distribution information for corpora.
 
     Args:
         ctx: The request context.
-        corpora: Comma-separated list of corpora.
-        granularity: Granularity of result.
-        include_combined: Whether to include combined results.
-        include_per_corpus: Whether to include results per corpus.
-        strategy: Strategy for date range matching.
-        date_from: Start date for filtering (inclusive).
-        date_to: End date for filtering (inclusive).
+        request: Validated token-distribution request.
 
     Returns:
         An async iterator yielding the token distribution information.
     """
-    corpora = corpora or []
-    date_range = validate_date_range(date_from, date_to)
+    corpora = request.corpora or []
+    date_range = validate_date_range(request.date_from, request.date_to)
     return _token_distribution_stream(
         ctx,
         corpora,
-        granularity,
-        include_combined,
-        include_per_corpus,
-        strategy,
+        request.granularity,
+        request.include_combined,
+        request.include_per_corpus,
+        request.strategy,
         date_range,
     )
 

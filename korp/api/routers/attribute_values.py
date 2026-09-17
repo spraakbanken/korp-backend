@@ -11,6 +11,7 @@ from pydantic import BeforeValidator, Field
 from pydantic.json_schema import SkipJsonSchema
 
 from korp.api import params, schemas
+from korp.api.requests import QueryRequestModel, RequestModel
 
 if TYPE_CHECKING:
     import anyio.abc
@@ -20,7 +21,7 @@ from fastapi import APIRouter, Query
 
 from korp import auth, caching, handler, utils
 from korp.config import settings
-from korp.dependencies import CtxDep
+from korp.dependencies import CtxDep, QueryCtxDep
 from korp.handler import api_handler
 from korp.memcached import CacheError
 
@@ -57,10 +58,10 @@ AttrParam: TypeAlias = Annotated[
     list[str],
     Query(
         description=(
-            "Comma-separated list of CWB attribute names or attribute hierarchies. Use `>` to request nested values, "
+            "CWB attribute names or attribute hierarchies. Use `>` to request nested values, "
             "for example `text_author>text_title`."
         ),
-        examples=[["text_author"], ["text_author>text_title"], ["pos,lemma"]],
+        examples=[["text_author"], ["text_author>text_title"], ["pos", "lemma"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -68,8 +69,8 @@ AttrParam: TypeAlias = Annotated[
 AttrValuesSplitParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
-        description="Comma-separated list of set-valued CWB attributes to split on `|` before collecting values.",
-        examples=[["text_topic"], ["sense,lemma"]],
+        description="Set-valued CWB attributes to split on `|` before collecting values.",
+        examples=[["text_topic"], ["sense", "lemma"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -110,38 +111,82 @@ class AttrValuesResponse(schemas.CommonResponse):
     )
 
 
+class AttributeValuesRequest(RequestModel):
+    """Request for CWB attribute values."""
+
+    json_array_fields = frozenset({"corpora", "attributes", "split"})
+
+    corpora: params.CorporaParam
+    attributes: AttrParam
+    include_counts: IncludeCountsParam = False
+    include_per_corpus: params.IncludePerCorpusParam = True
+    include_combined: params.IncludeCombinedParam = True
+    split: AttrValuesSplitParam = None
+
+
+class AttributeValuesQuery(QueryRequestModel, AttributeValuesRequest):
+    """GET query for CWB attribute values."""
+
+    csv_fields = AttributeValuesRequest.json_array_fields
+
+
 @router.get(
     "/attribute-values",
     response_model=None,
     responses=handler.docs_response(AttrValuesResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Attribute Values",
     description=ATTRIBUTE_VALUES_DESCRIPTION,
+    operation_id="get_attribute_values",
 )
-@router.post("/attribute-values", response_model=None, include_in_schema=False)
 @api_handler
-async def attribute_values(
-    ctx: CtxDep,
-    corpora: params.CorporaParam,
-    attributes: AttrParam,
-    include_counts: IncludeCountsParam = False,
-    include_per_corpus: params.IncludePerCorpusParam = True,
-    include_combined: params.IncludeCombinedParam = True,
-    split: AttrValuesSplitParam = None,
+async def attribute_values_get(
+    ctx: QueryCtxDep,
+    query: Annotated[AttributeValuesQuery, Query()],
 ) -> AsyncIterator[handler.ResponseFragment]:
+    """Get attribute values for one or more corpora and CWB attributes.
+
+    Returns:
+        The attribute-value result stream.
+    """
+    return _attribute_values(ctx, query.to_request(AttributeValuesRequest))
+
+
+@router.post(
+    "/attribute-values",
+    response_model=None,
+    responses=handler.docs_response(AttrValuesResponse, http_errors={403: "Access to a requested corpus was denied."}),
+    summary="Attribute Values",
+    description=ATTRIBUTE_VALUES_DESCRIPTION,
+    operation_id="post_attribute_values",
+)
+@api_handler
+async def attribute_values_post(
+    ctx: CtxDep, request: AttributeValuesRequest
+) -> AsyncIterator[handler.ResponseFragment]:
+    """Get attribute values for one or more corpora and CWB attributes.
+
+    Returns:
+        The attribute-value result stream.
+    """
+    return _attribute_values(ctx, request)
+
+
+async def _attribute_values(ctx: CtxDep, request: AttributeValuesRequest) -> AsyncIterator[handler.ResponseFragment]:
     """Get all available values for one or more corpus annotations.
 
     Args:
         ctx: Request context.
-        corpora: Comma-separated list of corpora.
-        attributes: Comma-separated list of CWB attribute names or attribute hierarchies.
-        include_counts: Whether to include counts for each attribute value.
-        include_per_corpus: Whether to include per-corpus results.
-        include_combined: Whether to include combined results across corpora.
-        split: Comma-separated list of CWB attributes to split values for.
+        request: Validated attribute-value request.
 
     Yields:
         Progress events and CWB attribute values for the specified corpora and annotations.
     """
+    corpora = request.corpora
+    attributes = request.attributes
+    include_counts = request.include_counts
+    include_per_corpus = request.include_per_corpus
+    include_combined = request.include_combined
+    split = request.split
     stream = ctx.common.stream
 
     await auth.check_authorization(corpora, ctx)

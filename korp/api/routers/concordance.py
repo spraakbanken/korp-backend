@@ -23,9 +23,10 @@ from pydantic.json_schema import SkipJsonSchema
 
 from korp import auth, caching, cqp, handler, utils
 from korp.api import params, schemas
+from korp.api.requests import QueryRequestModel, RequestModel
 from korp.config import settings
 from korp.cwb import CWB
-from korp.dependencies import AbortDep, AbortSignal, CtxDep
+from korp.dependencies import AbortDep, AbortSignal, CtxDep, QueryCtxDep
 from korp.handler import APIValidationError, api_handler
 from korp.memcached import MemcachedSyncClient
 
@@ -87,9 +88,9 @@ LeftContextParam: TypeAlias = Annotated[
     Query(
         description=(
             "Left-side context to show for specific corpora, overriding `default_context` and `context`. "
-            "Use `corpus:context`, for example `SUC3:5 words`. Multiple values can be comma-separated."
+            "Each value uses `corpus:context`, for example `SUC3:5 words`."
         ),
-        examples=[["SUC3:5 words,ROMI:1 sentence"]],
+        examples=[["SUC3:5 words", "ROMI:1 sentence"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -99,9 +100,9 @@ RightContextParam: TypeAlias = Annotated[
     Query(
         description=(
             "Right-side context to show for specific corpora, overriding `default_context` and `context`. "
-            "Use `corpus:context`, for example `SUC3:5 words`. Multiple values can be comma-separated."
+            "Each value uses `corpus:context`, for example `SUC3:5 words`."
         ),
-        examples=[["SUC3:5 words,ROMI:1 sentence"]],
+        examples=[["SUC3:5 words", "ROMI:1 sentence"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -142,11 +143,11 @@ AttributesParam: TypeAlias = Annotated[
     Sequence[str],
     Query(
         description=(
-            "Comma-separated list of CWB attributes to include with each returned token. Positional attributes "
+            "CWB attributes to include with each returned token. Positional attributes "
             "represent token annotations; structural attributes requested here are returned as inline structural "
             "annotations. `word` is always included, even when it is not listed."
         ),
-        examples=[["word"], ["msd,lemma"]],
+        examples=[["word"], ["msd", "lemma"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -155,10 +156,10 @@ StructAttributesParam: TypeAlias = Annotated[
     Sequence[str] | SkipJsonSchema[None],
     Query(
         description=(
-            "Comma-separated list of structural CWB attributes (usually sentence or document annotations) to include "
+            "Structural CWB attributes (usually sentence or document annotations) to include "
             "for each KWIC row. These are returned in the row-level `structs` object when available."
         ),
-        examples=[["text_author,text_title"]],
+        examples=[["text_author", "text_title"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -200,6 +201,87 @@ MaxHitsPerCorpusParam: TypeAlias = Annotated[
         examples=[25],
     ),
 ]
+
+
+class ConcordanceRequest(RequestModel):
+    """Request for a concordance search."""
+
+    json_array_fields = frozenset(
+        {
+            "corpora",
+            "cqp_query",
+            "attributes",
+            "struct_attributes",
+            "within",
+            "context",
+            "left_context",
+            "right_context",
+        }
+    )
+    json_array_fields_allowing_commas = frozenset({"cqp_query"})
+
+    corpora: params.CorporaParam
+    cqp_query: params.CQPParam
+    offset: OffsetParam = 0
+    limit: LimitParam = 10
+    attributes: AttributesParam = ("word",)
+    struct_attributes: StructAttributesParam = None
+    max_hits_per_corpus: MaxHitsPerCorpusParam = None
+    sort: SortParam = None
+    random_seed: RandomSeedParam = None
+    in_order: InOrderParam = True
+    within: params.WithinParam = None
+    default_within: params.DefaultWithinParam = None
+    default_context: params.DefaultContextParam = "10 words"
+    left_context: LeftContextParam = None
+    right_context: RightContextParam = None
+    context: params.ContextParam = None
+    expand_prequeries: params.ExpandPrequeriesParam = True
+    pagination_state: PaginationStateParam = None
+
+
+class ConcordanceSampleRequest(RequestModel):
+    """Request for a random concordance sample."""
+
+    json_array_fields = frozenset(
+        {
+            "corpora",
+            "cqp_query",
+            "attributes",
+            "struct_attributes",
+            "within",
+            "context",
+            "left_context",
+            "right_context",
+        }
+    )
+    json_array_fields_allowing_commas = frozenset({"cqp_query"})
+
+    corpora: params.CorporaParam
+    cqp_query: params.CQPParam
+    attributes: AttributesParam = ("word",)
+    struct_attributes: StructAttributesParam = ()
+    random_seed: RandomSeedParam = None
+    in_order: InOrderParam = True
+    within: params.WithinParam = None
+    default_within: params.DefaultWithinParam = None
+    context: params.ContextParam = None
+    default_context: params.DefaultContextParam = "10 words"
+    left_context: LeftContextParam = None
+    right_context: RightContextParam = None
+    expand_prequeries: params.ExpandPrequeriesParam = True
+
+
+class ConcordanceQuery(QueryRequestModel, ConcordanceRequest):
+    """GET query for a concordance search."""
+
+    csv_fields = ConcordanceRequest.json_array_fields - ConcordanceRequest.json_array_fields_allowing_commas
+
+
+class ConcordanceSampleQuery(QueryRequestModel, ConcordanceSampleRequest):
+    """GET query for a random concordance sample."""
+
+    csv_fields = ConcordanceSampleRequest.json_array_fields - ConcordanceSampleRequest.json_array_fields_allowing_commas
 
 
 class Match(schemas.ResponseModel):
@@ -793,25 +875,50 @@ async def _perform_sample_query(
     ),
     summary="Sample Concordance",
     description=CONCORDANCE_SAMPLE_DESCRIPTION,
+    operation_id="get_concordance_sample",
 )
-@router.post("/concordance/sample", response_model=None, include_in_schema=False)
 @api_handler
-async def concordance_sample(
-    ctx: CtxDep,
-    corpora: params.CorporaParam,
-    cqp_query: params.CQPParam,
-    attributes: AttributesParam = ("word",),
-    struct_attributes: StructAttributesParam = (),
-    random_seed: RandomSeedParam = None,
-    in_order: InOrderParam = True,
-    within: params.WithinParam = None,
-    default_within: params.DefaultWithinParam = None,
-    context: params.ContextParam = None,
-    default_context: params.DefaultContextParam = "10 words",
-    left_context: LeftContextParam = None,
-    right_context: RightContextParam = None,
-    expand_prequeries: params.ExpandPrequeriesParam = True,
+async def concordance_sample_get(
+    ctx: QueryCtxDep,
+    query: Annotated[ConcordanceSampleQuery, Query()],
     abort_signal: AbortDep = None,
+) -> AsyncGenerator[handler.ResponseFragment]:
+    """Perform a sample search with the given parameters.
+
+    Returns:
+        The sample-search result stream.
+    """
+    return await _concordance_sample(ctx, query.to_request(ConcordanceSampleRequest), abort_signal)
+
+
+@router.post(
+    "/concordance/sample",
+    response_model=None,
+    responses=handler.docs_response(
+        ConcordanceSampleResponse, http_errors={403: "Access to a requested corpus was denied."}
+    ),
+    summary="Sample Concordance",
+    description=CONCORDANCE_SAMPLE_DESCRIPTION,
+    operation_id="post_concordance_sample",
+)
+@api_handler
+async def concordance_sample_post(
+    ctx: CtxDep,
+    request: ConcordanceSampleRequest,
+    abort_signal: AbortDep = None,
+) -> AsyncGenerator[handler.ResponseFragment]:
+    """Perform a sample search with the given parameters.
+
+    Returns:
+        The sample-search result stream.
+    """
+    return await _concordance_sample(ctx, request, abort_signal)
+
+
+async def _concordance_sample(
+    ctx: CtxDep,
+    request: ConcordanceSampleRequest,
+    abort_signal: AbortSignal | None,
 ) -> AsyncGenerator[handler.ResponseFragment]:
     """Perform a CQP query and return a random match.
 
@@ -823,23 +930,23 @@ async def concordance_sample(
     """
     concordance_params = await parse_parameters(
         ctx=ctx,
-        corpora=corpora,
-        cqp_query=cqp_query,
+        corpora=request.corpora,
+        cqp_query=request.cqp_query,
         offset=0,
         limit=1,
-        attributes=attributes,
-        struct_attributes=struct_attributes,
+        attributes=request.attributes,
+        struct_attributes=request.struct_attributes,
         max_hits_per_corpus=1,
         sort="random",
-        random_seed=random_seed,
-        in_order=in_order,
-        within=within,
-        default_within=default_within,
-        default_context=default_context,
-        left_context=left_context,
-        right_context=right_context,
-        context=context,
-        expand_prequeries=expand_prequeries,
+        random_seed=request.random_seed,
+        in_order=request.in_order,
+        within=request.within,
+        default_within=request.default_within,
+        default_context=request.default_context,
+        left_context=request.left_context,
+        right_context=request.right_context,
+        context=request.context,
+        expand_prequeries=request.expand_prequeries,
         pagination_state=None,
     )
 
@@ -852,30 +959,48 @@ async def concordance_sample(
     responses=handler.docs_response(ConcordanceResponse, http_errors={403: "Access to a requested corpus was denied."}),
     summary="Concordance",
     description=CONCORDANCE_DESCRIPTION,
+    operation_id="get_concordance",
 )
-@router.post("/concordance", response_model=None, include_in_schema=False)
 @api_handler
-async def concordance(
-    ctx: CtxDep,
-    corpora: params.CorporaParam,
-    cqp_query: params.CQPParam,
-    offset: OffsetParam = 0,
-    limit: LimitParam = 10,
-    attributes: AttributesParam = ("word",),
-    struct_attributes: StructAttributesParam = None,
-    max_hits_per_corpus: MaxHitsPerCorpusParam = None,
-    sort: SortParam = None,
-    random_seed: RandomSeedParam = None,
-    in_order: InOrderParam = True,
-    within: params.WithinParam = None,
-    default_within: params.DefaultWithinParam = None,
-    default_context: params.DefaultContextParam = "10 words",
-    left_context: LeftContextParam = None,
-    right_context: RightContextParam = None,
-    context: params.ContextParam = None,
-    expand_prequeries: params.ExpandPrequeriesParam = True,
-    pagination_state: PaginationStateParam = None,
+async def concordance_get(
+    ctx: QueryCtxDep,
+    query: Annotated[ConcordanceQuery, Query()],
     abort_signal: AbortDep = None,
+) -> AsyncGenerator[handler.ResponseFragment]:
+    """Perform a concordance search with the given parameters.
+
+    Returns:
+        The concordance result stream.
+    """
+    return await _concordance(ctx, query.to_request(ConcordanceRequest), abort_signal)
+
+
+@router.post(
+    "/concordance",
+    response_model=None,
+    responses=handler.docs_response(ConcordanceResponse, http_errors={403: "Access to a requested corpus was denied."}),
+    summary="Concordance",
+    description=CONCORDANCE_DESCRIPTION,
+    operation_id="post_concordance",
+)
+@api_handler
+async def concordance_post(
+    ctx: CtxDep,
+    request: ConcordanceRequest,
+    abort_signal: AbortDep = None,
+) -> AsyncGenerator[handler.ResponseFragment]:
+    """Perform a concordance search with the given parameters.
+
+    Returns:
+        The concordance result stream.
+    """
+    return await _concordance(ctx, request, abort_signal)
+
+
+async def _concordance(
+    ctx: CtxDep,
+    request: ConcordanceRequest,
+    abort_signal: AbortSignal | None,
 ) -> AsyncGenerator[handler.ResponseFragment]:
     """Perform a CQP query and return a number of matches.
 
@@ -884,24 +1009,24 @@ async def concordance(
     """
     concordance_params = await parse_parameters(
         ctx=ctx,
-        corpora=corpora,
-        cqp_query=cqp_query,
-        offset=offset,
-        limit=limit,
-        attributes=attributes,
-        struct_attributes=struct_attributes,
-        max_hits_per_corpus=max_hits_per_corpus,
-        sort=sort,
-        random_seed=random_seed,
-        in_order=in_order,
-        within=within,
-        default_within=default_within,
-        default_context=default_context,
-        left_context=left_context,
-        right_context=right_context,
-        context=context,
-        expand_prequeries=expand_prequeries,
-        pagination_state=pagination_state,
+        corpora=request.corpora,
+        cqp_query=request.cqp_query,
+        offset=request.offset,
+        limit=request.limit,
+        attributes=request.attributes,
+        struct_attributes=request.struct_attributes,
+        max_hits_per_corpus=request.max_hits_per_corpus,
+        sort=request.sort,
+        random_seed=request.random_seed,
+        in_order=request.in_order,
+        within=request.within,
+        default_within=request.default_within,
+        default_context=request.default_context,
+        left_context=request.left_context,
+        right_context=request.right_context,
+        context=request.context,
+        expand_prequeries=request.expand_prequeries,
+        pagination_state=request.pagination_state,
     )
 
     return perform_query(concordance_params, ctx, abort_signal=abort_signal)

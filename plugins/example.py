@@ -17,7 +17,7 @@ from korp.handler import api_handler
 router = plugin.Plugin("example", __name__)
 
 
-@router.get("/hello")
+@router.get("/hello", operation_id="get_hello")
 @api_handler
 def hello(_ctx: CtxDep) -> dict:
     """Return a greeting message from the plugin configuration."""

@@ -22,8 +22,7 @@ from plugins import protection_cwb
 router = plugin.Plugin("authenticate", __name__)
 
 
-@router.get("/authenticate", response_model=None)
-@router.post("/authenticate", response_model=None, include_in_schema=False)
+@router.get("/authenticate", response_model=None, operation_id="get_authenticate")
 @api_handler(cache_headers=False)
 def authenticate(ctx: CtxDep) -> dict:
     """Authenticate a user against an authentication server.
@@ -100,9 +99,7 @@ def _authenticate_from_auth_header(auth_header: str | None) -> dict:
 class Auth(auth.Authorizer):
     """Authorizer class that checks if the user has access to protected corpora based on the authentication response."""
 
-    async def _fetch_protection_info(
-        self, corpora: list[str], auth_ctx: AuthContext
-    ) -> dict[str, auth.ProtectionInfo]:
+    async def _fetch_protection_info(self, corpora: list[str], auth_ctx: AuthContext) -> dict[str, auth.ProtectionInfo]:
         """Fetch per-corpus protection metadata from CWB.
 
         Returns:
