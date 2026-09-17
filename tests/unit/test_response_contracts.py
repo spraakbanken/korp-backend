@@ -178,6 +178,7 @@ AUTHORIZED_PATHS = {
     "/frequencies/time",
     "/lexeme-counts",
     "/log-likelihood",
+    "/token-distribution",
 }
 
 

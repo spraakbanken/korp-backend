@@ -21,7 +21,7 @@ from pydantic import Field
 from pydantic.json_schema import SkipJsonSchema
 from sqlalchemy import text
 
-from korp import caching, utils
+from korp import auth, caching, utils
 from korp.api import params, schemas
 from korp.api.params import GranularityValues
 from korp.api.requests import QueryRequestModel, RequestModel
@@ -253,7 +253,7 @@ async def _token_distribution_stream(
 @router.get(
     "/token-distribution",
     response_model=None,
-    responses=docs_response(TokenDistributionResponse),
+    responses=docs_response(TokenDistributionResponse, corpus_authorization=True),
     summary="Token Distribution",
     description=TOKEN_DISTRIBUTION_DESCRIPTION,
     operation_id="get_token_distribution",
@@ -268,13 +268,13 @@ async def token_distribution_get(
     Returns:
         The token-distribution result stream.
     """
-    return _token_distribution(ctx, query.to_request(TokenDistributionRequest))
+    return await _token_distribution(ctx, query.to_request(TokenDistributionRequest))
 
 
 @router.post(
     "/token-distribution",
     response_model=None,
-    responses=docs_response(TokenDistributionResponse),
+    responses=docs_response(TokenDistributionResponse, corpus_authorization=True),
     summary="Token Distribution",
     description=TOKEN_DISTRIBUTION_DESCRIPTION,
     operation_id="post_token_distribution",
@@ -286,10 +286,10 @@ async def token_distribution_post(ctx: CtxDep, request: TokenDistributionRequest
     Returns:
         The token-distribution result stream.
     """
-    return _token_distribution(ctx, request)
+    return await _token_distribution(ctx, request)
 
 
-def _token_distribution(ctx: CtxDep, request: TokenDistributionRequest) -> AsyncIterator[dict]:
+async def _token_distribution(ctx: CtxDep, request: TokenDistributionRequest) -> AsyncIterator[dict]:
     """Calculate token distribution information for corpora.
 
     Args:
@@ -301,6 +301,7 @@ def _token_distribution(ctx: CtxDep, request: TokenDistributionRequest) -> Async
     """
     corpora = request.corpora or []
     date_range = validate_date_range(request.date_from, request.date_to)
+    await auth.check_authorization(corpora, ctx)
     return _token_distribution_stream(
         ctx,
         corpora,
