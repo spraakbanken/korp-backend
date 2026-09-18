@@ -21,7 +21,7 @@ from fastapi import APIRouter, Query
 from korp import auth, caching, handler, utils
 from korp.config import settings
 from korp.dependencies import CtxDep, QueryCtxDep
-from korp.handler import api_handler
+from korp.handler import APIValidationError, api_handler
 from korp.memcached import CacheError
 
 from . import frequencies as frequencies_router
@@ -188,6 +188,9 @@ async def _attribute_values(ctx: CtxDep, request: AttributeValuesRequest) -> Asy
 
     Yields:
         Progress events and CWB attribute values for the specified corpora and annotations.
+
+    Raises:
+        APIValidationError: When both `include_per_corpus` and `include_combined` are false.
     """
     corpora = request.corpora
     attributes = request.attributes
@@ -196,6 +199,9 @@ async def _attribute_values(ctx: CtxDep, request: AttributeValuesRequest) -> Asy
     include_combined = request.include_combined
     split = request.split
     stream = ctx.common.stream
+
+    if not include_per_corpus and not include_combined:
+        raise APIValidationError("At least one of `include_per_corpus` and `include_combined` must be true.")
 
     await auth.check_authorization(corpora, ctx)
 

@@ -1644,7 +1644,7 @@ async def _validate_dependency_relations_request(
     """
     await auth.check_authorization(corpora, ctx)
     if not include_split and not include_overall:
-        raise APIValidationError("Both split and overall results are disabled.")
+        raise APIValidationError("At least one of 'include_split' or 'include_overall' must be true.")
     if start_year is not None and end_year is not None and start_year > end_year:
         raise APIValidationError("'start_year' is greater than 'end_year'.")
 

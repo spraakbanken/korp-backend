@@ -1147,6 +1147,8 @@ async def _resolve_frequencies_time_request(
     granularity: params.GranularityParam = params.GranularityValues.year,
     date_from: DateFromParam = None,
     date_to: DateToParam = None,
+    include_per_corpus: params.IncludePerCorpusParam = True,
+    include_combined: params.IncludeCombinedParam = True,
 ) -> _FrequencyTimeRequestState:
     """Prepare and validate frequency-time parameters before the streaming response is created.
 
@@ -1176,6 +1178,9 @@ async def _resolve_frequencies_time_request(
         offset=0,
         limit=0,
     )
+
+    if not include_per_corpus and not include_combined:
+        raise APIValidationError("At least one of `include_per_corpus` and `include_combined` must be true.")
 
     date_range = token_distribution.validate_date_range(date_from, date_to)
     parsed_date_from = date_range.parsed_date_from
@@ -1541,6 +1546,8 @@ async def _frequencies_time(
         granularity=request.granularity,
         date_from=request.date_from,
         date_to=request.date_to,
+        include_per_corpus=request.include_per_corpus,
+        include_combined=request.include_combined,
     )
     return _frequencies_time_stream(
         ctx=ctx,

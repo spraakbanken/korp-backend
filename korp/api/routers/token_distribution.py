@@ -298,7 +298,13 @@ async def _token_distribution(ctx: CtxDep, request: TokenDistributionRequest) ->
 
     Returns:
         An async iterator yielding the token distribution information.
+
+    Raises:
+        APIValidationError: When both `include_per_corpus` and `include_combined` are false.
     """
+    if not request.include_per_corpus and not request.include_combined:
+        raise APIValidationError("At least one of `include_per_corpus` and `include_combined` must be true.")
+
     corpora = request.corpora or []
     date_range = validate_date_range(request.date_from, request.date_to)
     await auth.check_authorization(corpora, ctx)
