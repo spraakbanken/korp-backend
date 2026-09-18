@@ -340,19 +340,19 @@ class RelationsResponse(schemas.CommonResponse):
 class RelationsSentencesResponse(schemas.CommonResponse):
     """Response model for relation sentence lookup routes."""
 
-    hits: int | SkipJsonSchema[None] = Field(None, description="Total number of matching relation sentences.")
-    corpus_hits: dict[str, int] | SkipJsonSchema[None] = Field(
-        None,
+    hits: int = Field(..., description="Total number of matching relation sentences.")
+    corpus_hits: dict[str, int] = Field(
+        ...,
         description="Number of matching relation sentences per corpus.",
         examples=[{"ROMI": 3}],
     )
-    corpus_order: list[str] | SkipJsonSchema[None] = Field(
-        None,
+    corpus_order: list[str] = Field(
+        ...,
         description="Order in which corpora are represented in the KWIC rows.",
         examples=[["ROMI"]],
     )
-    kwic: list[concordance.KWICRow] | SkipJsonSchema[None] = Field(
-        None,
+    kwic: list[concordance.KWICRow] = Field(
+        ...,
         description="KWIC sentence rows using the same row structure as `/concordance`.",
     )
 
@@ -2221,6 +2221,7 @@ async def _relations_sentences_impl(
     source_map = request_state.source_map
     table_suffix = f"{SPLIT_SUFFIX}_sentences" if yearly else "_sentences"
     debug: dict[str, Any] = {}
+    result: dict[str, Any] = {"hits": 0, "corpus_hits": {}, "corpus_order": [], "kwic": []}
 
     sql_query_start_time = time.perf_counter()
     async with ctx.db.async_connection() as conn:
@@ -2234,7 +2235,9 @@ async def _relations_sentences_impl(
             ]
         )
         if not filtered_source:
-            return {}
+            if ctx.common.debug:
+                result["debug"] = {"sql_time": time.perf_counter() - sql_query_start_time}
+            return result
         corpora = [corpus for corpus, _ in filtered_source]
 
         selects: list[str] = []
@@ -2278,11 +2281,16 @@ async def _relations_sentences_impl(
         corpora_dict.setdefault(row["corpus"], {}).setdefault(row["sentence"], []).append((row["start"], row["end"]))
 
     total_hits = sum(corpus_hits.values())
+    result["hits"] = total_hits
+    if total_hits:
+        result["corpus_hits"] = corpus_hits
+        result["corpus_order"] = corpora
     if not corpora_dict:
-        return {"hits": 0}
+        if ctx.common.debug:
+            result["debug"] = debug
+        return result
 
     cqp_query_start_time = time.perf_counter()
-    result: dict[str, Any] = {}
     for corpus, sids in sorted(corpora_dict.items(), key=operator.itemgetter(0)):
         if abort_signal and abort_signal.is_set():
             return result
@@ -2313,11 +2321,7 @@ async def _relations_sentences_impl(
                 copy_sentence["matches"][0]["end"] = sentence_start + max(map(int, relation_positions))
                 result_temp["kwic"].insert(i + 1, copy_sentence)
 
-        result.setdefault("kwic", []).extend(result_temp["kwic"])
-
-    result["hits"] = total_hits
-    result["corpus_hits"] = corpus_hits
-    result["corpus_order"] = corpora
+        result["kwic"].extend(result_temp["kwic"])
     if ctx.common.debug:
         debug["cqp_time"] = time.perf_counter() - cqp_query_start_time
         result["debug"] = debug
