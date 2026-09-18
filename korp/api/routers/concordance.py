@@ -119,7 +119,7 @@ InOrderParam: TypeAlias = Annotated[
 ]
 
 PaginationStateParam: TypeAlias = Annotated[
-    str | None,
+    str | SkipJsonSchema[None],
     Query(
         description=(
             "The `pagination_state` value returned by an earlier page of the same query. Pass it back unchanged when "
@@ -129,7 +129,7 @@ PaginationStateParam: TypeAlias = Annotated[
 ]
 
 RandomSeedParam: TypeAlias = Annotated[
-    int | None,
+    int | SkipJsonSchema[None],
     Query(
         description=(
             "Numerical seed for reproducible random ordering. Used with `sort=random` on `/concordance`, and for "

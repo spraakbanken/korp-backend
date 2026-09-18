@@ -6,6 +6,7 @@ from typing import Annotated, Literal, TypeAlias
 
 from fastapi import APIRouter, Query
 from pydantic import Field
+from pydantic.json_schema import SkipJsonSchema
 
 from korp import cqp
 from korp.api import schemas
@@ -46,7 +47,7 @@ OptimizeCQPParam: TypeAlias = Annotated[
 ]
 
 OptimizeWithinParam: TypeAlias = Annotated[
-    str | None,
+    str | SkipJsonSchema[None],
     Query(
         description=("Structural unit the optimized query should stay inside. Defaults to `sentence` when omitted."),
         examples=["sentence"],

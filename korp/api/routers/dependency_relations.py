@@ -145,7 +145,7 @@ TermTypeParam: TypeAlias = Annotated[
 ]
 
 MinFreqParam: TypeAlias = Annotated[
-    int | None,
+    int | SkipJsonSchema[None],
     Query(
         ge=0,
         description="Minimum absolute relation frequency. Omit the parameter to use no frequency cutoff.",
@@ -192,7 +192,7 @@ PeriodAlignParam: TypeAlias = Annotated[
 ]
 
 YearParam: TypeAlias = Annotated[
-    int | None,
+    int | SkipJsonSchema[None],
     Query(
         ge=0,
         description="Inclusive year filter for time-sliced relation data.",
