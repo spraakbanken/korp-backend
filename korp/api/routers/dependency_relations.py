@@ -233,36 +233,16 @@ RelationsLimitParam: TypeAlias = Annotated[
     Query(description="Maximum number of sentence rows to return.", ge=1, examples=[10]),
 ]
 
-RelationsAttributesParam: TypeAlias = Annotated[
-    list[str],
-    Query(
-        description=(
-            "CWB attributes to include with each returned token. Positional attributes "
-            "represent token annotations; structural attributes are returned as inline structural annotations."
-        ),
-        examples=[["word", "lemma", "pos"]],
-    ),
-    BeforeValidator(utils.split_csv),
-]
-
 RelationsStructAttributesParam: TypeAlias = Annotated[
     list[str],
     Query(
         description=(
             "Structural CWB attributes (usually sentence or document annotations) to include "
-            "for each KWIC row. `sentence_id` is included by default."
+            "for each KWIC row. `sentence_id` is always included."
         ),
         examples=[["text_title", "text_author"]],
     ),
     BeforeValidator(utils.split_csv),
-]
-
-RelationsDefaultContextParam: TypeAlias = Annotated[
-    str,
-    Query(
-        description="Context size for sentence lookup results.",
-        examples=["1 sentence"],
-    ),
 ]
 
 
@@ -2187,7 +2167,7 @@ async def _prepare_relation_sentence_request(
     limit: int,
     attributes: Sequence[str],
     struct_attributes: Sequence[str],
-    default_context: str,
+    default_context: str | None,
 ) -> _RelationSentenceRequestState:
     """Parse, authorize, and validate relation-sentence parameters before streaming.
 
@@ -2357,9 +2337,9 @@ class RelationSentencesRequest(RequestModel):
     sources: SourcesParam
     offset: RelationsOffsetParam = 0
     limit: RelationsLimitParam = 10
-    attributes: RelationsAttributesParam = Field(["word"])
-    struct_attributes: RelationsStructAttributesParam = Field([])
-    default_context: RelationsDefaultContextParam = "1 sentence"
+    attributes: concordance.AttributesParam = Field(["word"])
+    struct_attributes: RelationsStructAttributesParam = Field(["sentence_id"])
+    default_context: params.DefaultContextParam = "1 sentence"
 
 
 class RelationTimeSentencesRequest(RelationSentencesRequest):
