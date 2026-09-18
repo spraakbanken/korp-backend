@@ -206,7 +206,14 @@ class FrequencyStatistics(schemas.ResponseModel):
     """Frequency statistics for one query or subquery."""
 
     rows: list[FrequencyRow] = Field(..., description="Grouped frequency rows.")
-    sums: FrequencySums = Field(..., description="Frequency sums over all returned rows.")
+    sums: FrequencySums = Field(
+        ..., description="Frequency sums over the full unsliced result, before applying `offset` and `limit`."
+    )
+    total_rows: int = Field(
+        ...,
+        description="Total number of distinct grouped values before applying `offset` and `limit`.",
+        examples=[241],
+    )
     cqp: str | SkipJsonSchema[None] = Field(
         None, description="Subquery CQP string. Included only for `subcqp` results."
     )
@@ -223,9 +230,6 @@ class FrequenciesResponse(schemas.CommonResponse):
         ...,
         description="Combined statistics for all corpora, always as an array with the main query first.",
     )
-    total_rows: int = Field(
-        ..., description="Total number of distinct grouped values before response slicing.", examples=[241]
-    )
 
 
 class CorpusFrequenciesResponse(schemas.CommonResponse):
@@ -233,9 +237,6 @@ class CorpusFrequenciesResponse(schemas.CommonResponse):
 
     corpora: dict[str, FrequencyStatistics] = Field(..., description="Statistics per corpus.")
     combined: FrequencyStatistics = Field(..., description="Combined statistics for all corpora.")
-    total_rows: int = Field(
-        ..., description="Total number of distinct grouped values before response slicing.", examples=[241]
-    )
 
 
 class TimeStatistics(schemas.ResponseModel):
@@ -555,6 +556,11 @@ def _finalize_frequency_results(
         end: End index for result slicing. Use -1 for no upper bound.
     """
     for query_no in range(len(subcqp) + 1):
+        total_stats[query_no]["total_rows"] = len(total_stats[query_no]["rows"])
+        for c in corpora:
+            corpus_stats = result["corpora"][c][query_no]
+            corpus_stats["total_rows"] = len(corpus_stats["rows"])
+
         slice_end = None if end == -1 else end + 1
         if start > 0 or (end > -1 and len(total_stats[query_no]["rows"]) > (end - start) + 1):
             # Only a selected range of results requested
@@ -810,8 +816,6 @@ async def perform_frequency_query(
                     total=len(processing_corpora),
                     corpus=c,
                 )
-
-    result["total_rows"] = len(total_stats[0]["rows"])
 
     if abort_signal and abort_signal.is_set():
         return
