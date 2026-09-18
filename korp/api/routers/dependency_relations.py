@@ -107,7 +107,7 @@ DEPENDENCY_RELATIONS_TIME_DESCRIPTION = """Get dependency relations grouped by y
 The response groups rows in `relations_time` by period key. With `period_size=1`, keys are years such as `2018`; with
 larger periods, keys are ranges such as `2016-2018`. Undated material is grouped under an empty key.
 
-Use `period_size` and `period_align` to control how years are grouped. `max_scope=per_period` applies the `max` limit
+Use `period_size` and `period_align` to control how years are grouped. `max_scope=per_period` applies `max_results`
 inside each period; `max_scope=overall` first selects the top overall relations and then returns time data only for
 those relations.
 
@@ -145,26 +145,24 @@ TermTypeParam: TypeAlias = Annotated[
 ]
 
 MinFreqParam: TypeAlias = Annotated[
-    int | SkipJsonSchema[None],
+    Annotated[int, Field(ge=0)] | SkipJsonSchema[None],
     Query(
-        ge=0,
         description="Minimum absolute relation frequency. Omit the parameter to use no frequency cutoff.",
         examples=[5],
     ),
 ]
 
 MaxResultsParam: TypeAlias = Annotated[
-    int,
+    Annotated[int, Field(ge=1)] | SkipJsonSchema[None],
     Query(
-        ge=0,
-        description=("Maximum number of rows to return for each relation label and direction. Use `0` for no limit."),
+        description="Maximum number of rows to return for each relation label and direction. Omit for no limit.",
         examples=[15],
     ),
 ]
 
 RelationsSortParam: TypeAlias = Annotated[
     DependencyRelationsSort,
-    Query(description="Measure used for sorting and for selecting rows when `max` applies."),
+    Query(description="Measure used for sorting and for selecting rows when `max_results` applies."),
 ]
 
 RelationsIncludeTimeParam: TypeAlias = Annotated[
@@ -192,9 +190,8 @@ PeriodAlignParam: TypeAlias = Annotated[
 ]
 
 YearParam: TypeAlias = Annotated[
-    int | SkipJsonSchema[None],
+    Annotated[int, Field(ge=0)] | SkipJsonSchema[None],
     Query(
-        ge=0,
         description="Inclusive year filter for time-sliced relation data.",
         examples=[2018],
     ),
@@ -800,7 +797,7 @@ def _build_overall_only_relations(
     corpus_results: dict[str, Any],
     *,
     sort_field: str,
-    max_results: int,
+    max_results: int | None,
     corpus_size: int,
     measures: Container[Measures],
 ) -> list[dict[str, str | int | float]]:
@@ -921,7 +918,7 @@ def _build_overall_only_relations(
         rel_name = entry["rel"]
         key = (rel_name, entry["role"])
         counters[key] += 1
-        if max_results and counters[key] > max_results:
+        if max_results is not None and counters[key] > max_results:
             continue
         selected_entries.append(entry)
 
@@ -1568,7 +1565,7 @@ def _limit_rows_per_bucket(
     rows: list[dict[str, object]],
     bucket_field: str,
     sort_field: str,
-    max_results: int,
+    max_results: int | None,
 ) -> list[dict[str, object]]:
     """Apply per-bucket result limiting.
 
@@ -1581,7 +1578,7 @@ def _limit_rows_per_bucket(
     Returns:
         List of limited relation rows.
     """
-    if not rows or not max_results:
+    if not rows or max_results is None:
         return rows
     buckets: dict[object, list[dict[str, object]]] = defaultdict(list)
     for row in rows:
@@ -1657,7 +1654,7 @@ async def _dependency_relations_impl(
     term_type: TermType,
     min_freq: int | None,
     sort_field: DependencyRelationsSort,
-    max_results: int,
+    max_results: int | None,
     include_split: bool,
     period_size: int,
     period_align: PeriodAlign,
@@ -1903,7 +1900,7 @@ async def _dependency_relations_impl(
         for entry in overall_relation_entries:
             key = (entry["rel"], entry["role"])
             counters[key] += 1
-            if max_results and counters[key] > max_results:
+            if max_results is not None and counters[key] > max_results:
                 continue
             selected_entries.append(entry)
         if include_overall:
@@ -1931,7 +1928,7 @@ async def _dependency_relations_impl(
             per_period_rows.extend(_build_time_rows(acc, per_period_map, None if limit_per_period else selected_keys))
 
         if per_period_rows:
-            if limit_per_period and max_results:
+            if limit_per_period and max_results is not None:
                 per_period_rows = _limit_rows_per_bucket(per_period_rows, "period_start", sort_field.value, max_results)
             per_period_rows.sort(
                 key=lambda row: (
@@ -1965,7 +1962,7 @@ class DependencyRelationsRequest(RequestModel):
     term: TermParam
     term_type: TermTypeParam = TermType.word
     min_freq: MinFreqParam = None
-    max_results: MaxResultsParam = 15
+    max_results: MaxResultsParam = None
     sort: RelationsSortParam = DependencyRelationsSort.mi
     include_time: RelationsIncludeTimeParam = False
     period_size: PeriodSizeParam = 1
@@ -1986,7 +1983,7 @@ class DependencyRelationsTimeRequest(RequestModel):
     term: TermParam
     term_type: TermTypeParam = TermType.word
     min_freq: MinFreqParam = None
-    max_results: MaxResultsParam = 15
+    max_results: MaxResultsParam = None
     sort: RelationsSortParam = DependencyRelationsSort.mi
     period_size: PeriodSizeParam = 1
     period_align: PeriodAlignParam = PeriodAlign.newest

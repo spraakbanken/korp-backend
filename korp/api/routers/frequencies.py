@@ -116,10 +116,9 @@ OffsetParam: TypeAlias = Annotated[
 ]
 
 LimitParam: TypeAlias = Annotated[
-    int,
+    Annotated[int, Field(ge=1)] | SkipJsonSchema[None],
     Query(
-        description="Maximum number of result rows to return after `offset`. Use 0 for no limit.",
-        ge=0,
+        description="Maximum number of result rows to return after `offset`. Omit for no limit.",
         examples=[25],
     ),
 ]
@@ -323,7 +322,7 @@ async def parse_frequency_parameters(
     simple: bool,
     expand_prequeries: bool,
     offset: int,
-    limit: int,
+    limit: int | None,
 ) -> FrequencyParameters:
     """Parse and validate parameters for a frequency query.
 
@@ -395,7 +394,7 @@ async def parse_frequency_parameters(
         max_values_per_set=max_values,
         expand_prequeries=expand_prequeries,
         start=offset,
-        end=-1 if limit == 0 else offset + limit - 1,
+        end=-1 if limit is None else offset + limit - 1,
         cut=cut,
     )
 
@@ -869,7 +868,7 @@ class FrequenciesRequest(RequestModel):
     within: params.WithinParam = None
     default_within: params.DefaultWithinParam = None
     offset: OffsetParam = 0
-    limit: LimitParam = 0
+    limit: LimitParam = None
     ignore_case: IgnoreCaseParam = None
     relative_to_struct: RelativeToStructParam = None
     split: params.SplitParam = None
@@ -889,7 +888,7 @@ class CorpusFrequenciesRequest(RequestModel):
     within: params.WithinParam = None
     default_within: params.DefaultWithinParam = None
     offset: OffsetParam = 0
-    limit: LimitParam = 0
+    limit: LimitParam = None
     ignore_case: IgnoreCaseParam = None
     relative_to_struct: RelativeToStructParam = None
     split: params.SplitParam = None
@@ -1174,7 +1173,7 @@ async def _resolve_frequencies_time_request(
         simple=True,
         expand_prequeries=expand_prequeries,
         offset=0,
-        limit=0,
+        limit=None,
     )
 
     if not include_per_corpus and not include_combined:

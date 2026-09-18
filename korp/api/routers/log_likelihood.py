@@ -9,6 +9,7 @@ from typing import Annotated, TypeAlias
 
 from fastapi import APIRouter, Query
 from pydantic import AfterValidator, BeforeValidator, Field
+from pydantic.json_schema import SkipJsonSchema
 
 from korp import utils
 from korp.api import params, schemas
@@ -36,7 +37,7 @@ Each result row contains the grouped value, its log-likelihood score, and the ab
 `average` is the average absolute log-likelihood score before the result list is split by sign and limited.
 
 Use `max_results` to limit how many values to return from each side of the comparison. For example, `max_results=10` can
-return up to ten set-1-prominent values and ten set-2-prominent values. Use `max_results=0` for no limit.
+return up to ten set-1-prominent values and ten set-2-prominent values. Omit `max_results` for no limit.
 
 Most grouping and value-normalization parameters are shared with `/frequencies`, including `group_by`,
 `group_by_struct`, `ignore_case`, `split`, `strip_pointer_suffix`, `max_values_per_set`, `within`, and
@@ -80,10 +81,9 @@ Set2CorporaParam: TypeAlias = Annotated[
 ]
 
 MaxResultsParam: TypeAlias = Annotated[
-    int,
+    Annotated[int, Field(ge=1)] | SkipJsonSchema[None],
     Query(
-        description=("Maximum number of results to return from each side of the comparison. Use 0 for no limit."),
-        ge=0,
+        description="Maximum number of results to return from each side of the comparison. Omit for no limit.",
         examples=[15],
     ),
 ]
@@ -152,7 +152,7 @@ class LogLikelihoodRequest(RequestModel):
     set2_cqp: Set2CQPParam
     set1_corpora: Set1CorporaParam
     set2_corpora: Set2CorporaParam
-    max_results: MaxResultsParam = 15
+    max_results: MaxResultsParam = None
     group_by: frequencies.GroupByParam = None
     group_by_struct: frequencies.GroupByStructParam = None
     within: params.WithinParam = None
@@ -185,7 +185,7 @@ async def _log_likelihood_stream(
     request_state: _LogLikelihoodRequestState,
     set1_cqp: Set1CQPParam,
     set2_cqp: Set2CQPParam,
-    max_results: MaxResultsParam = 15,
+    max_results: MaxResultsParam = None,
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
     """Stream a log-likelihood comparison from validated request state.
@@ -261,7 +261,7 @@ async def _log_likelihood_stream(
 
     def compute_ll_stats(
         ll_list: list[tuple[float, _FrequencyKey]],
-        count: int,
+        count: int | None,
         sets: list[dict],
     ) -> tuple[list[tuple[float, _FrequencyKey]], float]:
         """Calculate average and truncate the grouped-value list.
@@ -270,7 +270,7 @@ async def _log_likelihood_stream(
 
         Args:
             ll_list: List of tuples (log-likelihood, grouped value key).
-            count: Maximum number of values to include from each set. 0 means no limit.
+            count: Maximum number of values to include from each set, or `None` for no limit.
             sets: List of two dictionaries with 'total' and 'freq' keys for each set.
 
         Returns:
@@ -288,14 +288,14 @@ async def _log_likelihood_stream(
 
             if in_set1:
                 set1count += 1
-                if not count or set1count <= count:
+                if count is None or set1count <= count:
                     new_list.append((-ll, w))
             else:
                 set2count += 1
-                if not count or set2count <= count:
+                if count is None or set2count <= count:
                     new_list.append((ll, w))
 
-            if count and set1count >= count and set2count >= count:
+            if count is not None and set1count >= count and set2count >= count:
                 break
 
         avg = round(sum(ll for ll, _ in ll_list) / len(ll_list), 2) if ll_list else 0.0
@@ -429,7 +429,7 @@ async def _log_likelihood(
         simple=False,
         expand_prequeries=request.expand_prequeries,
         offset=0,
-        limit=0,
+        limit=None,
     )
     request_state = _LogLikelihoodRequestState(
         frequency_params=frequency_params,
