@@ -1,13 +1,12 @@
 """Route for listing CWB attribute values."""
 
 import itertools
-from collections import defaultdict
 from collections.abc import AsyncIterator
 from copy import deepcopy
 from functools import partial
 from typing import TYPE_CHECKING, Annotated, Any, TypeAlias
 
-from pydantic import BeforeValidator, Field
+from pydantic import BeforeValidator, Field, RootModel
 from pydantic.json_schema import SkipJsonSchema
 
 from korp.api import params, schemas
@@ -85,7 +84,16 @@ IncludeCountsParam: TypeAlias = Annotated[
     ),
 ]
 
-AttributeValuesData = dict[str, list[str] | dict[str, Any]]
+
+class AttributeValuesWithoutCounts(RootModel["list[str] | dict[str, AttributeValuesWithoutCounts]"]):
+    """Compact attribute-value tree whose leaves are string arrays."""
+
+
+class AttributeValuesWithCounts(RootModel["dict[str, int | AttributeValuesWithCounts]"]):
+    """Compact attribute-value tree whose leaves map values to token counts."""
+
+
+AttributeValuesData = dict[str, AttributeValuesWithoutCounts | AttributeValuesWithCounts]
 
 
 class AttrValuesResponse(schemas.CommonResponse):
@@ -95,8 +103,8 @@ class AttrValuesResponse(schemas.CommonResponse):
         None,
         description=(
             "Per-corpus CWB attribute values, keyed by corpus id. Omitted when `include_per_corpus=false`. Within each "
-            "corpus, "
-            "keys are the requested `attributes` expressions."
+            "corpus, keys are the requested `attributes` expressions. Every requested expression is present, including "
+            "when it has no values."
         ),
         examples=[{"ROMI": {"text_author": ["Söderberg, Hjalmar"], "pos": {"NN": 1250, "VB": 341}}}],
     )
@@ -104,8 +112,8 @@ class AttrValuesResponse(schemas.CommonResponse):
         None,
         description=(
             "CWB attribute values merged across all selected corpora. Omitted when `include_combined=false`. Keys are "
-            "the "
-            "requested `attributes` expressions."
+            "the requested `attributes` expressions. Every requested expression is present, including when it has no "
+            "values."
         ),
         examples=[{"text_author>text_title": {"Söderberg, Hjalmar": {"Doktor Glas": 12345}}}],
     )
@@ -193,7 +201,15 @@ async def _attribute_values(ctx: CtxDep, request: AttributeValuesRequest) -> Asy
 
     split = split or []
     split_set = set(split)
-    result = {"corpora": defaultdict(dict), "combined": {}}
+    result: dict[str, Any] = {
+        "corpora": {
+            corpus: {
+                attribute: _empty_attribute_values(attribute, include_counts=include_counts) for attribute in attributes
+            }
+            for corpus in corpora
+        },
+        "combined": {},
+    }
     from_cache = set()  # Keep track of what has been read from cache
     cache_prefixes: dict[str, str] = {}  # Reused between cache read and write phases
 
@@ -296,9 +312,9 @@ async def _attribute_values(ctx: CtxDep, request: AttributeValuesRequest) -> Asy
 
                 if is_nested:
                     result["corpora"][c][attribute] = vals_dict
-                elif include_counts and corpus_stats_dict:
+                elif include_counts:
                     result["corpora"][c][attribute] = corpus_stats_dict
-                elif not include_counts and corpus_stats_set:
+                else:
                     result["corpora"][c][attribute] = sorted(corpus_stats_set)
 
                 if stream:
@@ -321,7 +337,7 @@ async def _attribute_values(ctx: CtxDep, request: AttributeValuesRequest) -> Asy
                 checksum = utils.get_hash((c, attribute, split, include_counts))
                 try:
                     cache_key = f"{cache_prefixes[c]}:attribute_values_{checksum}"
-                    await ctx.cache.add(cache_key, result["corpora"][c].get(attribute, {}))
+                    await ctx.cache.add(cache_key, result["corpora"][c][attribute])
                 except CacheError:
                     pass
                 else:
@@ -334,6 +350,13 @@ async def _attribute_values(ctx: CtxDep, request: AttributeValuesRequest) -> Asy
         del result["corpora"]
 
     yield result
+
+
+def _empty_attribute_values(attribute: str, *, include_counts: bool) -> list[str] | dict[str, Any]:
+    """Return the empty container appropriate for an attribute-value request."""
+    if include_counts or ">" in attribute:
+        return {}
+    return []
 
 
 def _merge_into(target: dict, source: dict) -> None:
