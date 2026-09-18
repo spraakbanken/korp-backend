@@ -1615,10 +1615,11 @@ def _limit_rows_per_bucket(
 
 
 SourcesParam: TypeAlias = Annotated[
-    list[str],
+    list[params.NonEmptyString],
     Query(
         description="Source ids in the format `CORPUS:ID`.",
         examples=[["ROMI:253662", "ROMI:253663"]],
+        min_length=1,
     ),
     BeforeValidator(utils.split_csv),
 ]

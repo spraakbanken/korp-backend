@@ -54,13 +54,14 @@ Get all authors and their titles with token counts:
 """
 
 AttrParam: TypeAlias = Annotated[
-    list[str],
+    list[params.NonEmptyString],
     Query(
         description=(
             "CWB attribute names or attribute hierarchies. Use `>` to request nested values, "
             "for example `text_author>text_title`."
         ),
         examples=[["text_author"], ["text_author>text_title"], ["pos", "lemma"]],
+        min_length=1,
     ),
     BeforeValidator(utils.split_csv),
 ]

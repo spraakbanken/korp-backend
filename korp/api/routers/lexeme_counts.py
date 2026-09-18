@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from korp import auth, utils
 from korp.api import schemas
-from korp.api.params import CorporaParam
+from korp.api.params import CorporaParam, NonEmptyString
 from korp.api.requests import QueryRequestModel, RequestModel
 from korp.config import settings
 from korp.dependencies import CtxDep, QueryCtxDep
@@ -33,10 +33,11 @@ Get the number of occurrences of two lexemes in one corpus:
 """
 
 LexemesParam: TypeAlias = Annotated[
-    list[str],
+    list[NonEmptyString],
     Query(
         description="Lexemes to look up.",
         examples=[["ge..vb.1", "ta..vb.1"]],
+        min_length=1,
     ),
     BeforeValidator(utils.split_csv),
 ]

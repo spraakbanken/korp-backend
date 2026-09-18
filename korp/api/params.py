@@ -9,18 +9,21 @@ from pydantic.json_schema import SkipJsonSchema
 
 from korp import utils
 
+NonEmptyString: TypeAlias = Annotated[str, StringConstraints(min_length=1)]
+
 CorporaParam: TypeAlias = Annotated[
-    list[str],
+    list[NonEmptyString],
     Query(
         description=("Corpus ids to query. Corpus ids are case-insensitive."),
         examples=[["ROMI", "SUC3"]],
+        min_length=1,
     ),
     BeforeValidator(utils.split_csv),
     AfterValidator(lambda v: sorted({x.strip().upper() for x in v})),
 ]
 
 CQPParam: TypeAlias = Annotated[
-    list[str],
+    list[NonEmptyString],
     Query(
         description=(
             "CQP query or queries to run. Repeat the `cqp` parameter to perform several queries in sequence; each "
@@ -29,6 +32,7 @@ CQPParam: TypeAlias = Annotated[
         alias="cqp",
         explode=True,  # Document as a repeated query parameter rather than a CSV list.
         examples=[['[word="flower"]'], ['[word="flower"]', '[pos="NN"]']],
+        min_length=1,
     ),
 ]
 
