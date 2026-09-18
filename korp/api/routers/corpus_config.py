@@ -55,7 +55,7 @@ CorporaParam: TypeAlias = Annotated[
         examples=[["ROMI", "SUC3"]],
     ),
     BeforeValidator(utils.split_csv),
-    AfterValidator(lambda v: [x.upper() for x in v]),
+    AfterValidator(lambda v: sorted({x.strip().upper() for x in v})),
 ]
 
 

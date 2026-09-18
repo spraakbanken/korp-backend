@@ -69,14 +69,14 @@ Set1CorporaParam: TypeAlias = Annotated[
     list[str],
     Query(description="Corpora for set 1.", examples=[["ROMI", "SUC3"]]),
     BeforeValidator(utils.split_csv),
-    AfterValidator(lambda v: [x.upper() for x in v]),
+    AfterValidator(lambda v: sorted({x.strip().upper() for x in v})),
 ]
 
 Set2CorporaParam: TypeAlias = Annotated[
     list[str],
     Query(description="Corpora for set 2.", examples=[["GP2012"]]),
     BeforeValidator(utils.split_csv),
-    AfterValidator(lambda v: [x.upper() for x in v]),
+    AfterValidator(lambda v: sorted({x.strip().upper() for x in v})),
 ]
 
 MaxResultsParam: TypeAlias = Annotated[
