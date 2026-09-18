@@ -117,7 +117,7 @@ final completion event.
 
 DEPENDENCY_RELATIONS_SENTENCES_DESCRIPTION = """Return KWIC sentences containing dependency relation sources.
 
-Use the `source` ids returned by `/dependency-relations` as the `sources` collection to retrieve the
+Use the `sources` ids returned by `/dependency-relations` as the `sources` collection to retrieve the
 corpus sentences where those relation instances occur. The sentence rows use the same KWIC structure as `/concordance`,
 with the relation span highlighted as the match.
 """
@@ -216,7 +216,7 @@ MeasuresParam: TypeAlias = Annotated[
     Sequence[Measures],
     Query(
         description=(
-            "Measures to include on each relation row. The relation identifiers and `source` are always included."
+            "Measures to include on each relation row. The relation identifiers and `sources` are always included."
         ),
         examples=[["freq", "mi"], ["freq", "freq_relative", "mi", "rmi"]],
     ),
@@ -275,7 +275,7 @@ class RelationRow(schemas.ResponseModel):
     dep: str = Field(..., description="Dependent word form or lexeme.", examples=["black"])
     dep_pos: str = Field(..., description="Part of speech for the dependent.", examples=["JJ"])
     dep_extra: str = Field(..., description="Dependent prefix or extra string data.", examples=[""])
-    source: list[str] = Field(
+    sources: list[str] = Field(
         ...,
         description=(
             "Source ids for retrieving example sentences. Use `/dependency-relations/sentences` for overall relation "
@@ -402,7 +402,7 @@ def _relation_output(entry: dict, measures: Container[Measures]) -> dict[str, st
         "dep": entry["dep"],
         "dep_pos": entry["dep_pos"],
         "dep_extra": entry["dep_extra"],
-        "source": entry["source"],
+        "sources": entry["sources"],
     }
     if Measures.freq in measures:
         output["freq"] = entry["freq"]
@@ -865,7 +865,7 @@ def _build_overall_only_relations(
                     "head_rel_freq": 0,
                     "dep_rel_freq": 0,
                     "rel_freq": 0,
-                    "source": set(),
+                    "sources": set(),
                 },
             )
             bucket["freq"] += freq
@@ -875,7 +875,7 @@ def _build_overall_only_relations(
             rel_id = row.get("relation_id")
             if rel_id is None:
                 continue
-            bucket["source"].add(f"{corpus}:{rel_id}")
+            bucket["sources"].add(f"{corpus}:{rel_id}")
 
     if not relation_buckets:
         return []
@@ -903,7 +903,7 @@ def _build_overall_only_relations(
                 "freq_relative": _calc_freq_relative(freq, corpus_size),
                 "mi": mi_value,
                 "rmi": _calc_rmi(mi_value, rel_freq),
-                "source": sorted(bucket["source"]),
+                "sources": sorted(bucket["sources"]),
             }
         )
 
@@ -1074,7 +1074,7 @@ class _DependencyRelationsAccumulator:
             "rel_freq": rel_freq,
             "mi": mi_value,
             "rmi": _calc_rmi(mi_value, rel_freq),
-            "source": sorted(self.sources_year.get((key, year), set())),
+            "sources": sorted(self.sources_year.get((key, year), set())),
         }
 
     def _accumulate_period(
@@ -1173,7 +1173,7 @@ class _DependencyRelationsAccumulator:
                     "rel_freq": rel_sum,
                     "mi": mi_value,
                     "rmi": _calc_rmi(mi_value, rel_sum),
-                    "source": sorted(bucket["sources"]),
+                    "sources": sorted(bucket["sources"]),
                 }
             )
         return per_period_map
@@ -1460,7 +1460,7 @@ def _build_time_rows(
                 "rel_freq": row["rel_freq"],
                 "mi": row["mi"],
                 "rmi": row["rmi"],
-                "source": row["source"],
+                "sources": row["sources"],
             }
             for row in entries
         )
@@ -1881,7 +1881,7 @@ async def _dependency_relations_impl(
                     "freq_relative": _calc_freq_relative(int(bucket["freq"]), total_corpus_size),
                     "mi": bucket["mi"],
                     "rmi": _calc_rmi(bucket["mi"], bucket["rel_freq"]),
-                    "source": sorted(acc.sources.get(key, [])),
+                    "sources": sorted(acc.sources.get(key, [])),
                 }
             )
 
