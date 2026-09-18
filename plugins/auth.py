@@ -99,6 +99,15 @@ def _authenticate_from_auth_header(auth_header: str | None) -> dict:
 class Auth(auth.Authorizer):
     """Authorizer class that checks if the user has access to protected corpora based on the authentication response."""
 
+    @classmethod
+    def openapi_security(cls) -> tuple[dict[str, dict[str, str]], list[dict[str, list[str]]]]:
+        """Document the HTTP Basic credentials consumed by this plugin.
+
+        Returns:
+            OpenAPI security schemes and operation requirements.
+        """
+        return {"basicAuth": {"type": "http", "scheme": "basic"}}, [{"basicAuth": []}]
+
     async def _fetch_protection_info(self, corpora: list[str], auth_ctx: AuthContext) -> dict[str, auth.ProtectionInfo]:
         """Fetch per-corpus protection metadata from CWB.
 

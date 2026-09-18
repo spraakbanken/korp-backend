@@ -250,3 +250,22 @@ def test_openapi_rate_limits_follow_configuration(
         assert "detail" in get_responses["429"]["content"]["application/json"]["schema"]["required"]
         assert "Retry-After" in get_responses["429"]["headers"]
     assert app.openapi() is schema
+
+
+def test_authorizer_contributes_openapi_security(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configured auth plugins should document credentials and operation requirements."""
+    monkeypatch.setattr(
+        app_module,
+        "settings",
+        get_test_settings(
+            CQP_EXECUTABLE="/bin/cqp",
+            CWB_SCAN_EXECUTABLE="/bin/cwb-scan-corpus",
+            CWB_REGISTRY="/tmp",
+            PLUGINS=["plugins.auth"],
+        ),
+    )
+    schema = app_module.create_app().openapi()
+
+    assert schema["components"]["securitySchemes"]["basicAuth"] == {"type": "http", "scheme": "basic"}
+    assert schema["paths"]["/concordance"]["get"]["security"] == [{}, {"basicAuth": []}]
+    assert "security" not in schema["paths"]["/health"]["get"]

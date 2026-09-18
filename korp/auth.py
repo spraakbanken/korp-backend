@@ -126,6 +126,10 @@ class Authorizer(ABC):
     - `check_authorization(corpora, auth_ctx)`: Return `(success, unauthorized, message)` for the requested corpora.
       `unauthorized` should contain corpus ids that failed authorization.
 
+    Optional methods to implement:
+    - `openapi_security()`: Describe the plugin's OpenAPI security schemes and requirements. These requirements are
+      optional on corpus-authorized operations and mandatory on administrative operations.
+
     Protection metadata model:
     - Use `ProtectionInfo` for each corpus.
     - `ProtectionInfo.protected` is the canonical "restricted access" flag.
@@ -155,6 +159,16 @@ class Authorizer(ABC):
         """Initialize authorizer with app-scoped dependencies."""
         self.cwb: CWB = cwb
         self.cache: Memcached = cache
+
+    @classmethod
+    def openapi_security(cls) -> tuple[dict[str, dict[str, Any]], list[dict[str, list[str]]]] | None:
+        """Return OpenAPI security schemes and requirements supplied by this plugin.
+
+        Returns:
+            A pair containing `components.securitySchemes` entries and operation-level security requirements, or
+            `None` when the plugin does not expose a documented authentication contract.
+        """
+        return None
 
     async def _get_cached_protection_info(
         self, corpora: list[str], auth_ctx: AuthContext

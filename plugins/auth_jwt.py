@@ -30,9 +30,15 @@ bp = plugin.Plugin("auth_jwt", __name__)
 class AuthJWT(auth.Authorizer):
     """Authorizer plugin using JWT token scopes."""
 
-    async def _fetch_protection_info(
-        self, corpora: list[str], auth_ctx: AuthContext
-    ) -> dict[str, auth.ProtectionInfo]:
+    @classmethod
+    def openapi_security(cls) -> tuple[dict[str, dict[str, str]], list[dict[str, list[str]]]]:
+        """Document the bearer JWT consumed by this plugin.
+
+        Returns:
+            OpenAPI security schemes and operation requirements.
+        """
+        return {"bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}}, [{"bearerAuth": []}]
+
         """Fetch per-corpus protection metadata from CWB.
 
         Returns:

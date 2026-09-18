@@ -33,6 +33,22 @@ class ExampleAuth(auth.Authorizer):
     on a request header containing allowed corpora.
     """
 
+    @classmethod
+    def openapi_security(cls) -> tuple[dict[str, dict[str, str]], list[dict[str, list[str]]]]:
+        """Document the configured corpus-access header consumed by this plugin.
+
+        Returns:
+            OpenAPI security schemes and operation requirements.
+        """
+        scheme_name = "corpusAccessHeader"
+        return {
+            scheme_name: {
+                "type": "apiKey",
+                "in": "header",
+                "name": router.config("required_header", "X-Authorized-Corpora"),
+            }
+        }, [{scheme_name: []}]
+
     async def _fetch_protection_info(  # noqa: PLR6301
         self,
         corpora: list[str],

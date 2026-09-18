@@ -364,6 +364,20 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
                         },
                     )
 
+        # Let the configured authorization plugin describe how API clients supply credentials.
+        authorizer_class = getattr(app.state, "authorizer_class", None)
+        security = authorizer_class.openapi_security() if authorizer_class is not None else None
+        if security is not None:
+            security_schemes, security_requirements = security
+            schema.setdefault("components", {}).setdefault("securitySchemes", {}).update(security_schemes)
+            # Add security requirements to all operations that have a 403 response.
+            for path_item in schema.get("paths", {}).values():
+                for operation in path_item.values():
+                    if not isinstance(operation, dict) or "403" not in operation.get("responses", {}):
+                        continue
+                    # The added {} indicates that security is optional.
+                    operation["security"] = [{}, *security_requirements]
+
         # Reorder response properties
         common_keys = ("elapsed", "debug", "error", "traceback")
         comps = schema.get("components", {}).get("schemas", {})
