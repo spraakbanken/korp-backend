@@ -1,6 +1,7 @@
 """Unit tests for parameter parsing in korp.api.params."""
 
-from pydantic import BaseModel
+import pytest
+from pydantic import BaseModel, ValidationError
 
 from korp import utils
 from korp.api import params
@@ -17,15 +18,15 @@ class TestCorporaParam:
 
     @staticmethod
     def test_corpora_param_empty() -> None:
-        """Assert that an empty corpora parameter results in an empty list."""
-        m = M.model_validate({"corpora": []})
-        assert m.corpora == []
+        """Assert that an empty corpora parameter raises a validation error."""
+        with pytest.raises(ValidationError):
+            M.model_validate({"corpora": []})
 
     @staticmethod
     def test_corpora_param_empty_string() -> None:
-        """Assert that an empty string corpora parameter results in an empty list."""
-        m = M.model_validate({"corpora": ""})
-        assert m.corpora == []
+        """Assert that an empty string corpora parameter raises a validation error."""
+        with pytest.raises(ValidationError):
+            M.model_validate({"corpora": ""})
 
     @staticmethod
     def test_corpora_param_list() -> None:
