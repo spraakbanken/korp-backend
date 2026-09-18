@@ -31,7 +31,7 @@ from . import concordance, token_distribution
 router = APIRouter(tags=["Dependency Relations"])
 
 
-# (role, head_string, head_pos, rel, dep_string, dep_pos, dep_extra)
+# (role, head_string, head_pos, relation, dependent_string, dependent_pos, dependent_extra)
 RelationKey = tuple[str, str, str, str, str, str, str]
 
 
@@ -271,10 +271,10 @@ class RelationRow(schemas.ResponseModel):
 
     head: str = Field(..., description="Head word form or lexeme.", examples=["cat"])
     head_pos: str = Field(..., description="Part of speech for the head.", examples=["NN"])
-    rel: str = Field(..., description="Dependency relation label.", examples=["AT"])
-    dep: str = Field(..., description="Dependent word form or lexeme.", examples=["black"])
-    dep_pos: str = Field(..., description="Part of speech for the dependent.", examples=["JJ"])
-    dep_extra: str = Field(..., description="Dependent prefix or extra string data.", examples=[""])
+    relation: str = Field(..., description="Dependency relation label.", examples=["AT"])
+    dependent: str = Field(..., description="Dependent word form or lexeme.", examples=["black"])
+    dependent_pos: str = Field(..., description="Part of speech for the dependent.", examples=["JJ"])
+    dependent_extra: str = Field(..., description="Dependent prefix or extra string data.", examples=[""])
     sources: list[str] = Field(
         ...,
         description=(
@@ -398,10 +398,10 @@ def _relation_output(entry: dict, measures: Container[Measures]) -> dict[str, st
     output: dict[str, str | int | float] = {
         "head": entry["head"],
         "head_pos": entry["head_pos"],
-        "rel": entry["rel"],
-        "dep": entry["dep"],
-        "dep_pos": entry["dep_pos"],
-        "dep_extra": entry["dep_extra"],
+        "relation": entry["relation"],
+        "dependent": entry["dependent"],
+        "dependent_pos": entry["dependent_pos"],
+        "dependent_extra": entry["dependent_extra"],
         "sources": entry["sources"],
     }
     if Measures.freq in measures:
@@ -855,12 +855,12 @@ def _build_overall_only_relations(
                 aggregate_key,
                 {
                     "role": row["role"],
-                    "rel": rel,
+                    "relation": rel,
                     "head": row["head_string"],
                     "head_pos": head_pos,
-                    "dep": row["dep_string"],
-                    "dep_pos": dep_pos,
-                    "dep_extra": dep_extra,
+                    "dependent": row["dep_string"],
+                    "dependent_pos": dep_pos,
+                    "dependent_extra": dep_extra,
                     "freq": 0,
                     "head_rel_freq": 0,
                     "dep_rel_freq": 0,
@@ -893,12 +893,12 @@ def _build_overall_only_relations(
             {
                 "key": key,
                 "role": bucket["role"],
-                "rel": bucket["rel"],
+                "relation": bucket["relation"],
                 "head": bucket["head"],
                 "head_pos": bucket["head_pos"],
-                "dep": bucket["dep"],
-                "dep_pos": bucket["dep_pos"],
-                "dep_extra": bucket["dep_extra"],
+                "dependent": bucket["dependent"],
+                "dependent_pos": bucket["dependent_pos"],
+                "dependent_extra": bucket["dependent_extra"],
                 "freq": freq,
                 "freq_relative": _calc_freq_relative(freq, corpus_size),
                 "mi": mi_value,
@@ -909,14 +909,14 @@ def _build_overall_only_relations(
 
     # Include tie-break fields here for reproducible sorting
     relation_entries.sort(
-        key=lambda entry: (entry["rel"], entry.get(sort_field, entry["mi"]), entry["role"], entry["key"]),
+        key=lambda entry: (entry["relation"], entry.get(sort_field, entry["mi"]), entry["role"], entry["key"]),
         reverse=True,
     )
     counters: Counter[tuple[str, str]] = Counter()
     selected_entries = []
     for entry in relation_entries:
-        rel_name = entry["rel"]
-        key = (rel_name, entry["role"])
+        relation_name = entry["relation"]
+        key = (relation_name, entry["role"])
         counters[key] += 1
         if max_results is not None and counters[key] > max_results:
             continue
@@ -1447,10 +1447,10 @@ def _build_time_rows(
                 "role": role,
                 "head": strings["head_string"],
                 "head_pos": head_pos,
-                "rel": rel,
-                "dep": strings["dep_string"],
-                "dep_pos": dep_pos,
-                "dep_extra": dep_extra,
+                "relation": rel,
+                "dependent": strings["dep_string"],
+                "dependent_pos": dep_pos,
+                "dependent_extra": dep_extra,
                 "period_start": row["period_start"],
                 "period_end": row["period_end"],
                 "freq": row["freq"],
@@ -1601,7 +1601,7 @@ def _limit_rows_per_bucket(
         counters: Counter[tuple[str, str]] = Counter()
         bucket_limited: list[dict[str, object]] = []
         for row in bucket_rows:
-            counter_key = (str(row["rel"]), str(row["role"]))
+            counter_key = (str(row["relation"]), str(row["role"]))
             counters[counter_key] += 1
             if counters[counter_key] > max_results:
                 continue
@@ -1871,12 +1871,12 @@ async def _dependency_relations_impl(
                 {
                     "role": role,
                     "key": key,
-                    "rel": rel,
+                    "relation": rel,
                     "head": strings["head_string"],
                     "head_pos": head_pos,
-                    "dep": strings["dep_string"],
-                    "dep_pos": dep_pos,
-                    "dep_extra": dep_extra,
+                    "dependent": strings["dep_string"],
+                    "dependent_pos": dep_pos,
+                    "dependent_extra": dep_extra,
                     "freq": int(bucket["freq"]),
                     "freq_relative": _calc_freq_relative(int(bucket["freq"]), total_corpus_size),
                     "mi": bucket["mi"],
@@ -1894,11 +1894,11 @@ async def _dependency_relations_impl(
 
         # Sort overall entries by relation and the chosen sort field, then apply max_results per relation and role.
         overall_relation_entries.sort(
-            key=lambda entry: (entry["rel"], entry.get(sort_field.value, entry["mi"])), reverse=True
+            key=lambda entry: (entry["relation"], entry.get(sort_field.value, entry["mi"])), reverse=True
         )
         counters: Counter[tuple[object, str]] = Counter()
         for entry in overall_relation_entries:
-            key = (entry["rel"], entry["role"])
+            key = (entry["relation"], entry["role"])
             counters[key] += 1
             if max_results is not None and counters[key] > max_results:
                 continue
@@ -1932,9 +1932,9 @@ async def _dependency_relations_impl(
                 per_period_rows = _limit_rows_per_bucket(per_period_rows, "period_start", sort_field.value, max_results)
             per_period_rows.sort(
                 key=lambda row: (
-                    row["rel"],
+                    row["relation"],
                     row["head"],
-                    row["dep"],
+                    row["dependent"],
                     1 if row["period_start"] is None else 0,
                     row["period_start"],
                 )

@@ -45,4 +45,4 @@ class TestDependencyRelations:
         data = dependency_relations_testcorpus(word, corpora)
         assert "relations" in data
         for wp in data["relations"]:
-            assert wp["head"] == word or wp["dep"] == word
+            assert wp["head"] == word or wp["dependent"] == word
