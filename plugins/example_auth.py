@@ -49,6 +49,15 @@ class ExampleAuth(auth.Authorizer):
             }
         }, [{scheme_name: []}]
 
+    @classmethod
+    def cache_vary_headers(cls) -> tuple[str, ...]:
+        """Vary private cached responses by the configured access header.
+
+        Returns:
+            The credential header used by this plugin.
+        """
+        return (router.config("required_header", "X-Authorized-Corpora"),)
+
     async def _fetch_protection_info(  # noqa: PLR6301
         self,
         corpora: list[str],

@@ -410,16 +410,84 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(Exception, unexpected_exception_handler)
 
 
-def _set_cache_headers(resp: Response, *, max_age_seconds: int) -> None:
+def _set_cache_headers(
+    resp: Response,
+    *,
+    max_age_seconds: int,
+    private: bool = False,
+    vary_headers: tuple[str, ...] = (),
+) -> None:
     """Set HTTP cache headers on the response.
 
     Args:
         resp: The FastAPI Response object.
         max_age_seconds: The max-age in seconds for the Cache-Control header.
+        private: Whether only a private client cache may store the response.
+        vary_headers: Request header names that must match for a cached response to be reused.
     """
     expires = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=max_age_seconds)
     resp.headers["Expires"] = expires.strftime("%a, %d %b %Y %H:%M:%S GMT")
-    resp.headers["Cache-Control"] = f"public,max-age={max_age_seconds}"
+    visibility = "private" if private else "public"
+    resp.headers["Cache-Control"] = f"{visibility},max-age={max_age_seconds}"
+    if vary_headers:
+        existing = [header.strip() for header in resp.headers.get("Vary", "").split(",") if header.strip()]
+        existing_lower = {header.lower() for header in existing}
+        for header in vary_headers:
+            if header.lower() not in existing_lower:
+                existing.append(header)
+                existing_lower.add(header.lower())
+        resp.headers["Vary"] = ", ".join(existing)
+
+
+def _apply_response_cache_policy(
+    resp: Response,
+    request: Request,
+    *,
+    cache_headers: bool,
+    cache_requested: bool,
+    debug: bool,
+    streaming: bool,
+) -> None:
+    """Apply HTTP response caching policy based on route, request, and server settings."""
+    authorizer = getattr(request.app.state, "authorizer", None)
+
+    # If caching is explicitly disabled on the route, or the request is in debug or streaming mode, use `no-store`.
+    if not cache_headers or debug or streaming:
+        resp.headers["Cache-Control"] = "no-store"
+        # A pass-through Response may already contain Expires, which is inconsistent with `no-store`.
+        if "Expires" in resp.headers:
+            del resp.headers["Expires"]
+        return
+
+    # If the response is an error or caching is disabled (either by the client or server-side), leave out cache
+    # headers. With an authorizer, mark the response `no-store` to avoid leaking credential-dependent information.
+    if resp.status_code >= HTTP_BAD_REQUEST or not cache_requested:
+        if authorizer is not None:
+            resp.headers["Cache-Control"] = "no-store"
+        return
+
+    max_age = settings.HTTP_CACHE_MAXAGE * 3600
+    # Interpret a negative configured lifetime as "do not add cache headers" for anonymous responses. For authorized
+    # responses, treat it as an explicit storage prohibition.
+    if max_age <= 0:
+        if authorizer is not None:
+            resp.headers["Cache-Control"] = "no-store"
+        return
+
+    # Without authorization enabled, we can safely add public cache headers to successful responses.
+    if authorizer is None:
+        _set_cache_headers(resp, max_age_seconds=max_age)
+        return
+
+    # With authorization enabled, responses are only cacheable if the plugin explicitly describes every request header
+    # that can affect authorization. In that case, we mark the response as `private` and add a `Vary` header. If the
+    # plugin does not declare its credential headers, we mark the response `no-store`.
+    cache_vary_headers = getattr(authorizer, "cache_vary_headers", None)
+    vary_headers = cache_vary_headers() if cache_vary_headers is not None else None
+    if vary_headers is None:
+        resp.headers["Cache-Control"] = "no-store"
+        return
+    _set_cache_headers(resp, max_age_seconds=max_age, private=True, vary_headers=vary_headers)
 
 
 def api_handler(
@@ -480,7 +548,9 @@ def api_handler(
     Args:
         _callable: The route function to decorate.
         cache_headers: Whether successful responses may receive public cache headers. When false, responses use
-            `Cache-Control: no-store`.
+            `Cache-Control: no-store`. With an authorizer enabled, ordinary responses use private browser caching when
+            the plugin declares its credential headers; otherwise they use `no-store`. Debug and streamed responses are
+            never stored.
         keepalive_seconds: Interval in seconds for sending NDJSON keepalive events.
         rate_limit: Whether this route is eligible for rate limiting (default `True`). Set to `False` to exempt it.
             The actual limit values are read from configuration (`RATE_LIMIT_DEFAULT` and `RATE_LIMITS`). Has no effect
@@ -583,8 +653,14 @@ def api_handler(
                     logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
                 await stop_watchdog()
                 response = _problem_response(exc, debug=common.debug)
-                if not cache_headers:
-                    response.headers["Cache-Control"] = "no-store"
+                _apply_response_cache_policy(
+                    response,
+                    request,
+                    cache_headers=cache_headers,
+                    cache_requested=common.cache,
+                    debug=common.debug,
+                    streaming=common.stream,
+                )
                 if response.status_code >= HTTP_INTERNAL_SERVER_ERROR:
                     logger.exception("API route failed before producing a result: %s %s", method, route, exc_info=exc)
                 for header_name, header_value in rate_limit_headers.items():
@@ -597,12 +673,14 @@ def api_handler(
                 if slow_request_threshold > 0 and elapsed >= slow_request_threshold:
                     logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
                 await stop_watchdog()
-                if not cache_headers:
-                    result.headers["Cache-Control"] = "no-store"
-                elif result.status_code < HTTP_BAD_REQUEST and common.cache and not common.debug:
-                    max_age = settings.HTTP_CACHE_MAXAGE * 3600
-                    if max_age > 0:
-                        _set_cache_headers(result, max_age_seconds=max_age)
+                _apply_response_cache_policy(
+                    result,
+                    request,
+                    cache_headers=cache_headers,
+                    cache_requested=common.cache,
+                    debug=common.debug,
+                    streaming=common.stream,
+                )
                 for header_name, header_value in rate_limit_headers.items():
                     result.headers[header_name] = header_value
                 return result
@@ -656,12 +734,14 @@ def api_handler(
                 if slow_request_threshold > 0 and elapsed >= slow_request_threshold:
                     logger.warning("Slow request %.3fs: %s %s", elapsed, method, route)
                 await stop_watchdog()
-                if not cache_headers:
-                    response.headers["Cache-Control"] = "no-store"
-                elif response.status_code < HTTP_BAD_REQUEST and common.cache and not common.debug:
-                    max_age = settings.HTTP_CACHE_MAXAGE * 3600
-                    if max_age > 0:
-                        _set_cache_headers(response, max_age_seconds=max_age)
+                _apply_response_cache_policy(
+                    response,
+                    request,
+                    cache_headers=cache_headers,
+                    cache_requested=common.cache,
+                    debug=common.debug,
+                    streaming=common.stream,
+                )
                 for header_name, header_value in rate_limit_headers.items():
                     response.headers[header_name] = header_value
                 return response
@@ -776,12 +856,14 @@ def api_handler(
 
             resp = StreamingResponse(body_iter_stream(), media_type="application/x-ndjson")
 
-            if not cache_headers:
-                resp.headers["Cache-Control"] = "no-store"
-            elif common.cache and not common.debug:
-                max_age = settings.HTTP_CACHE_MAXAGE * 3600
-                if max_age > 0:
-                    _set_cache_headers(resp, max_age_seconds=max_age)
+            _apply_response_cache_policy(
+                resp,
+                request,
+                cache_headers=cache_headers,
+                cache_requested=common.cache,
+                debug=common.debug,
+                streaming=common.stream,
+            )
             for header_name, header_value in rate_limit_headers.items():
                 resp.headers[header_name] = header_value
 

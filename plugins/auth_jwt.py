@@ -39,6 +39,16 @@ class AuthJWT(auth.Authorizer):
         """
         return {"bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}}, [{"bearerAuth": []}]
 
+    @classmethod
+    def cache_vary_headers(cls) -> tuple[str, ...]:
+        """Vary private cached responses by bearer credentials.
+
+        Returns:
+            The authorization header used by this plugin.
+        """
+        return ("Authorization",)
+
+    async def _fetch_protection_info(self, corpora: list[str], auth_ctx: AuthContext) -> dict[str, auth.ProtectionInfo]:
         """Fetch per-corpus protection metadata from CWB.
 
         Returns:

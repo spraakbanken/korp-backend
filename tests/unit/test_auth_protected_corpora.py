@@ -14,6 +14,12 @@ from plugins.auth import Auth
 from plugins.auth_jwt import AuthJWT
 
 
+def test_builtin_authorizers_vary_private_cache_by_authorization_header() -> None:
+    """Ensure built-in authorizers configure Vary headers for private cache."""
+    assert Auth.cache_vary_headers() == ("Authorization",)
+    assert AuthJWT.cache_vary_headers() == ("Authorization",)
+
+
 class FakeCWB:
     """Minimal CWB stub for testing batched protected-corpora reads."""
 

@@ -98,3 +98,14 @@ def test_example_auth_check_authorization_allows_header_access(monkeypatch: Any)
         assert message is None
 
     anyio.run(_run)
+
+
+def test_example_auth_varies_private_cache_by_configured_header(monkeypatch: Any) -> None:
+    """Ensure the same configured credential header is used for authorization and private cache varying."""
+    monkeypatch.setattr(
+        settings,
+        "PLUGINS_CONFIG",
+        {"plugins.example_auth": {"required_header": "X-Custom-Corpus-Access"}},
+    )
+
+    assert ExampleAuth.cache_vary_headers() == ("X-Custom-Corpus-Access",)

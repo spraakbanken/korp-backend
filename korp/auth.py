@@ -129,6 +129,8 @@ class Authorizer(ABC):
     Optional methods to implement:
     - `openapi_security()`: Describe the plugin's OpenAPI security schemes and requirements. These requirements are
       optional on corpus-authorized operations and mandatory on administrative operations.
+    - `cache_vary_headers()`: Name the request headers that can change an authorized response. Declaring these headers
+      allows ordinary responses to use private browser caching; the safe default is no HTTP caching.
 
     Protection metadata model:
     - Use `ProtectionInfo` for each corpus.
@@ -167,6 +169,16 @@ class Authorizer(ABC):
         Returns:
             A pair containing `components.securitySchemes` entries and operation-level security requirements, or
             `None` when the plugin does not expose a documented authentication contract.
+        """
+        return None
+
+    @classmethod
+    def cache_vary_headers(cls) -> tuple[str, ...] | None:
+        """Return credential headers that must participate in the private cache key.
+
+        Returns:
+            Header names for the response's `Vary` field, or `None` to disable HTTP caching when this authorizer is
+            active.
         """
         return None
 

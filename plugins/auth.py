@@ -108,6 +108,15 @@ class Auth(auth.Authorizer):
         """
         return {"basicAuth": {"type": "http", "scheme": "basic"}}, [{"basicAuth": []}]
 
+    @classmethod
+    def cache_vary_headers(cls) -> tuple[str, ...]:
+        """Vary private cached responses by HTTP Basic credentials.
+
+        Returns:
+            The authorization header used by this plugin.
+        """
+        return ("Authorization",)
+
     async def _fetch_protection_info(self, corpora: list[str], auth_ctx: AuthContext) -> dict[str, auth.ProtectionInfo]:
         """Fetch per-corpus protection metadata from CWB.
 
