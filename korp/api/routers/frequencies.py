@@ -1076,24 +1076,22 @@ async def _perform_corpus_frequency_query(
 
 
 DateFromParam: TypeAlias = Annotated[
-    str | SkipJsonSchema[None],
+    params.DateValue | SkipJsonSchema[None],
     Query(
         description=(
             "Start date/time for filtering, inclusive. Must be used together with `date_to`. Accepted formats: "
             "YYYYMMDDHHMMSS, YYYYMMDD, YYYY-MM-DD HH:MM:SS, or YYYY-MM-DD."
         ),
-        pattern=r"^(\d{8}(\d{6})?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$",
         examples=["20200101000000", "2020-01-01"],
     ),
 ]
 DateToParam: TypeAlias = Annotated[
-    str | SkipJsonSchema[None],
+    params.DateValue | SkipJsonSchema[None],
     Query(
         description=(
             "End date/time for filtering, inclusive. Must be used together with `date_from`. Accepted formats: "
             "YYYYMMDDHHMMSS, YYYYMMDD, YYYY-MM-DD HH:MM:SS, or YYYY-MM-DD."
         ),
-        pattern=r"^(\d{8}(\d{6})?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$",
         examples=["20201231235959", "2020-12-31"],
     ),
 ]

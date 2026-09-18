@@ -4,7 +4,7 @@ from enum import StrEnum
 from typing import Annotated, TypeAlias
 
 from fastapi import Query
-from pydantic import AfterValidator, BeforeValidator
+from pydantic import AfterValidator, BeforeValidator, StringConstraints
 from pydantic.json_schema import SkipJsonSchema
 
 from korp import utils
@@ -56,13 +56,12 @@ WithinParam: TypeAlias = Annotated[
 ]
 
 DefaultContextParam: TypeAlias = Annotated[
-    str | SkipJsonSchema[None],
+    Annotated[str, StringConstraints(pattern=r"^\d+\s+[\w_-]+$")] | SkipJsonSchema[None],
     Query(
         description=(
             "Default context to return around each match. Use `<number> <unit>`, for example `10 word` for token "
             "context or `1 sentence` for structural context."
         ),
-        pattern=r"^\d+\s+[\w_-]+$",
         examples=["10 word", "1 sentence", "1 paragraph"],
     ),
 ]
@@ -87,6 +86,13 @@ ExpandPrequeriesParam: TypeAlias = Annotated[
             "to its containing `within` context before the next query is executed. Enabled by default; disabling it "
             "runs the next query only on the exact tokens matched by the previous query."
         )
+    ),
+]
+
+DateValue: TypeAlias = Annotated[
+    str,
+    StringConstraints(
+        pattern=r"^(\d{8}(\d{6})?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$"
     ),
 ]
 

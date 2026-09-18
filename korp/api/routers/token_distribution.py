@@ -23,7 +23,7 @@ from sqlalchemy import text
 
 from korp import auth, caching, utils
 from korp.api import params, schemas
-from korp.api.params import GranularityValues
+from korp.api.params import DateValue, GranularityValues
 from korp.api.requests import QueryRequestModel, RequestModel
 from korp.config import settings
 from korp.dependencies import CtxDep, QueryCtxDep
@@ -57,9 +57,8 @@ Show yearly token distribution for a corpus:
 """
 
 DateFromParam: TypeAlias = Annotated[
-    str | None,
+    DateValue | SkipJsonSchema[None],
     Query(
-        pattern=r"^(\d{8}(\d{6})?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$",
         description=(
             "Start date/time for filtering, inclusive. Must be used together with `date_to`. Accepted formats: "
             "YYYYMMDDHHMMSS, YYYYMMDD, YYYY-MM-DD HH:MM:SS, or YYYY-MM-DD."
@@ -69,9 +68,8 @@ DateFromParam: TypeAlias = Annotated[
 ]
 
 DateToParam: TypeAlias = Annotated[
-    str | None,
+    DateValue | SkipJsonSchema[None],
     Query(
-        pattern=r"^(\d{8}(\d{6})?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$",
         description=(
             "End date/time for filtering, inclusive. Must be used together with `date_from`. Accepted formats: "
             "YYYYMMDDHHMMSS, YYYYMMDD, YYYY-MM-DD HH:MM:SS, or YYYY-MM-DD."
