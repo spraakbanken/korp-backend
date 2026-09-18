@@ -299,6 +299,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         contact=_CONTACT,
         license_info=_LICENSE,
         servers=settings.SERVERS,
+        root_path=settings.ROOT_PATH,
     )
 
     app.state.db = MySQL()

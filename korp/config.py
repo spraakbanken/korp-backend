@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     WSGI_HOST: str = "0.0.0.0"
     WSGI_PORT: int = 8000
 
+    # URL path prefix when the application is served below the domain root (e.g. "/korp")
+    ROOT_PATH: str = ""
+
     # Server instances used in API documentation
     # E.g. [{"url": "http://localhost:8000", "description": "Local development server"}]
     SERVERS: list[dict[str, str]] = []
