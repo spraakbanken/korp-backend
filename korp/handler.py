@@ -17,7 +17,6 @@ from logging import getLogger
 from typing import Any, TypeAlias
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.dependencies.utils import get_flat_dependant
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -220,14 +219,21 @@ def forbid_extra_query_params(request: Request) -> None:
     route = request.scope.get("route")
     if not isinstance(route, APIRoute):
         return
-    flat = get_flat_dependant(route.dependant, skip_repeats=True)
     allowed: set[str] = set()
-    for parameter in flat.query_params:
-        annotation = parameter.field_info.annotation
-        if isinstance(annotation, type) and issubclass(annotation, CommonQueryControls):
-            allowed.update(field.alias or name for name, field in annotation.model_fields.items())
-        else:
-            allowed.add(parameter.alias)
+    dependants = [route.dependant]
+    visited: set[int] = set()
+    while dependants:
+        dependant = dependants.pop()
+        if id(dependant) in visited:
+            continue
+        visited.add(id(dependant))
+        for parameter in dependant.query_params:
+            annotation = parameter.field_info.annotation
+            if isinstance(annotation, type) and issubclass(annotation, CommonQueryControls):
+                allowed.update(field.alias or name for name, field in annotation.model_fields.items())
+            else:
+                allowed.add(parameter.alias)
+        dependants.extend(dependant.dependencies)
     extra = set(request.query_params) - allowed
     if extra:
         raise HTTPException(422, f"Unexpected query params: {', '.join(sorted(extra))}")

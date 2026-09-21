@@ -14,14 +14,14 @@ authors = [
     { name = "Språkbanken Text", email = "sb-info@svenska.gu.se" }
 ]
 dependencies = [
-    "fastapi==0.135.1",
+    "fastapi==0.141.1",
     "sqlalchemy~=2.0",
-    "asyncmy~=0.2.11",  # MySQL driver for SQLAlchemy
+    "asyncmy~=0.2.14",  # MySQL driver for SQLAlchemy
     "psutil~=7.2",
     "aiomcache~=0.8.2",  # Memcached client
     "python-dateutil~=2.9",
     "PyYAML~=6.0",
-    "pydantic-settings~=2.13"  # For configuration management
+    "pydantic-settings~=2.15"  # For configuration management
 ]
 
 [project.optional-dependencies]
@@ -29,7 +29,7 @@ rate-limiting = [
     "limits[async-memcached]~=5.8"
 ]
 server = [
-    "gunicorn>=25.1",
+    "gunicorn>=26.2",
     "uvloop"  # Used by Gunicorn's ASGI worker for improved performance
 ]
 jwt = [
