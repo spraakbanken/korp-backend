@@ -63,7 +63,7 @@ def _public_routes() -> dict[tuple[str, str], APIRoute]:
         (route.path, method): route
         for api_router in routers
         for route in api_router.routes
-        if isinstance(route, APIRoute) and route.include_in_schema
+        if isinstance(route, APIRoute) and route.methods is not None and route.include_in_schema
         for method in route.methods
     }
     assert len(routes) == sum(map(len, EXPECTED_METHODS.values()))

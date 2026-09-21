@@ -10,7 +10,7 @@ import json
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from functools import update_wrapper
 from logging import getLogger
@@ -20,7 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, RouteContext, iter_route_contexts
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -62,6 +62,17 @@ class ProgressEvent:
 
 
 ResponseFragment: TypeAlias = dict[str, Any] | ProgressEvent
+
+
+def iter_api_route_contexts(app: FastAPI) -> Iterator[RouteContext]:
+    """Iterate over route contexts whose original routes are API routes.
+
+    Yields:
+        FastAPI route contexts for ``APIRoute`` instances.
+    """
+    for context in iter_route_contexts(app.routes):
+        if isinstance(context.original_route, APIRoute):
+            yield context
 
 
 class APIValidationError(HTTPException):
@@ -256,15 +267,16 @@ def enforce_ctx_dependency(
     ctx_dependency_name = "CtxDep or QueryCtxDep"  # For error messages
     violations: list[str] = []
 
-    for r in app.routes:
-        if not isinstance(r, APIRoute):
-            continue
-
+    for route_context in iter_api_route_contexts(app):
+        r = route_context.original_route
+        assert isinstance(r, APIRoute)
+        path = route_context.path_format
+        assert path is not None
         signature = inspect.signature(r.endpoint)
         p = signature.parameters.get(param_name) or signature.parameters.get(f"_{param_name}")
 
         methods = f"[{','.join(sorted(r.methods or []))}]"
-        where = f"{r.path:30s} {methods:12s} {r.endpoint.__module__}.{r.endpoint.__name__}"
+        where = f"{path:30s} {methods:12s} {r.endpoint.__module__}.{r.endpoint.__name__}"
         if p is None:
             violations.append(f"{where}\n  - missing required parameter `{param_name}: {ctx_dependency_name}`")
             continue

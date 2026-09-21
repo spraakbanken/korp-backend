@@ -12,6 +12,7 @@ from httpx import Response
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from korp.api.schemas import StreamCompleteEvent, StreamErrorEvent, StreamEvent, StreamResultEvent
+from korp.handler import iter_api_route_contexts
 from korp.utils import QUERY_DELIM
 
 
@@ -29,9 +30,9 @@ def get_documented_response_model(client: TestClient, path: str, *, method: str 
     """
     app = cast(FastAPI, client.app)
     matching_routes = [
-        route
-        for route in app.routes
-        if isinstance(route, APIRoute) and route.path == path and method.upper() in route.methods
+        cast(APIRoute, route_context.original_route)
+        for route_context in iter_api_route_contexts(app)
+        if route_context.path_format == path and method.upper() in (route_context.methods or ())
     ]
     assert len(matching_routes) == 1, f"Expected one {method} route for {path}, found {len(matching_routes)}"
 

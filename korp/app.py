@@ -339,16 +339,21 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         if settings.RATE_LIMIT_ENABLED:
             from korp.api.schemas import ErrorResponse  # noqa: PLC0415
 
-            for route in app.routes:
-                if not isinstance(route, APIRoute) or not route.include_in_schema:
+            for route_context in handler.iter_api_route_contexts(app):
+                route = route_context.original_route
+                assert isinstance(route, APIRoute)
+                assert route.methods is not None
+                path = route_context.path_format
+                assert path is not None
+                if not route_context.include_in_schema:
                     continue
                 if not getattr(route.endpoint, "_korp_rate_limit", False):
                     continue
-                limit = resolve_rate_limit(route.path, settings=settings)
+                limit = resolve_rate_limit(path, settings=settings)
                 if limit is None:
                     continue
                 for method in route.methods:
-                    operation = schema.get("paths", {}).get(route.path_format, {}).get(method.lower())
+                    operation = schema.get("paths", {}).get(path, {}).get(method.lower())
                     if operation is None:
                         continue
                     operation["responses"].setdefault(
