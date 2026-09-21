@@ -1,17 +1,18 @@
 """Router for token distribution information."""
 
 import bisect
+import calendar
 import functools
 import itertools
 import re
 from collections import defaultdict
 from collections.abc import AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from logging import getLogger
 from operator import itemgetter
 from time import perf_counter
-from typing import Annotated, Any, TypeAlias
+from typing import Annotated, Any, Literal, TypeAlias
 
 import anyio.to_process
 import anyio.to_thread
@@ -35,13 +36,14 @@ logger = getLogger(__name__)
 
 TOKEN_DISTRIBUTION_DESCRIPTION = f"""Show the distribution of corpus tokens over time.
 
-The route returns token counts grouped by time period. Use `granularity` to choose the period size: year, month, day,
-hour, minute, or second. The response can include per-corpus series, one combined series for all selected corpora, or
-both.
+The route returns token counts grouped by time period. Use `granularity` to choose the boundary resolution: year, month,
+day, hour, minute, or second. The response can include per-corpus series, one combined series for all selected corpora,
+or both.
 
-Each key in a time series marks the start of a period. The value applies from that key until the next key. For example,
-with yearly granularity, a series containing `2010: 100`, `2012: 50`, and `2015: 0` means 100 tokens during 2010-2011,
-50 tokens during 2012-2014, and zero tokens from 2015 until the next key.
+Each series is an array of period records. `start` and `end` are inclusive ISO 8601 boundaries. Yearly, monthly, and
+daily periods use dates; hourly, minute, and second periods use date-times. Undated material is represented by a record
+with `dated: false` and no boundaries. Adjacent granularity units with the same token count are combined into one
+period.
 
 Use `date_from` and `date_to` together to limit the date range.
 
@@ -137,23 +139,80 @@ def validate_date_range(date_from: str | None, date_to: str | None) -> Validated
     )
 
 
+PeriodBoundary: TypeAlias = date | datetime
+
+
+class TokenDistributionPeriod(schemas.ResponseModel):
+    """Token count for a dated period."""
+
+    start: PeriodBoundary = Field(..., description="Inclusive ISO 8601 start boundary.", examples=["2010-01-01"])
+    end: PeriodBoundary = Field(..., description="Inclusive ISO 8601 end boundary.", examples=["2011-12-31"])
+    tokens: int = Field(..., description="Number of corpus tokens in the period.", examples=[354])
+
+
+class UndatedTokenDistributionPeriod(schemas.ResponseModel):
+    """Token count for material without usable date information."""
+
+    dated: Literal[False] = Field(..., description="Always false for undated material.")
+    tokens: int = Field(..., description="Number of undated corpus tokens.", examples=[42])
+
+
+TokenDistributionPeriodRecord: TypeAlias = TokenDistributionPeriod | UndatedTokenDistributionPeriod
+
+
+@dataclass(frozen=True, slots=True)
+class TokenPeriodData:
+    """Internal token count for one period.
+
+    Dated boundaries are inclusive compact integers at the selected granularity. Both boundaries are `None` for
+    undated material.
+    """
+
+    start: int | None
+    end: int | None
+    tokens: int
+
+    def __post_init__(self) -> None:
+        """Reject half-dated or inverted internal periods.
+
+        Raises:
+            ValueError: If only one boundary is set or the boundaries are inverted.
+        """
+        if (self.start is None) != (self.end is None):
+            raise ValueError("Period boundaries must both be set or both be None.")
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise ValueError("Period start must not be after period end.")
+
+    @property
+    def dated(self) -> bool:
+        """Whether this period has dated boundaries."""
+        return self.start is not None
+
+
+@dataclass(slots=True)
+class TokenDistributionData:
+    """Internal token-distribution result shared by route consumers."""
+
+    granularity: GranularityValues
+    corpora: dict[str, list[TokenPeriodData]] | None
+    combined: list[TokenPeriodData] | None
+    debug: dict[str, Any] | None = None
+
+
 class TokenDistributionResponse(schemas.CommonResponse):
     """Response model for `/token-distribution` route."""
 
-    corpora: dict[str, dict[str, int]] | SkipJsonSchema[None] = Field(
+    corpora: dict[str, list[TokenDistributionPeriodRecord]] | SkipJsonSchema[None] = Field(
         None,
-        description=(
-            "Token counts per time period, keyed first by corpus id and then by period start. Omitted when "
-            "`include_per_corpus=false`."
-        ),
-        examples=[{"ROMI": {"2017": 15366, "2018": 7437}}],
+        description=("Token-count periods keyed by corpus id. Omitted when `include_per_corpus=false`."),
+        examples=[{"ROMI": [{"start": "2017-01-01", "end": "2017-12-31", "tokens": 15366}]}],
     )
-    combined: dict[str, int] | SkipJsonSchema[None] = Field(
+    combined: list[TokenDistributionPeriodRecord] | SkipJsonSchema[None] = Field(
         None,
         description=(
             "Combined token counts per time period across all selected corpora. Omitted when `include_combined=false`."
         ),
-        examples=[{"2017": 15366, "2018": 7437}],
+        examples=[[{"start": "2017-01-01", "end": "2017-12-31", "tokens": 15366}]],
     )
 
 
@@ -221,6 +280,131 @@ def _adjust_date(date_str: str, granularity: GranularityValues, *, subtract: boo
     return int(d.strftime(g_config.date_fmt))
 
 
+def _compact_datetime(value: int) -> datetime:
+    """Parse an internal compact period boundary.
+
+    Returns:
+        The boundary at the start of its granularity unit.
+    """
+    raw = str(value)
+    return utils.strptime("0" + raw if len(raw) % 2 else raw)
+
+
+def _format_period_start(value: int, granularity: GranularityValues) -> str:
+    """Format an internal period start as a canonical ISO 8601 boundary.
+
+    Returns:
+        The public start boundary.
+    """
+    boundary = _compact_datetime(value)
+    if granularity in {GranularityValues.year, GranularityValues.month, GranularityValues.day}:
+        return boundary.date().isoformat()
+    return boundary.isoformat(timespec="seconds")
+
+
+def _format_period_end(value: int, granularity: GranularityValues) -> str:
+    """Format an internal inclusive period end as a canonical ISO 8601 boundary.
+
+    Returns:
+        The public inclusive end boundary.
+    """
+    boundary = _compact_datetime(value)
+    if granularity == GranularityValues.year:
+        return date(boundary.year, 12, 31).isoformat()
+    if granularity == GranularityValues.month:
+        return date(boundary.year, boundary.month, calendar.monthrange(boundary.year, boundary.month)[1]).isoformat()
+    if granularity == GranularityValues.day:
+        return boundary.date().isoformat()
+    if granularity == GranularityValues.hour:
+        boundary = boundary.replace(minute=59, second=59)
+    elif granularity == GranularityValues.minute:
+        boundary = boundary.replace(second=59)
+    return boundary.isoformat(timespec="seconds")
+
+
+def serialize_period_bounds(start: int, end: int, granularity: GranularityValues) -> dict[str, str]:
+    """Serialize internal inclusive bounds as canonical public boundaries.
+
+    Returns:
+        Public `start` and `end` fields.
+    """
+    return {
+        "start": _format_period_start(start, granularity),
+        "end": _format_period_end(end, granularity),
+    }
+
+
+def shift_period_boundary(value: int, granularity: GranularityValues, *, subtract: bool = False) -> int:
+    """Shift a compact internal boundary by one granularity unit.
+
+    Returns:
+        The shifted compact boundary.
+    """
+    return _adjust_date(str(value), granularity, subtract=subtract)
+
+
+def _coalesce_token_periods(
+    periods: Iterable[TokenPeriodData], granularity: GranularityValues
+) -> list[TokenPeriodData]:
+    """Combine contiguous dated periods with identical token counts.
+
+    Returns:
+        Periods with redundant boundaries removed.
+    """
+    result: list[TokenPeriodData] = []
+    for period in periods:
+        previous = result[-1] if result else None
+        if (
+            previous is not None
+            and previous.dated
+            and period.dated
+            and previous.tokens == period.tokens
+            and previous.end is not None
+            and period.start == shift_period_boundary(previous.end, granularity)
+        ):
+            result[-1] = TokenPeriodData(start=previous.start, end=period.end, tokens=period.tokens)
+        else:
+            result.append(period)
+    return result
+
+
+def serialize_token_period(period: TokenPeriodData, granularity: GranularityValues) -> dict[str, Any]:
+    """Serialize one internal token period for the public response.
+
+    Returns:
+        A dated or undated public token-period record.
+    """
+    if not period.dated:
+        return {"dated": False, "tokens": period.tokens}
+    assert period.start is not None
+    assert period.end is not None
+    return {
+        **serialize_period_bounds(period.start, period.end, granularity),
+        "tokens": period.tokens,
+    }
+
+
+def serialize_token_distribution(distribution: TokenDistributionData) -> dict[str, Any]:
+    """Convert an internal token-distribution result to its public period-record representation.
+
+    Returns:
+        A token-distribution result containing period arrays.
+    """
+    result: dict[str, Any] = {}
+    if distribution.corpora is not None:
+        result["corpora"] = {
+            corpus: [serialize_token_period(period, distribution.granularity) for period in periods]
+            for corpus, periods in distribution.corpora.items()
+        }
+    if distribution.combined is not None:
+        result["combined"] = [
+            serialize_token_period(period, distribution.granularity) for period in distribution.combined
+        ]
+    if distribution.debug is not None:
+        result["debug"] = distribution.debug
+    return result
+
+
 async def _token_distribution_stream(
     ctx: CtxDep,
     corpora: list[str],
@@ -237,7 +421,7 @@ async def _token_distribution_stream(
     Yields:
         A dictionary containing the token distribution information.
     """
-    yield await get_token_distribution(
+    distribution = await get_token_distribution(
         ctx,
         corpora,
         granularity=granularity,
@@ -246,6 +430,7 @@ async def _token_distribution_stream(
         strategy=strategy,
         validated_date_range=date_range,
     )
+    yield serialize_token_distribution(distribution)
 
 
 @router.get(
@@ -328,7 +513,7 @@ async def get_token_distribution(
     date_to: str | None = None,
     no_combined_cache: bool = False,
     validated_date_range: ValidatedDateRange | None = None,
-) -> dict:
+) -> TokenDistributionData:
     """Fetch, cache, and calculate token distribution data for selected corpora.
 
     Args:
@@ -344,7 +529,7 @@ async def get_token_distribution(
         validated_date_range: Date bounds already validated before streaming starts.
 
     Returns:
-        A dictionary containing the token distribution information.
+        The internal token-distribution result containing period records.
 
     """
     if validated_date_range is None:
@@ -379,9 +564,9 @@ async def get_token_distribution(
         cache_combined_key = f"{cache_prefix}:timespan_{combined_checksum}"
         result = await ctx.cache.get(cache_combined_key)
         if result is not None:
+            assert isinstance(result, TokenDistributionData)
             if ctx.common.debug:
-                result.setdefault("debug", {})
-                result["debug"]["cache_read"] = True
+                result.debug = {**(result.debug or {}), "cache_read": True}
             return result
 
         # Look for per-corpus caches
@@ -545,11 +730,11 @@ def _calculate_token_distribution_from_rows(
     include_combined: bool,
     include_per_corpus: bool,
     strategy: params.StrategyValues,
-) -> dict:
+) -> TokenDistributionData:
     """Calculate token distribution output from cached and newly fetched rows.
 
     Returns:
-        The final token distribution response payload.
+        The internal token-distribution result containing period records.
     """
     return build_token_distribution(
         itertools.chain(cached_data, rows),
@@ -580,8 +765,7 @@ async def _run_token_distribution_cpu_bound(function: Any, *args: Any, row_count
 def _calculate_series_sweepline(
     segments: list[tuple[int, int]],
     corpus_intervals: list[tuple[int, int, int]],
-    granularity: GranularityValues,
-) -> defaultdict[str, int]:
+) -> list[TokenPeriodData]:
     """Calculate timeseries using a sweep-line over interval starts.
 
     This algorithm efficiently calculates the frequency for each time bucket defined by the segments, taking into
@@ -594,21 +778,12 @@ def _calculate_series_sweepline(
     Args:
         segments: List of (start, end) tuples representing the time buckets to calculate frequency for.
         corpus_intervals: List of (start, end, frequency) tuples representing the intervals for the corpus.
-        granularity: The granularity level for date adjustments.
 
     Returns:
-        A mapping from start date key to frequency for one corpus.
+        Non-overlapping token periods for one corpus.
     """
-    data: defaultdict[str, int] = defaultdict(int)
     if not segments:
-        return data
-    if not corpus_intervals:
-        for start, end in segments:
-            if start:
-                data[str(start)] = 0
-            if end:
-                data[str(_adjust_date(str(end), granularity))] = 0
-        return data
+        return []
 
     intervals_by_start = sorted(corpus_intervals, key=itemgetter(0))
     end_values = sorted({item[1] for item in corpus_intervals})
@@ -629,6 +804,9 @@ def _calculate_series_sweepline(
 
     total_started_freq = 0
     next_interval = 0
+    periods: list[TokenPeriodData] = []
+    undated_tokens = 0
+    has_undated = False
 
     for start, end in segments:
         while next_interval < len(intervals_by_start) and intervals_by_start[next_interval][0] <= start:
@@ -637,16 +815,17 @@ def _calculate_series_sweepline(
             total_started_freq += interval_freq
             next_interval += 1
 
-        if start:
-            data[str(start)] = 0
-
         excluded_freq = fenwick_prefix_sum(bisect.bisect_left(end_values, end))
-        data[str(start or "")] += total_started_freq - excluded_freq
+        tokens = total_started_freq - excluded_freq
+        if start and end:
+            periods.append(TokenPeriodData(start=start, end=end, tokens=tokens))
+        else:
+            has_undated = True
+            undated_tokens += tokens
 
-        if end:
-            data[str(_adjust_date(str(end), granularity))] = 0
-
-    return data
+    if has_undated:
+        periods.append(TokenPeriodData(start=None, end=None, tokens=undated_tokens))
+    return periods
 
 
 def build_token_distribution(
@@ -655,7 +834,7 @@ def build_token_distribution(
     include_combined: bool = True,
     include_per_corpus: bool = True,
     strategy: params.StrategyValues = params.StrategyValues.some_overlaps,
-) -> dict:
+) -> TokenDistributionData:
     """Aggregate corpus time intervals into token counts grouped by time period.
 
     Args:
@@ -667,7 +846,7 @@ def build_token_distribution(
         strategy: Strategy for date range matching.
 
     Returns:
-        A dictionary containing the token distribution information.
+        The internal token-distribution result containing period records.
     """
     g_config = _GRANULARITY[granularity]
     digit_len = g_config.digit_len
@@ -725,11 +904,8 @@ def build_token_distribution(
             nodes[corpus].add(("t", dateto_short))
 
     corpusnodes = {k: sorted(v, key=lambda x: (x[1] or 0, x[0])) for k, v in nodes.items()}
-    result: dict[str, Any] = {}
-    if include_per_corpus:
-        result["corpora"] = {}
-    if include_combined:
-        result["combined"] = {}
+    corpora_result: dict[str, list[TokenPeriodData]] | None = {} if include_per_corpus else None
+    combined_result: list[TokenPeriodData] | None = [] if include_combined else None
 
     for corpus, nodes_ in corpusnodes.items():
         segments = []  # List of (start, end) tuples representing the time buckets to calculate frequency for
@@ -752,11 +928,16 @@ def build_token_distribution(
 
         corpus_intervals = intervals[corpus]
         # Segments are generated from node boundaries sorted by date; therefore start points are monotonic
-        data = _calculate_series_sweepline(segments, corpus_intervals, granularity)
+        periods = _coalesce_token_periods(_calculate_series_sweepline(segments, corpus_intervals), granularity)
 
         if include_combined and corpus == "__combined__":
-            result["combined"] = data
+            combined_result = periods
         else:
-            result["corpora"][corpus] = data
+            assert corpora_result is not None
+            corpora_result[corpus] = periods
 
-    return result
+    return TokenDistributionData(
+        granularity=granularity,
+        corpora=corpora_result,
+        combined=combined_result,
+    )

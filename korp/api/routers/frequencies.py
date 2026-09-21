@@ -6,9 +6,9 @@ import re
 from collections import defaultdict
 from collections.abc import AsyncGenerator, AsyncIterator, Collection, Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from functools import partial
-from typing import TYPE_CHECKING, Annotated, Any, TypeAlias, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, cast
 
 import anyio
 from anyio import CapacityLimiter
@@ -73,9 +73,10 @@ FREQUENCIES_TIME_DESCRIPTION = f"""Calculate the frequency of a query over time.
 The response contains absolute counts and relative frequencies per time period. Relative frequencies are expressed as
 hits per one million tokens for the corresponding time period.
 
-Each data point covers the period from that key until the next key. For example, with yearly granularity, values for
-`2010`, `2012`, `2013`, and `2016` describe 2010-2011, 2012, 2013-2015, and 2016 onward respectively. A value of `null`
-means there is no corpus data for that period; `0` means data exists but the query had no hits.
+Each statistics item contains period records with inclusive ISO 8601 `start` and `end` boundaries. Yearly, monthly, and
+daily periods use dates; hourly, minute, and second periods use date-times. A value of `null` means there is no corpus
+data for that period; `0` means data exists but the query had no hits. Undated material is represented by a record with
+`dated: false` and no boundaries. Adjacent granularity units with identical values are combined into one period.
 
 ### Time Matching Strategies
 
@@ -238,24 +239,54 @@ class CorpusFrequenciesResponse(schemas.CommonResponse):
     combined: FrequencyStatistics = Field(..., description="Combined statistics for all corpora.")
 
 
+PeriodBoundary: TypeAlias = date | datetime
+
+
+class FrequencyTimePeriod(schemas.ResponseModel):
+    """Absolute and relative frequencies for a dated period."""
+
+    start: PeriodBoundary = Field(..., description="Inclusive ISO 8601 start boundary.", examples=["2010-01-01"])
+    end: PeriodBoundary = Field(..., description="Inclusive ISO 8601 end boundary.", examples=["2011-12-31"])
+    absolute: int | None = Field(
+        ..., description="Absolute frequency, or null when the period has no corpus data.", examples=[354]
+    )
+    relative: float | None = Field(
+        ...,
+        description="Relative frequency per one million tokens, or null when there is no corpus data.",
+        examples=[65.265],
+    )
+
+
+class UndatedFrequencyTimePeriod(schemas.ResponseModel):
+    """Absolute and relative frequencies for undated material."""
+
+    dated: Literal[False] = Field(..., description="Always false for undated material.")
+    absolute: int | None = Field(..., description="Absolute frequency for undated material.")
+    relative: float | None = Field(..., description="Relative frequency per one million undated tokens.")
+
+
+FrequencyTimePeriodRecord: TypeAlias = FrequencyTimePeriod | UndatedFrequencyTimePeriod
+
+
 class TimeStatistics(schemas.ResponseModel):
     """Time-series statistics for one query or subquery."""
 
-    absolute: dict[str, int | None] = Field(
+    periods: list[FrequencyTimePeriodRecord] = Field(
         ...,
         description=(
-            "Absolute frequencies per time period. A value of `null` means there is no corpus data for that period; "
-            "`0` means data exists but the query had no hits."
+            "Periods containing absolute and relative frequencies. A value of `null` means there is no "
+            "corpus data for that period; `0` means data exists but the query had no hits."
         ),
-        examples=[{"2017": 354, "2018": 115, "2019": None}],
-    )
-    relative: dict[str, float | None] = Field(
-        ...,
-        description=(
-            "Relative frequencies per time period. A value of `null` means there is no corpus data for that period; "
-            "`0` means data exists but the query had no hits."
-        ),
-        examples=[{"2017": 65.265, "2018": 87.521, "2019": None}],
+        examples=[
+            [
+                {
+                    "start": "2017-01-01",
+                    "end": "2017-12-31",
+                    "absolute": 354,
+                    "relative": 65.265,
+                }
+            ]
+        ],
     )
     sums: FrequencySums = Field(..., description="Frequency sums over the time series.")
     cqp: str | SkipJsonSchema[None] = Field(
@@ -1218,6 +1249,195 @@ async def _resolve_frequencies_time_request(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _FrequencyPeriodData:
+    """Internal absolute and relative frequencies for one period."""
+
+    start: int | None
+    end: int | None
+    absolute: int | None
+    relative: float | None
+
+
+def _serialize_frequency_period(period: _FrequencyPeriodData, granularity: params.GranularityValues) -> dict[str, Any]:
+    """Serialize one internal frequency period for the public response.
+
+    Returns:
+        A dated or undated public frequency-period record.
+    """
+    values = {"absolute": period.absolute, "relative": period.relative}
+    if period.start is None or period.end is None:
+        return {"dated": False, **values}
+    return {**token_distribution.serialize_period_bounds(period.start, period.end, granularity), **values}
+
+
+def _containing_token_period(
+    periods: Iterable[token_distribution.TokenPeriodData],
+    start: int | None,
+) -> token_distribution.TokenPeriodData | None:
+    """Find the token period containing a dated or undated boundary.
+
+    Returns:
+        The containing token period, if any.
+    """
+    for period in periods:
+        if start is None:
+            if not period.dated:
+                return period
+        elif period.start is not None and period.end is not None and period.start <= start <= period.end:
+            return period
+    return None
+
+
+def _frequency_periods(
+    corpus_periods: list[token_distribution.TokenPeriodData],
+    search_periods: list[token_distribution.TokenPeriodData],
+    granularity: params.GranularityValues,
+) -> list[_FrequencyPeriodData]:
+    """Overlay query counts on corpus periods and retain their boundaries.
+
+    Returns:
+        Non-overlapping frequency periods covering all corpus periods.
+    """
+    result: list[_FrequencyPeriodData] = []
+    dated_search = [period for period in search_periods if period.dated]
+    undated_search = next((period for period in search_periods if not period.dated), None)
+
+    def append(period: token_distribution.TokenPeriodData, absolute: int | None) -> None:
+        relative = (
+            absolute / period.tokens * RELATIVE_MULTIPLIER if absolute is not None and period.tokens > 0 else None
+        )
+        result.append(
+            _FrequencyPeriodData(
+                start=period.start,
+                end=period.end,
+                absolute=absolute,
+                relative=relative,
+            )
+        )
+
+    for corpus_period in corpus_periods:
+        if not corpus_period.dated:
+            absolute = undated_search.tokens if undated_search else 0
+            append(corpus_period, absolute if corpus_period.tokens > 0 else None)
+            continue
+        if corpus_period.tokens <= 0:
+            append(corpus_period, None)
+            continue
+
+        assert corpus_period.start is not None
+        assert corpus_period.end is not None
+        cursor: int | None = corpus_period.start
+        for search_period in dated_search:
+            assert search_period.start is not None
+            assert search_period.end is not None
+            if cursor is None or search_period.end < cursor:
+                continue
+            if search_period.start > corpus_period.end:
+                break
+            overlap_start = max(cursor, search_period.start)
+            if cursor < overlap_start:
+                append(
+                    token_distribution.TokenPeriodData(
+                        start=cursor,
+                        end=token_distribution.shift_period_boundary(overlap_start, granularity, subtract=True),
+                        tokens=corpus_period.tokens,
+                    ),
+                    0,
+                )
+            overlap_end = min(corpus_period.end, search_period.end)
+            append(
+                token_distribution.TokenPeriodData(
+                    start=overlap_start,
+                    end=overlap_end,
+                    tokens=corpus_period.tokens,
+                ),
+                search_period.tokens,
+            )
+            cursor = (
+                None
+                if overlap_end == corpus_period.end
+                else token_distribution.shift_period_boundary(overlap_end, granularity)
+            )
+        if cursor is not None:
+            append(
+                token_distribution.TokenPeriodData(
+                    start=cursor,
+                    end=corpus_period.end,
+                    tokens=corpus_period.tokens,
+                ),
+                0,
+            )
+    coalesced: list[_FrequencyPeriodData] = []
+    for period in result:
+        previous = coalesced[-1] if coalesced else None
+        if (
+            previous is not None
+            and previous.start is not None
+            and previous.end is not None
+            and period.start == token_distribution.shift_period_boundary(previous.end, granularity)
+            and previous.absolute == period.absolute
+            and previous.relative == period.relative
+        ):
+            coalesced[-1] = _FrequencyPeriodData(
+                start=previous.start,
+                end=period.end,
+                absolute=period.absolute,
+                relative=period.relative,
+            )
+        else:
+            coalesced.append(period)
+    return coalesced
+
+
+def _frequency_period_sums(
+    corpus_periods: list[token_distribution.TokenPeriodData],
+    search_periods: list[token_distribution.TokenPeriodData],
+) -> FrequencySums:
+    """Calculate sums using each internal query period once.
+
+    Returns:
+        Absolute and relative sums matching the prior time-series semantics.
+    """
+    absolute = 0
+    relative = 0.0
+    for search_period in search_periods:
+        corpus_period = _containing_token_period(corpus_periods, search_period.start)
+        if corpus_period is None or corpus_period.tokens <= 0:
+            continue
+        absolute += search_period.tokens
+        relative += search_period.tokens / corpus_period.tokens * RELATIVE_MULTIPLIER
+    return FrequencySums(absolute=absolute, relative=relative)
+
+
+def _time_statistics(
+    corpus_periods: list[token_distribution.TokenPeriodData],
+    search_periods: list[token_distribution.TokenPeriodData],
+    granularity: params.GranularityValues,
+    *,
+    combined_total_size: int | None = None,
+    cqp_query: str | None = None,
+) -> dict[str, Any]:
+    """Build one public frequency-time statistics object from internal periods.
+
+    Returns:
+        A public statistics dictionary.
+    """
+    sums = _frequency_period_sums(corpus_periods, search_periods)
+    if combined_total_size is not None:
+        sums.relative = sums.absolute / combined_total_size * RELATIVE_MULTIPLIER if combined_total_size > 0 else 0.0
+    result: dict[str, Any] = {
+        "periods": [
+            _serialize_frequency_period(period, granularity)
+            for period in _frequency_periods(corpus_periods, search_periods, granularity)
+        ],
+        "sums": sums.model_dump(),
+    }
+    if cqp_query is not None:
+        result["cqp"] = cqp_query
+    return result
+
+
 async def _frequencies_time_stream(
     ctx: CtxDep,
     request_state: _FrequencyTimeRequestState,
@@ -1275,7 +1495,7 @@ async def _frequencies_time_stream(
         # Add zero values for the corpora we removed because of the selected date span
         for c in set(corpora_copy).difference(set(frequency_params.corpora)):
             result["corpora"][c] = [
-                {"absolute": {}, "relative": {}, "sums": {"absolute": 0, "relative": 0.0}}
+                {"periods": [], "sums": {"absolute": 0, "relative": 0.0}}
                 for _ in range(len(frequency_params.subcqp) + 1)
             ]
             for i, c2 in enumerate(result["corpora"][c][1:]):
@@ -1284,8 +1504,7 @@ async def _frequencies_time_stream(
     # Add zero values for the combined results if no corpora are within the selected date span
     if include_combined and not frequency_params.corpora:
         result["combined"] = [
-            {"absolute": {}, "relative": {}, "sums": {"absolute": 0, "relative": 0.0}}
-            for _ in range(len(frequency_params.subcqp) + 1)
+            {"periods": [], "sums": {"absolute": 0, "relative": 0.0}} for _ in range(len(frequency_params.subcqp) + 1)
         ]
         for i, c in enumerate(result["combined"][1:]):
             c["cqp"] = frequency_params.subcqp[i]
@@ -1397,87 +1616,41 @@ async def _frequencies_time_stream(
         validated_date_range=request_state.date_range,
     )
 
-    search_timedata = []
-    search_timedata_combined = []
+    search_timedata: list[token_distribution.TokenDistributionData] = []
     for total_row in total_rows:
         temp = token_distribution.build_token_distribution(total_row, granularity=granularity, strategy=strategy)
-        if include_per_corpus:
-            search_timedata.append(temp["corpora"])
-        if include_combined:
-            search_timedata_combined.append(temp["combined"])
+        search_timedata.append(temp)
 
     if include_per_corpus:
+        assert corpus_timedata.corpora is not None
         for c in frequency_params.corpora:
-            corpus_stats = [
-                {"absolute": defaultdict(int), "relative": defaultdict(float), "sums": {"absolute": 0, "relative": 0.0}}
-                for _ in range(len(frequency_params.subcqp) + 1)
-            ]
-
-            basedates = {
-                date: None if corpus_timedata["corpora"][c][date] == 0 else 0
-                for date in corpus_timedata["corpora"].get(c, {})
-            }
-
-            for i, s in enumerate(search_timedata):
-                prevdate = None
-                for basedate in sorted(basedates):
-                    if basedates[basedate] != prevdate:
-                        corpus_stats[i]["absolute"][basedate] = basedates[basedate]
-                        corpus_stats[i]["relative"][basedate] = basedates[basedate]
-                    prevdate = basedates[basedate]
-
-                for row in s.get(c, {}).items():
-                    date, count = row
-                    corpus_date_size = float(corpus_timedata["corpora"].get(c, {}).get(date, 0))
-                    if corpus_date_size > 0.0:
-                        corpus_stats[i]["absolute"][date] += count
-                        corpus_stats[i]["relative"][date] += count / corpus_date_size * RELATIVE_MULTIPLIER
-                        corpus_stats[i]["sums"]["absolute"] += count
-                        corpus_stats[i]["sums"]["relative"] += count / corpus_date_size * RELATIVE_MULTIPLIER
-
-                if frequency_params.subcqp and i > 0:
-                    corpus_stats[i]["cqp"] = frequency_params.subcqp[i - 1]
-
-            result["corpora"][c] = corpus_stats
+            corpus_periods = corpus_timedata.corpora.get(c, [])
+            result["corpora"][c] = []
+            for i, search_distribution in enumerate(search_timedata):
+                assert search_distribution.corpora is not None
+                result["corpora"][c].append(
+                    _time_statistics(
+                        corpus_periods,
+                        search_distribution.corpora.get(c, []),
+                        granularity,
+                        cqp_query=frequency_params.subcqp[i - 1] if i > 0 else None,
+                    )
+                )
 
     if include_combined:
-        total_stats = [
-            {"absolute": defaultdict(int), "relative": defaultdict(float), "sums": {"absolute": 0, "relative": 0.0}}
-            for _ in range(len(frequency_params.subcqp) + 1)
-        ]
-
-        basedates = {
-            date: None if corpus_timedata["combined"][date] == 0 else 0 for date in corpus_timedata.get("combined", {})
-        }
-
-        for i, s in enumerate(search_timedata_combined):
-            prevdate = None
-            for basedate in sorted(basedates):
-                if basedates[basedate] != prevdate:
-                    total_stats[i]["absolute"][basedate] = basedates[basedate]
-                    total_stats[i]["relative"][basedate] = basedates[basedate]
-                prevdate = basedates[basedate]
-
-            if s:
-                for row in s.items():
-                    date, count = row
-                    combined_date_size = float(corpus_timedata["combined"].get(date, 0))
-                    if combined_date_size > 0.0:
-                        total_stats[i]["absolute"][date] += count
-                        total_stats[i]["relative"][date] += (
-                            (count / combined_date_size * RELATIVE_MULTIPLIER) if combined_date_size else 0
-                        )
-                        total_stats[i]["sums"]["absolute"] += count
-
-            total_stats[i]["sums"]["relative"] = (
-                total_stats[i]["sums"]["absolute"] / float(ns.total_size) * RELATIVE_MULTIPLIER
-                if ns.total_size > 0
-                else 0.0
+        assert corpus_timedata.combined is not None
+        result["combined"] = []
+        for i, search_distribution in enumerate(search_timedata):
+            assert search_distribution.combined is not None
+            result["combined"].append(
+                _time_statistics(
+                    corpus_timedata.combined,
+                    search_distribution.combined,
+                    granularity,
+                    combined_total_size=ns.total_size,
+                    cqp_query=frequency_params.subcqp[i - 1] if i > 0 else None,
+                )
             )
-            if frequency_params.subcqp and i > 0:
-                total_stats[i]["cqp"] = frequency_params.subcqp[i - 1]
-
-        result["combined"] = total_stats
 
     yield result
 

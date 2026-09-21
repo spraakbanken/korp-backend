@@ -5,11 +5,12 @@ import math
 import operator
 import time
 from collections import Counter, defaultdict
-from collections.abc import AsyncIterator, Container, Mapping, Sequence
+from collections.abc import AsyncIterator, Container, Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from datetime import date
 from enum import StrEnum
-from typing import Annotated, Any, Literal, TypeAlias
+from typing import Annotated, Any, Literal, TypeAlias, cast
 
 from fastapi import APIRouter, Query
 from pydantic import BeforeValidator, Field
@@ -90,7 +91,7 @@ The statistical measures included in each row are controlled by `measures`. `fre
 relative MI.
 
 By default `/dependency-relations` returns overall relation statistics. Set `include_time=true` to also include
-time-sliced data in `relations_time`; use `/dependency-relations/time` when you only want the time-sliced view.
+time-sliced data in `periods`; use `/dependency-relations/time` when you only want the time-sliced view.
 
 With `stream=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
 final completion event.
@@ -104,8 +105,8 @@ Get dependency relations for the lexeme `ge..vb.1`:
 
 DEPENDENCY_RELATIONS_TIME_DESCRIPTION = """Get dependency relations grouped by year or multi-year period.
 
-The response groups rows in `relations_time` by period key. With `period_size=1`, keys are years such as `2018`; with
-larger periods, keys are ranges such as `2016-2018`. Undated material is grouped under an empty key.
+The response groups rows and their token totals in `periods` records. Dated records have inclusive ISO 8601 `start` and
+`end` boundaries; undated material has `dated: false` and no boundaries.
 
 Use `period_size` and `period_align` to control how years are grouped. `max_scope=per_period` applies `max_results`
 inside each period; `max_scope=overall` first selects the top overall relations and then returns time data only for
@@ -167,7 +168,7 @@ RelationsSortParam: TypeAlias = Annotated[
 
 RelationsIncludeTimeParam: TypeAlias = Annotated[
     bool,
-    Query(description="Whether `/dependency-relations` should include time-sliced results in `relations_time`."),
+    Query(description="Whether `/dependency-relations` should include time-sliced results in `periods`."),
 ]
 
 PeriodSizeParam: TypeAlias = Annotated[
@@ -284,6 +285,26 @@ class RelationsRange(schemas.ResponseModel):
     end: int = Field(..., description="Last year covered by the returned time range.", examples=[2020])
 
 
+class RelationsPeriod(schemas.ResponseModel):
+    """Dependency relations and token count for a dated period."""
+
+    start: date = Field(..., description="Inclusive ISO 8601 start boundary.", examples=["2010-01-01"])
+    end: date = Field(..., description="Inclusive ISO 8601 end boundary.", examples=["2011-12-31"])
+    tokens: int = Field(..., description="Total corpus tokens in the period.", examples=[123456])
+    relations: list[RelationRow] = Field(..., description="Dependency relation rows for the period.")
+
+
+class UndatedRelationsPeriod(schemas.ResponseModel):
+    """Dependency relations and token count for undated material."""
+
+    dated: Literal[False] = Field(..., description="Always false for undated material.")
+    tokens: int = Field(..., description="Total undated corpus tokens.", examples=[42])
+    relations: list[RelationRow] = Field(..., description="Dependency relation rows for undated material.")
+
+
+RelationsPeriodRecord: TypeAlias = RelationsPeriod | UndatedRelationsPeriod
+
+
 class RelationsResponse(schemas.CommonResponse):
     """Response model for `/dependency-relations` and `/dependency-relations/time` routes."""
 
@@ -291,17 +312,12 @@ class RelationsResponse(schemas.CommonResponse):
         None,
         description="Overall relation rows. Included when overall relation output is requested.",
     )
-    relations_time: dict[str, list[RelationRow]] | SkipJsonSchema[None] = Field(
+    periods: list[RelationsPeriodRecord] | SkipJsonSchema[None] = Field(
         None,
         description=(
-            "Time-sliced relation rows keyed by year or period. Included when `include_time=true` on "
+            "Time period records containing token totals and relation rows. Included when `include_time=true` on "
             "`/dependency-relations` or when using `/dependency-relations/time`."
         ),
-    )
-    token_frequencies: dict[str, int] | SkipJsonSchema[None] = Field(
-        None,
-        description="Total token frequencies for the same time buckets as `relations_time`.",
-        examples=[{"2017": 15366, "2018": 7437}],
     )
     range: RelationsRange | SkipJsonSchema[None] = Field(
         None,
@@ -309,7 +325,7 @@ class RelationsResponse(schemas.CommonResponse):
     )
     period_size: int | SkipJsonSchema[None] = Field(
         None,
-        description="Number of years represented by each period key in `relations_time`.",
+        description="Requested number of years represented by each dated period.",
         examples=[1],
     )
 
@@ -1447,13 +1463,6 @@ def _build_time_rows(
     return rows
 
 
-def _period_bucket_key(period_start: object, period_end: object, period_size: int) -> str:
-    """Return the serialized bucket key for period-based output."""
-    if period_size > 1:
-        return f"{period_start}-{period_end}" if period_start is not None and period_end is not None else ""
-    return str(period_start if period_start is not None else "")
-
-
 def _build_period_token_totals(
     corpus_size_per_year: Mapping[int | None, int],
     *,
@@ -1462,8 +1471,8 @@ def _build_period_token_totals(
     start_year: int | None,
     end_year: int | None,
     bounds: tuple[int, int] | None = None,
-) -> dict[str, int]:
-    """Aggregate total token frequencies into the same period buckets as `relations_time`.
+) -> dict[tuple[int | None, int | None], int]:
+    """Aggregate total token frequencies into the same buckets as the relation periods.
 
     Args:
         corpus_size_per_year: Mapping of year to total token frequency for selected corpora.
@@ -1474,7 +1483,7 @@ def _build_period_token_totals(
         bounds: Optional precomputed period bounds.
 
     Returns:
-        Mapping from serialized period keys to token totals.
+        Mapping from period-boundary pairs to token totals.
     """
     if not corpus_size_per_year:
         return {}
@@ -1535,10 +1544,70 @@ def _build_period_token_totals(
             key[1] if key[1] is not None else float("inf"),
         ),
     )
-    return {
-        _period_bucket_key(period_start, period_end, period_size): bucket_totals[period_start, period_end]
-        for period_start, period_end in sorted_bucket_keys
+    return {key: bucket_totals[key] for key in sorted_bucket_keys}
+
+
+def _token_totals_by_year(
+    corpora: Mapping[str, list[token_distribution.TokenPeriodData]],
+) -> dict[int | None, int]:
+    """Expand yearly token periods into combined per-year totals.
+
+    Returns:
+        Token totals keyed by year, with `None` for undated material.
+    """
+    totals: dict[int | None, int] = defaultdict(int)
+    for periods in corpora.values():
+        for period in periods:
+            if not period.dated:
+                totals[None] += period.tokens
+                continue
+            assert period.start is not None
+            assert period.end is not None
+            for year in range(period.start, period.end + 1):
+                totals[year] += period.tokens
+    return totals
+
+
+def _serialize_relation_periods(
+    token_totals: Mapping[tuple[int | None, int | None], int],
+    rows: Iterable[dict[str, object]],
+    measures: Container[Measures],
+) -> list[dict[str, object]]:
+    """Combine token totals and relation rows into period records.
+
+    Returns:
+        Dated period records followed by an undated record when present.
+    """
+    periods: dict[tuple[int | None, int | None], dict[str, object]] = {
+        bounds: {"tokens": tokens, "relations": []} for bounds, tokens in token_totals.items()
     }
+    for row in rows:
+        bounds = (cast("int | None", row["period_start"]), cast("int | None", row["period_end"]))
+        period = periods.setdefault(bounds, {"tokens": 0, "relations": []})
+        relations = period["relations"]
+        assert isinstance(relations, list)
+        relations.append(_relation_output(row, measures))
+
+    def sort_key(bounds: tuple[int | None, int | None]) -> tuple[int, float, float]:
+        return (
+            1 if bounds[0] is None else 0,
+            float("inf") if bounds[0] is None else bounds[0],
+            float("inf") if bounds[1] is None else bounds[1],
+        )
+
+    result = []
+    for (period_start, period_end), period in sorted(periods.items(), key=lambda item: sort_key(item[0])):
+        if period_start is None or period_end is None:
+            result.append({"dated": False, **period})
+        else:
+            result.append(
+                {
+                    "start": f"{period_start:04d}-01-01",
+                    "end": f"{period_end:04d}-12-31",
+                    **period,
+                }
+            )
+    return result
 
 
 def _limit_rows_per_bucket(
@@ -1790,10 +1859,8 @@ async def _dependency_relations_impl(
     )
 
     # Sum up total frequencies per year
-    corpus_size_per_year: dict[int | None, int] = defaultdict(int)
-    for corpus in corpus_timedata.get("corpora", {}):
-        for year, freq in corpus_timedata["corpora"][corpus].items():
-            corpus_size_per_year[int(year) if year != "" else None] += freq
+    assert corpus_timedata.corpora is not None
+    corpus_size_per_year = _token_totals_by_year(corpus_timedata.corpora)
 
     if time_filter:
         filtered_sizes: dict[int | None, int] = {}
@@ -1830,8 +1897,9 @@ async def _dependency_relations_impl(
         start_year=start_year,
         end_year=end_year,
     )
+    period_token_totals: dict[tuple[int | None, int | None], int] = {}
     if include_split:
-        result["token_frequencies"] = _build_period_token_totals(
+        period_token_totals = _build_period_token_totals(
             corpus_size_per_year,
             period_size=period_size,
             period_align=period_align,
@@ -1888,16 +1956,8 @@ async def _dependency_relations_impl(
         if not limit_per_period:
             # max_scope=overall: time results must be scoped to selected overall relations
             selected_keys = [entry["key"] for entry in selected_entries]
-    else:
-        # No overall entries available
-        if include_overall:
-            result["relations"] = []
-        if not limit_per_period:
-            # max_scope=overall was requested but there are no overall entries, so return early
-            if include_split:
-                result["relations_time"] = {}
-            yield result
-            return
+    elif include_overall:
+        result["relations"] = []
 
     # Build per-year/per-period outputs when requested
     if include_split:
@@ -1907,28 +1967,21 @@ async def _dependency_relations_impl(
         if include_periods:
             per_period_rows.extend(_build_time_rows(acc, per_period_map, None if limit_per_period else selected_keys))
 
-        if per_period_rows:
-            if limit_per_period and max_results is not None:
-                per_period_rows = _limit_rows_per_bucket(per_period_rows, "period_start", sort_field.value, max_results)
-            per_period_rows.sort(
-                key=lambda row: (
-                    row["relation"],
-                    row["head"],
-                    row["dependent"],
-                    1 if row["period_start"] is None else 0,
-                    row["period_start"],
-                )
+        if limit_per_period and max_results is not None:
+            per_period_rows = _limit_rows_per_bucket(per_period_rows, "period_start", sort_field.value, max_results)
+        per_period_rows.sort(
+            key=lambda row: (
+                row["relation"],
+                row["head"],
+                row["dependent"],
+                1 if row["period_start"] is None else 0,
+                row["period_start"],
             )
-            if bounds is not None:
-                result["range"] = {"start": bounds[0], "end": bounds[1]}
-            result["period_size"] = period_size
-            grouped_time_result = {}
-            for row in per_period_rows:
-                bucket_key = _period_bucket_key(row["period_start"], row["period_end"], period_size)
-                grouped_time_result.setdefault(bucket_key, []).append(_relation_output(row, measures))
-            result["relations_time"] = grouped_time_result
-        else:
-            result["relations_time"] = {}
+        )
+        if bounds is not None:
+            result["range"] = {"start": bounds[0], "end": bounds[1]}
+        result["period_size"] = period_size
+        result["periods"] = _serialize_relation_periods(period_token_totals, per_period_rows, measures)
 
     yield result
 
