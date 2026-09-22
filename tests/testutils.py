@@ -8,7 +8,7 @@ from typing import Any, cast
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
-from httpx import Response
+from httpx2 import Response
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from korp.api.schemas import StreamCompleteEvent, StreamErrorEvent, StreamEvent, StreamResultEvent

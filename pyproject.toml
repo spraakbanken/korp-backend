@@ -44,7 +44,7 @@ dev = [
     {include-group = "test"}
 ]
 test = [
-    "httpx~=0.28.0",  # For the test client
+    "httpx2~=2.13.0",  # For the test client
     "pytest~=9.0",
     "PyMySQL~=1.1",  # Sync MySQL driver used by test DB utilities
     "pytest-sugar",
