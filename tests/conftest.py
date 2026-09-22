@@ -119,6 +119,7 @@ def app_factory(
         """Return Korp app instance with config overriding defaults."""
         base_config = {
             "TESTING": True,
+            "MEMCACHED_SERVER": None,
             "CWB_REGISTRY": str(corpus_registry_dir),
             "CACHE_DIR": str(cache_dir),
             "CORPUS_CONFIG_DIR": str(corpus_config_dir),
