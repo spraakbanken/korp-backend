@@ -10,11 +10,11 @@ import json
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sized
 from dataclasses import dataclass, replace
 from functools import update_wrapper
 from logging import getLogger
-from typing import Any, TypeAlias
+from typing import Any, NoReturn, TypeAlias
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
@@ -62,6 +62,61 @@ class ProgressEvent:
 
 
 ResponseFragment: TypeAlias = dict[str, Any] | ProgressEvent
+
+
+def _reject_unsupported_route_result(result: object) -> NoReturn:
+    """Reject a route result that is not of a supported type.
+
+    Raises:
+        TypeError: Always, with the unsupported result type.
+    """
+    raise TypeError(
+        "API routes must return a dictionary, an iterator of result fragments, or a Response; "
+        f"got {type(result).__name__}."
+    )
+
+
+def _validate_result_fragment(fragment: object, seen_keys: set[str]) -> dict[str, Any]:
+    """Validate a result fragment emitted by a route, ensuring it is a non-empty object with unique string keys.
+
+    Args:
+        fragment: Next value emitted by the route.
+        seen_keys: Top-level keys contributed by preceding fragments.
+
+    Returns:
+        The validated result fragment.
+
+    Raises:
+        TypeError: If the fragment is not an object or has a non-string key.
+        ValueError: If the fragment is empty, contains the reserved `elapsed` field, or repeats a preceding key.
+    """
+    if not isinstance(fragment, dict):
+        raise TypeError(f"Result fragments must be dictionaries, got {type(fragment).__name__}.")
+    if not fragment:
+        raise ValueError("Result fragments must not be empty.")
+
+    if any(not isinstance(key, str) for key in fragment):
+        raise TypeError("Result fragment keys must be strings.")
+    if "elapsed" in fragment:
+        raise ValueError("The result key 'elapsed' is reserved for the complete event.")
+
+    duplicate_keys = seen_keys & fragment.keys()
+    if duplicate_keys:
+        names = ", ".join(sorted(duplicate_keys))
+        raise ValueError(f"Result fragment repeats top-level key(s): {names}.")
+
+    seen_keys.update(fragment)
+    return fragment
+
+
+def _require_result_fields(seen_keys: Sized) -> None:
+    """Require a decorated route to produce at least one result field.
+
+    Raises:
+        ValueError: If the route produced no result fragments.
+    """
+    if not seen_keys:
+        raise ValueError("API routes must produce at least one non-empty result object.")
 
 
 def iter_api_route_contexts(app: FastAPI) -> Iterator[RouteContext]:
@@ -201,8 +256,12 @@ def docs_response(
     # The regular application/json schema is added automatically by FastAPI.
     ndjson_record_schema = TypeAdapter(StreamEvent).json_schema()
     ndjson_record_schema["description"] = (
-        "Schema for each line in the NDJSON stream returned when `stream=true`. Result `data` objects are "
-        "fragments of the ordinary JSON response and are merged in the order they are received."
+        "Schema for each line in the NDJSON stream returned when `stream=true`. To assemble a successful response, "
+        "start with an empty object and copy each top-level member of every result event's `data` object into it in "
+        "the order they appear. A top-level result key may occur in only one result event, so no merging or appending "
+        "of nested objects or arrays is needed. A successful stream contains at least one non-empty result event. "
+        "After `complete` with `ok=true`, copy its `elapsed` value into the assembled object. The assembled object "
+        "then conforms to this operation's ordinary `application/json` success schema."
     )
     response["content"] = {
         "application/x-ndjson": {
@@ -536,8 +595,10 @@ def api_handler(
     - A regular route coroutine can perform preflight validation and setup, then return an async or sync iterator for
       the long-running work. Work done before that iterator is returned cannot send NDJSON keepalive events, so
       long-running streamed work should happen in the returned iterator.
-    - A route can also return a single dictionary or another non-iterator value. Such a value is sent as one result, and
-      keepalive output cannot be sent while the route computes it.
+    - A route can also return a single dictionary. It is sent as one result, and keepalive output cannot be sent while
+      the route computes it.
+    - Every successful route must produce at least one non-empty result object. The `elapsed` field is response metadata
+      added by the handler and is not sufficient result data by itself.
 
     Every route is required to have the following parameter (named either "ctx" or "_ctx"), which injects the request
     context, containing common parameters and other commonly used objects. GET routes using a query request model
@@ -554,7 +615,7 @@ def api_handler(
     Decorated routes can either:
       - yield dict result fragments or ProgressEvent objects from a generator or async generator
       - return a sync or async iterator yielding dict result fragments or ProgressEvent objects
-      - return a dict or another value to send as one result
+      - return a dict to send as one result
       - return Response to bypass the decorator's JSON streaming, error formatting, and timing output. Cache headers
         and rate-limit headers may still be added.
 
@@ -703,34 +764,43 @@ def api_handler(
                     result.headers[header_name] = header_value
                 return result
 
-            fragments = result  # dict OR iterator/generator OR other value
+            fragments = result  # dict or iterator/generator
 
             if not common.stream:
                 result_obj: dict[str, Any] = {}
+                seen_result_keys: set[str] = set()
+
+                def merge_fragment(fragment: object) -> None:
+                    result_obj.update(_validate_result_fragment(fragment, seen_result_keys))
+
                 try:
                     if isinstance(fragments, dict):
-                        result_obj.update(fragments)
+                        merge_fragment(fragments)
                     elif hasattr(fragments, "__aiter__"):
                         async for item in fragments:
-                            if item and isinstance(item, dict):
-                                result_obj.update(item)
+                            if isinstance(item, ProgressEvent):
+                                continue
+                            merge_fragment(item)
                     elif hasattr(fragments, "__iter__") and not isinstance(
                         fragments, (str, bytes, bytearray, list, tuple)
                     ):
 
                         def consume_sync_iter() -> dict[str, Any]:
                             merged: dict[str, Any] = {}
+                            seen_keys: set[str] = set()
                             for item in fragments:
                                 if abort.is_set():
                                     break
-                                if item and isinstance(item, dict):
-                                    merged.update(item)
+                                if isinstance(item, ProgressEvent):
+                                    continue
+                                merged.update(_validate_result_fragment(item, seen_keys))
                             return merged
 
                         # Run the synchronous iterator in a thread to avoid blocking the event loop
                         result_obj.update(await asyncio.to_thread(consume_sync_iter))
                     else:
-                        result_obj["data"] = fragments
+                        _reject_unsupported_route_result(fragments)
+                    _require_result_fields(result_obj)
                 except asyncio.CancelledError:
                     abort.set()
                     await stop_watchdog()
@@ -774,9 +844,16 @@ def api_handler(
                 Producer also respects abort_signal to stop processing if client disconnects.
                 """
                 loop = asyncio.get_running_loop()
+                seen_result_keys: set[str] = set()
+
+                def validate_item(item: object) -> None:
+                    if not isinstance(item, ProgressEvent):
+                        _validate_result_fragment(item, seen_result_keys)
+
                 try:
                     # Result is dict -> push and exit
                     if isinstance(fragments, dict):
+                        validate_item(fragments)
                         await queue.put(fragments)
                         return
 
@@ -785,7 +862,9 @@ def api_handler(
                         async for item in fragments:
                             if abort.is_set():
                                 return
+                            validate_item(item)
                             await queue.put(item)
+                        _require_result_fields(seen_result_keys)
                         return
 
                     # Sync generator/iterator -> run in thread
@@ -797,13 +876,17 @@ def api_handler(
                             for item in fragments:
                                 if abort.is_set():
                                     return
+                                validate_item(item)
                                 loop.call_soon_threadsafe(queue.put_nowait, item)
 
                         await asyncio.to_thread(run_sync_iter)
+                        if abort.is_set():
+                            return
+                        _require_result_fields(seen_result_keys)
                         return
 
-                    # Any other return value -> wrap
-                    await queue.put({"data": fragments})
+                    # Any other return type is unsupported and rejected
+                    _reject_unsupported_route_result(fragments)
 
                 except Exception as exc:
                     await queue.put(exc)
@@ -842,11 +925,6 @@ def api_handler(
                                 )
                             yield (json.dumps({"event": "error", "error": problem}) + "\n").encode("utf-8")
                             break
-
-                        if not item:
-                            # Allow routes to yield empty items as keepalive.
-                            yield b'{"event": "keepalive"}\n'
-                            continue
 
                         event = item.as_dict() if isinstance(item, ProgressEvent) else {"event": "result", "data": item}
                         yield (json.dumps(event) + "\n").encode("utf-8")

@@ -55,7 +55,14 @@ class StreamResultEvent(ResponseModel):
     """One result fragment from a streamed response."""
 
     event: Literal["result"]
-    data: dict[str, Any] = Field(..., description="Result fragment to merge with preceding result fragments.")
+    data: dict[str, Any] = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Non-empty fragment of the ordinary JSON response. Each top-level key may occur in only one result event. "
+            "The `elapsed` key is reserved for the complete event."
+        ),
+    )
 
 
 class StreamErrorEvent(ResponseModel):

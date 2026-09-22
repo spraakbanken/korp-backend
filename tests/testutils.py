@@ -88,6 +88,10 @@ def validate_ndjson_contract(body: bytes | str, model: type[BaseModel]) -> BaseM
     result: dict[str, Any] = {}
     for event in events:
         if isinstance(event, StreamResultEvent):
+            assert event.data, "NDJSON result event contains an empty data object"
+            assert "elapsed" not in event.data, "NDJSON result event contains the reserved 'elapsed' key"
+            duplicate_keys = result.keys() & event.data.keys()
+            assert not duplicate_keys, f"NDJSON result event repeats top-level key(s): {sorted(duplicate_keys)}"
             result.update(event.data)
     result["elapsed"] = events[-1].elapsed
 
