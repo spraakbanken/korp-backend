@@ -141,9 +141,25 @@ async def get_query_ctx(request: Request) -> Ctx:  # noqa: RUF029
     )
 
 
+async def get_admin_ctx(request: Request) -> Ctx:  # noqa: RUF029
+    """Build a context for administrative routes without public response controls.
+
+    Returns:
+        A request context with streaming, debug output, indentation, and request-controlled caching disabled.
+    """
+    return Ctx(
+        request=request,
+        common=CommonParams(cache=False),
+        cache=request.app.state.memcached,
+        db=request.app.state.db,
+        cwb=request.app.state.cwb,
+    )
+
+
 # Convenience type alias for declaring Ctx dependencies in routes
 CtxDep = Annotated[Ctx, Depends(get_ctx)]
 QueryCtxDep = Annotated[Ctx, Depends(get_query_ctx)]
+AdminCtxDep = Annotated[Ctx, Depends(get_admin_ctx)]
 
 
 @dataclass

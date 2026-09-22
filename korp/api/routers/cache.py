@@ -10,7 +10,7 @@ from pydantic.json_schema import SkipJsonSchema
 from korp import caching
 from korp.api import schemas
 from korp.config import settings
-from korp.dependencies import CtxDep
+from korp.dependencies import AdminCtxDep
 from korp.handler import api_handler, docs_response
 
 router = APIRouter(tags=["Administration"])
@@ -72,7 +72,7 @@ class CacheResponse(schemas.CommonResponse):
     operation_id="post_admin_cache_refresh",
 )
 @api_handler(cache_headers=False)
-async def cache_handler(ctx: CtxDep) -> dict:
+async def cache_handler(ctx: AdminCtxDep) -> dict:
     """Check for updated corpora and invalidate caches where needed, and remove old cache files.
 
     Returns:

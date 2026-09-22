@@ -26,7 +26,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from korp.api.requests import CommonQueryControls, QueryRequestModel, RequestModel
 from korp.config import settings
-from korp.dependencies import AbortSignal, Ctx, CtxDep, QueryCtxDep, build_common_params
+from korp.dependencies import AbortSignal, AdminCtxDep, Ctx, CtxDep, QueryCtxDep, build_common_params
 
 logger = getLogger(__name__)
 
@@ -314,16 +314,17 @@ def enforce_ctx_dependency(
 ) -> None:
     """Strictly enforce that every APIRoute endpoint has the required 'ctx' parameter.
 
-    Every route is expected to have a parameter named 'ctx' or '_ctx' with the annotation 'CtxDep' or 'QueryCtxDep',
-    which injects the request context, containing common parameters and other commonly used objects. GET routes using a
-    query request model need to use 'QueryCtxDep'.
+    Every route is expected to have a parameter named 'ctx' or '_ctx' with the annotation 'CtxDep', 'QueryCtxDep', or
+    'AdminCtxDep', which injects the request context, containing common parameters and other commonly used objects. GET
+    routes using a query request model need to use 'QueryCtxDep'. Administrative routes without public response controls
+    use 'AdminCtxDep'.
 
     Raises:
         RuntimeError: If any route is missing the required 'ctx' or '_ctx' parameter or has incorrect annotation.
     """
     param_name = "ctx"
-    ctx_dependencies = {CtxDep, QueryCtxDep}
-    ctx_dependency_name = "CtxDep or QueryCtxDep"  # For error messages
+    ctx_dependencies = {CtxDep, QueryCtxDep, AdminCtxDep}
+    ctx_dependency_name = "CtxDep, QueryCtxDep, or AdminCtxDep"  # For error messages
     violations: list[str] = []
 
     for route_context in iter_api_route_contexts(app):
@@ -602,7 +603,8 @@ def api_handler(
 
     Every route is required to have the following parameter (named either "ctx" or "_ctx"), which injects the request
     context, containing common parameters and other commonly used objects. GET routes using a query request model
-    (usually routes with corresponding POST routes) need to use `QueryCtxDep`; all other routes use `CtxDep`:
+    (usually routes with corresponding POST routes) use `QueryCtxDep`; administrative routes without public response
+    controls use `AdminCtxDep`; all other routes use `CtxDep`:
 
         ctx: CtxDep
 
