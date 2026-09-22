@@ -22,14 +22,15 @@ in Memcached. When a corpus or configuration has changed, the corresponding cach
 requests stop using stale cached data. The route also removes expired concordance query data files from the cache
 directory.
 
-If caching is disabled, the response contains only the common response fields. During first-time cache setup,
-`initial_setup` is returned and no invalidation counters are included.
+The `cache_enabled` field reports whether caching is active. During first-time cache setup, `initial_setup` is returned
+and no invalidation counters are included.
 """
 
 
 class CacheResponse(schemas.CommonResponse):
     """Response model for `/admin/cache/refresh` route."""
 
+    cache_enabled: bool = Field(..., description="Whether caching is enabled for this backend instance.")
     initial_setup: bool | SkipJsonSchema[None] = Field(
         None,
         description="Whether cache metadata was initialized for the first time.",
@@ -78,16 +79,17 @@ async def cache_handler(ctx: CtxDep) -> dict:
         A dictionary with cache invalidation results.
     """
     if not ctx.request.app.state.cache_enabled:
-        return {}
+        return {"cache_enabled": False}
 
     cache = ctx.cache
     assert settings.CACHE_DIR
 
     # Set up caching if needed
     if await caching.setup_cache(cache):
-        return {"initial_setup": True}
+        return {"cache_enabled": True, "initial_setup": True}
 
     result = {
+        "cache_enabled": True,
         "multi_invalidated": False,
         "multi_config_invalidated": False,
         "corpora_invalidated": 0,
