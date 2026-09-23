@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, overload
 
+from korp import utils
 from korp.config import settings
 
 if TYPE_CHECKING:
@@ -18,7 +19,7 @@ def get_corpus_timestamps() -> dict[str, float]:
         A dictionary mapping corpus names to their modification timestamps.
     """
     assert settings.CWB_REGISTRY is not None  # Should be guaranteed by settings validation
-    return {f.name.upper(): f.stat().st_mtime for f in Path(settings.CWB_REGISTRY).glob("*")}
+    return {utils.normalize_corpus_id(f.name): f.stat().st_mtime for f in Path(settings.CWB_REGISTRY).glob("*")}
 
 
 def get_corpus_config_timestamps() -> tuple[dict[str, float], float, float]:
@@ -33,7 +34,8 @@ def get_corpus_config_timestamps() -> tuple[dict[str, float], float, float]:
     if not settings.CORPUS_CONFIG_DIR:
         return {}, 0, 0
     corpora = {
-        f.name[:-5].upper(): f.stat().st_mtime for f in Path(settings.CORPUS_CONFIG_DIR, "corpora").glob("*.yaml")
+        utils.normalize_corpus_id(f.name[:-5]): f.stat().st_mtime
+        for f in Path(settings.CORPUS_CONFIG_DIR, "corpora").glob("*.yaml")
     }
     modes = max((f.stat().st_mtime for f in Path(settings.CORPUS_CONFIG_DIR, "modes").glob("*.yaml")), default=0)
     presets = max(

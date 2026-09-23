@@ -8,6 +8,8 @@ from collections import defaultdict
 from collections.abc import Sequence
 from enum import Enum
 
+from korp import utils
+
 # Special symbols used when parsing CQP results; should not appear in corpus data
 END_OF_LINE = "-::-EOL-::-"
 LEFT_DELIM = "---:::"
@@ -54,7 +56,7 @@ def parse_within(within: Sequence[str] | None, default_within: str | None = None
         if ":" not in pair:
             raise ValueError("Malformed value for key 'within'.")
         corpus, within_value = pair.split(":", 1)
-        within_dict[corpus.upper()] = within_value
+        within_dict[utils.normalize_corpus_id(corpus)] = within_value
     return within_dict
 
 

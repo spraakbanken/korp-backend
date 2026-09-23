@@ -135,7 +135,7 @@ class TestConcordanceSample:
         data = concordance_sample_testcorpus("[]")
 
         assert len(data["kwic"]) == 1
-        assert data["corpus_order"] == ["TESTCORPUS"]
+        assert data["corpus_order"] == ["testcorpus"]
         assert "total_hits" not in data
         assert "hits_by_corpus" not in data
         assert "pagination_state" not in data

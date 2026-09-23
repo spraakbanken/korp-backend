@@ -205,7 +205,7 @@ class TokenDistributionResponse(schemas.CommonResponse):
     corpora: dict[str, list[TokenDistributionPeriodRecord]] | SkipJsonSchema[None] = Field(
         None,
         description=("Token-count periods keyed by corpus id. Omitted when `include_per_corpus=false`."),
-        examples=[{"ROMI": [{"start": "2017-01-01", "end": "2017-12-31", "tokens": 15366}]}],
+        examples=[{"romi": [{"start": "2017-01-01", "end": "2017-12-31", "tokens": 15366}]}],
     )
     combined: list[TokenDistributionPeriodRecord] | SkipJsonSchema[None] = Field(
         None,
@@ -585,7 +585,7 @@ async def get_token_distribution(
         bind_params: dict[str, Any] = {}
         corpus_placeholders = ", ".join(f":corpus_{i}" for i in range(len(corpora_rest)))
         for i, c in enumerate(corpora_rest):
-            bind_params[f"corpus_{i}"] = c
+            bind_params[f"corpus_{i}"] = c.upper()
 
         fromto = ""
         if strategy == params.StrategyValues.some_overlaps:
@@ -642,7 +642,11 @@ async def get_token_distribution(
                 fetch_start = perf_counter()
                 query_result = await conn.execute(sql, bind_params)
                 rows_result = query_result.mappings().all()
-                rows = [dict(row) for row in rows_result]
+                rows = []
+                for row in rows_result:
+                    normalized_row = dict(row)
+                    normalized_row["corpus"] = utils.normalize_corpus_id(normalized_row["corpus"])
+                    rows.append(normalized_row)
                 fetch_duration = perf_counter() - fetch_start
             except Exception:
                 await conn.invalidate()

@@ -47,7 +47,7 @@ class FakeCWB:
 
         expected_batch_cmd: list[str] = []
         for corpus in self.corpora:
-            expected_batch_cmd += [f"{corpus};", "info; .EOL.;"]
+            expected_batch_cmd += [f"{corpus.upper()};", "info; .EOL.;"]
         expected_batch_cmd += ["exit;"]
         assert command == expected_batch_cmd
 
@@ -97,7 +97,7 @@ class FakeCache:
 
 @pytest.mark.parametrize("authorizer_cls", [Auth, AuthJWT])
 def test_get_protected_corpora_uses_batched_cwb_info_calls(authorizer_cls: type[Auth] | type[AuthJWT]) -> None:
-    """Read corpus info in one CQP invocation and return uppercase protected ids."""
+    """Read corpus info in one CQP invocation and return lowercase protected ids."""
 
     async def _run() -> None:
         cwb = FakeCWB(corpora=["alpha", "BETA", "gamma"], protected={"alpha": True, "BETA": False})
@@ -105,10 +105,10 @@ def test_get_protected_corpora_uses_batched_cwb_info_calls(authorizer_cls: type[
 
         protected = await authorizer.get_protected_corpora(SimpleNamespace(cache_enabled=False))  # pyright: ignore
 
-        assert protected == ["ALPHA"]
+        assert protected == ["alpha"]
         assert cwb.calls == [
             "show corpora;",
-            ["alpha;", "info; .EOL.;", "BETA;", "info; .EOL.;", "gamma;", "info; .EOL.;", "exit;"],
+            ["ALPHA;", "info; .EOL.;", "BETA;", "info; .EOL.;", "GAMMA;", "info; .EOL.;", "exit;"],
         ]
 
     anyio.run(_run)
@@ -141,16 +141,16 @@ def test_get_protected_corpora_reads_protected_flag_from_corpus_info_cache(
         cache = FakeCache(
             {
                 "alpha:version": 7,
-                "BETA:version": 11,
+                "beta:version": 11,
                 "alpha:7:info": {"info": {"Protected": "true"}},
-                "BETA:11:info": {"info": {"Protected": "false"}},
+                "beta:11:info": {"info": {"Protected": "false"}},
             }
         )
         authorizer = authorizer_cls(cwb=cwb, cache=cache)  # pyright: ignore
 
         protected = await authorizer.get_protected_corpora(SimpleNamespace(cache_enabled=True))  # pyright: ignore
 
-        assert protected == ["ALPHA"]
+        assert protected == ["alpha"]
         assert cwb.calls == ["show corpora;"]
         assert len(cache.set_many_calls) == 1
 
@@ -167,16 +167,16 @@ def test_get_protected_corpora_uses_plugin_scoped_protection_cache(authorizer_cl
         cache = FakeCache(
             {
                 "alpha:version": 7,
-                "BETA:version": 11,
+                "beta:version": 11,
                 f"alpha:7:{suffix}": {"protected": True, "details": {"license": "a"}},
-                f"BETA:11:{suffix}": {"protected": False, "details": {}},
+                f"beta:11:{suffix}": {"protected": False, "details": {}},
             }
         )
         authorizer = authorizer_cls(cwb=cwb, cache=cache)  # pyright: ignore
 
         protected = await authorizer.get_protected_corpora(SimpleNamespace(cache_enabled=True))  # pyright: ignore
 
-        assert protected == ["ALPHA"]
+        assert protected == ["alpha"]
         assert cwb.calls == ["show corpora;"]
         assert cache.set_many_calls == []
 

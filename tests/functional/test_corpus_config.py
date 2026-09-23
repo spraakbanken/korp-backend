@@ -20,6 +20,7 @@ class TestCorpusConfig:
         assert data["label"]
         assert data["corpora"]
         assert data["modes"]
+        assert data["preselected_corpora"] == ["testcorpus"]
         corpus_config = data["corpora"]["testcorpus"]
         assert corpus_config
         assert corpus_config["pos_attributes"]

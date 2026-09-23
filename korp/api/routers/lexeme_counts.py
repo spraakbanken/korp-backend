@@ -29,7 +29,7 @@ with `0`.
 
 Get the number of occurrences of two lexemes in one corpus:
 
-`/lexeme-counts?lexemes=ge..vb.1,ta..vb.1&corpora=ROMI`
+`/lexeme-counts?lexemes=ge..vb.1,ta..vb.1&corpora=romi`
 """
 
 LexemesParam: TypeAlias = Annotated[
@@ -81,7 +81,7 @@ async def _lexeme_counts_stream(ctx: CtxDep, lexemes: list[str], corpora: list[s
 
     corpus_placeholders = ", ".join(f":corpus_{i}" for i in range(len(corpora)))
     for i, c in enumerate(corpora):
-        bind_params[f"corpus_{i}"] = c
+        bind_params[f"corpus_{i}"] = c.upper()
     corpora_sql = f" AND corpus IN ({corpus_placeholders})"
 
     sql = text(f"""

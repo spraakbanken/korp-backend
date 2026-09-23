@@ -14,12 +14,12 @@ NonEmptyString: TypeAlias = Annotated[str, StringConstraints(min_length=1)]
 CorporaParam: TypeAlias = Annotated[
     list[NonEmptyString],
     Query(
-        description=("Corpus ids to query. Corpus ids are case-insensitive."),
-        examples=[["ROMI", "SUC3"]],
+        description=("Corpus ids to query. Corpus ids are case-insensitive and normalized to lowercase."),
+        examples=[["romi", "suc3"]],
         min_length=1,
     ),
     BeforeValidator(utils.split_csv),
-    AfterValidator(lambda v: sorted({x.strip().upper() for x in v})),
+    AfterValidator(lambda v: sorted({utils.normalize_corpus_id(x) for x in v})),
 ]
 
 CQPParam: TypeAlias = Annotated[
@@ -54,7 +54,7 @@ WithinParam: TypeAlias = Annotated[
             "Per-corpus structural unit that query matches must stay inside, overriding `default_within` for the "
             "specified corpora. Each value uses `CORPUS:structure`."
         ),
-        examples=[["ROMI:paragraph", "SUC3:sentence"]],
+        examples=[["romi:paragraph", "suc3:sentence"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -77,7 +77,7 @@ ContextParam: TypeAlias = Annotated[
             "Per-corpus context to return around each match, overriding `default_context` for the specified corpora. "
             "Each value uses `CORPUS:<number> <unit>`."
         ),
-        examples=[["ROMI:1 sentence", "SUC3:10 word"]],
+        examples=[["romi:1 sentence", "suc3:10 word"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -95,9 +95,7 @@ ExpandPrequeriesParam: TypeAlias = Annotated[
 
 DateValue: TypeAlias = Annotated[
     str,
-    StringConstraints(
-        pattern=r"^(\d{8}(\d{6})?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$"
-    ),
+    StringConstraints(pattern=r"^(\d{8}(\d{6})?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$"),
 ]
 
 

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import jwt  # type: ignore
 
-from korp import auth, plugin
+from korp import auth, plugin, utils
 from korp.dependencies import AuthContext
 from plugins import protection_cwb
 
@@ -60,11 +60,11 @@ class AuthJWT(auth.Authorizer):
         """Get list of corpora with restricted access.
 
         Returns:
-            Uppercased corpus ids marked as protected.
+            Lowercase corpus ids marked as protected.
         """
         corpora = protection_cwb.list_corpora(self.cwb)
         protection_info = await self._get_protection_info(corpora, auth_ctx)
-        return [corpus.upper() for corpus in corpora if protection_info[corpus].protected]
+        return [corpus for corpus in corpora if protection_info[corpus].protected]
 
     async def check_authorization(
         self, corpora: list[str], auth_ctx: AuthContext
@@ -81,9 +81,8 @@ class AuthJWT(auth.Authorizer):
                 - A list of unauthorized corpora (if access is denied).
                 - An optional message (e.g., for errors).
         """
-        corpora_upper = [corpus.upper() for corpus in corpora]
-        protection_info = await self._get_protection_info(corpora_upper, auth_ctx)
-        protected_requested = [corpus for corpus in corpora_upper if protection_info[corpus].protected]
+        protection_info = await self._get_protection_info(corpora, auth_ctx)
+        protected_requested = [corpus for corpus in corpora if protection_info[corpus].protected]
         if protected_requested:
             user_corpora = []
 
@@ -105,7 +104,9 @@ class AuthJWT(auth.Authorizer):
                 if user_token.get("exp") and user_token["exp"] < time.time():
                     return False, [], "The provided JWT has expired"
 
-                user_corpora.extend(corpus.upper() for corpus in user_token.get("scope", {}).get("corpora", {}))
+                user_corpora.extend(
+                    utils.normalize_corpus_id(corpus) for corpus in user_token.get("scope", {}).get("corpora", {})
+                )
 
             unauthorized = [corpus for corpus in protected_requested if corpus not in user_corpora]
             if unauthorized:

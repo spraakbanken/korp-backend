@@ -2,3 +2,5 @@ label:
   eng: Default
   swe: Standard
   fin: Oletus
+preselected_corpora:
+  - TESTCORPUS

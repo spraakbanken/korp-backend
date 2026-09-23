@@ -40,4 +40,4 @@ class TestTokenDistribution:
         assert "combined" in data
         assert "corpora" in data
         for corpus in corpora:
-            assert corpus.upper() in data["corpora"]
+            assert corpus in data["corpora"]

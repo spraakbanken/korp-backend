@@ -52,10 +52,10 @@ CorporaParam: TypeAlias = Annotated[
         description=(
             "Corpora to include in the configuration. If specified, this overrides the corpus list from `mode`."
         ),
-        examples=[["ROMI", "SUC3"]],
+        examples=[["romi", "suc3"]],
     ),
     BeforeValidator(utils.split_csv),
-    AfterValidator(lambda v: sorted({x.strip().upper() for x in v})),
+    AfterValidator(lambda v: sorted({utils.normalize_corpus_id(x) for x in v})),
 ]
 
 
@@ -111,7 +111,7 @@ class CorpusConfigResponse(schemas.CommonResponse):
     preselected_corpora: list[str] | SkipJsonSchema[None] = Field(
         None,
         description="Optional corpora that should be selected by default in the frontend.",
-        examples=[["ROMI", "SUC3"]],
+        examples=[["romi", "suc3"]],
     )
     warnings: list[str] | SkipJsonSchema[None] = Field(
         None,
@@ -282,6 +282,9 @@ def _get_mode_sync(
 
     Returns:
         Dictionary of corpus configurations to be saved to cache.
+
+    Raises:
+        ValueError: If multiple configuration files define the same case-insensitive corpus id.
     """
     assert settings.CORPUS_CONFIG_DIR
     attr_types = {"positional": "pos_attributes", "structural": "struct_attributes", "custom": "custom_attributes"}
@@ -291,6 +294,7 @@ def _get_mode_sync(
     attribute_presets = {t: {} for t in attr_types.values()}  # Attribute presets
     hash_to_attr = {}
     used_attr_names: set[str] = set()
+    seen_corpus_ids: set[str] = set()
     warnings = set()
 
     def get_new_attr_name(name: str) -> str:
@@ -323,7 +327,11 @@ def _get_mode_sync(
             if cached_corpora is not None:
                 save_to_cache[corpus_file] = deepcopy(corpus_def)
 
-        corpus_id = corpus_def["id"]
+        corpus_id = utils.normalize_corpus_id(corpus_def["id"])
+        corpus_def["id"] = corpus_id
+        if corpus_id in seen_corpus_ids:
+            raise ValueError(f"Duplicate corpus id after case normalization: {corpus_id!r}.")
+        seen_corpus_ids.add(corpus_id)
 
         # Skip corpus if it's not included in the selected mode, unless specific corpora are requested
         if not corpora and not any(m["name"] == mode_name for m in corpus_def.get("mode", [])):
@@ -439,10 +447,13 @@ async def get_mode(mode_name: str, corpora: list, cache: Memcached | None = None
     except FileNotFoundError:
         return None
 
+    if "preselected_corpora" in mode:
+        mode["preselected_corpora"] = [utils.normalize_corpus_id(corpus) for corpus in mode["preselected_corpora"]]
+
     if corpora:
         corpus_files = []
         for c in corpora:
-            file_path = Path(settings.CORPUS_CONFIG_DIR) / "corpora" / f"{c.lower()}.yaml"
+            file_path = Path(settings.CORPUS_CONFIG_DIR) / "corpora" / f"{utils.normalize_corpus_id(c)}.yaml"
             if file_path.is_file():
                 corpus_files.append(file_path)
             else:

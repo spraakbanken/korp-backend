@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
-from korp import auth, caching, cqp
+from korp import auth, caching, cqp, utils
 
 if TYPE_CHECKING:
     from korp.cwb import CWB
@@ -17,7 +17,7 @@ def list_corpora(cwb: CWB) -> list[str]:
     """Return all corpora reported by CQP."""
     corpora_lines = cwb.run_cqp("show corpora;")
     next(corpora_lines, None)  # Skip CQP version
-    return list(corpora_lines)
+    return [utils.normalize_corpus_id(corpus) for corpus in corpora_lines]
 
 
 def _normalize_detail_keys(detail_keys: Iterable[str] | None) -> set[str]:
@@ -29,9 +29,7 @@ def _normalize_detail_keys(detail_keys: Iterable[str] | None) -> set[str]:
     if detail_keys is None:
         return set()
     return {
-        key.casefold()
-        for key in detail_keys
-        if isinstance(key, str) and key.strip() and key.casefold() != "protected"
+        key.casefold() for key in detail_keys if isinstance(key, str) and key.strip() and key.casefold() != "protected"
     }
 
 
@@ -44,9 +42,7 @@ def _extract_details(info: dict[str, Any], normalized_detail_keys: set[str]) -> 
     if not normalized_detail_keys:
         return {}
     return {
-        key: value
-        for key, value in info.items()
-        if isinstance(key, str) and key.casefold() in normalized_detail_keys
+        key: value for key, value in info.items() if isinstance(key, str) and key.casefold() in normalized_detail_keys
     }
 
 
@@ -118,7 +114,7 @@ async def fetch_protection_info(
     if missing:
         cmd = []
         for corpus in missing:
-            cmd += [f"{corpus};", "info; .EOL.;"]
+            cmd += [f"{corpus.upper()};", "info; .EOL.;"]
         cmd += ["exit;"]
 
         lines = cwb.run_cqp(cmd)

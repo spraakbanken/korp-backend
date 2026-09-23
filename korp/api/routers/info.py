@@ -45,12 +45,12 @@ class InfoResponse(schemas.CommonResponse):
     corpora: list[str] = Field(
         ...,
         description="Corpus ids available on this backend.",
-        examples=[["ROMI", "PAROLE"]],
+        examples=[["romi", "parole"]],
     )
     protected_corpora: list[str] = Field(
         ...,
         description="Corpus ids from `corpora` that require authorization.",
-        examples=[["CLASSIFIED", "MYDIARY"]],
+        examples=[["classified", "mydiary"]],
     )
 
 
@@ -80,7 +80,7 @@ class CorpusWorkbenchInfo(schemas.ResponseModel):
     name: str | SkipJsonSchema[None] = Field(
         None,
         description="Corpus name reported by CQP.",
-        examples=["ROMI"],
+        examples=["romi"],
     )
 
     size: int | SkipJsonSchema[None] = Field(
@@ -186,8 +186,11 @@ def _normalize_cwb_info(raw_info: Mapping[str, Any]) -> dict[str, Any]:
         if normalized_key is None:
             additional[key] = value
         else:
+            normalized_value = _parse_cwb_info_value(normalized_key, value) if isinstance(value, str) else value
             normalized[normalized_key] = (
-                _parse_cwb_info_value(normalized_key, value) if isinstance(value, str) else value
+                utils.normalize_corpus_id(normalized_value)
+                if normalized_key == "name" and isinstance(normalized_value, str)
+                else normalized_value
             )
 
     normalized["additional"] = additional
@@ -226,15 +229,16 @@ async def info(
             yield result
             return
 
-    corpora = ctx.cwb.run_cqp("show corpora;")
-    version = next(corpora)
+    cwb_corpora = ctx.cwb.run_cqp("show corpora;")
+    version = next(cwb_corpora)
+    corpora = [utils.normalize_corpus_id(corpus) for corpus in cwb_corpora]
 
     protected = await auth.get_protected_corpora(ctx)
 
     result = {
         "version": importlib.metadata.version("korp-backend"),
         "cqp_version": version,
-        "corpora": list(corpora),
+        "corpora": corpora,
         "protected_corpora": protected,
     }
 
@@ -355,7 +359,7 @@ async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bo
     if uncached_corpora:
         cmd: list[str] = []
         for c in uncached_corpora:
-            cmd += [f"{c};"]
+            cmd += [f"{c.upper()};"]
             cmd += ctx.cwb.show_attributes()
             cmd += ["info; .EOL.;"]
 
@@ -373,7 +377,7 @@ async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bo
             attrs = {
                 "positional": cwb_attrs["p"],
                 "structural": cwb_attrs["s"],
-                "alignment": cwb_attrs["a"],
+                "alignment": [utils.normalize_corpus_id(corpus) for corpus in cwb_attrs["a"]],
             }
 
             # Corpus information

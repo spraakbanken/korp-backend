@@ -47,7 +47,7 @@ Most grouping and value-normalization parameters are shared with `/frequencies`,
 
 Compare nouns in two corpora and return up to ten values from each side:
 
-`/log-likelihood?set1_cqp=[pos="NN"]&set2_cqp=[pos="NN"]&group_by=word&max_results=10&set1_corpora=ROMI&set2_corpora=GP2012`
+`/log-likelihood?set1_cqp=[pos="NN"]&set2_cqp=[pos="NN"]&group_by=word&max_results=10&set1_corpora=romi&set2_corpora=gp2012`
 """
 
 Set1CQPParam: TypeAlias = Annotated[
@@ -68,16 +68,16 @@ Set2CQPParam: TypeAlias = Annotated[
 
 Set1CorporaParam: TypeAlias = Annotated[
     list[params.NonEmptyString],
-    Query(description="Corpora for set 1.", examples=[["ROMI", "SUC3"]], min_length=1),
+    Query(description="Corpora for set 1.", examples=[["romi", "suc3"]], min_length=1),
     BeforeValidator(utils.split_csv),
-    AfterValidator(lambda v: sorted({x.strip().upper() for x in v})),
+    AfterValidator(lambda v: sorted({utils.normalize_corpus_id(x) for x in v})),
 ]
 
 Set2CorporaParam: TypeAlias = Annotated[
     list[params.NonEmptyString],
-    Query(description="Corpora for set 2.", examples=[["GP2012"]], min_length=1),
+    Query(description="Corpora for set 2.", examples=[["gp2012"]], min_length=1),
     BeforeValidator(utils.split_csv),
-    AfterValidator(lambda v: sorted({x.strip().upper() for x in v})),
+    AfterValidator(lambda v: sorted({utils.normalize_corpus_id(x) for x in v})),
 ]
 
 MaxResultsParam: TypeAlias = Annotated[

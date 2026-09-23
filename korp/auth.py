@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
 
-from korp import caching
+from korp import caching, utils
 from korp.dependencies import AuthContext, Ctx
 
 if TYPE_CHECKING:
@@ -80,7 +80,8 @@ async def get_protected_corpora(ctx: Ctx) -> list[str]:
     """Return a list of corpora with restricted access."""
     authorizer = ctx.request.app.state.authorizer
     if authorizer:
-        return await authorizer.get_protected_corpora(_make_auth_context(ctx))
+        corpora = await authorizer.get_protected_corpora(_make_auth_context(ctx))
+        return sorted({utils.normalize_corpus_id(corpus) for corpus in corpora})
     return []
 
 
@@ -97,11 +98,12 @@ async def check_authorization(corpora: Iterable[str], ctx: Ctx) -> None:
     authorizer = ctx.request.app.state.authorizer
     if authorizer:
         # Split parallel corpora
-        corpora = [cc for c in corpora for cc in c.split("|")]
+        corpora = [utils.normalize_corpus_id(cc) for c in corpora for cc in c.split("|")]
 
         success, unauthorized, message = await authorizer.check_authorization(corpora, _make_auth_context(ctx))
         if not success:
             if not message:
+                unauthorized = [utils.normalize_corpus_id(corpus) for corpus in unauthorized]
                 message = "You do not have access to the following corpora: {}".format(", ".join(unauthorized))
             raise KorpAuthorizationError(message)
 
@@ -121,7 +123,7 @@ class Authorizer(ABC):
       Fetch protection metadata for the provided corpus ids from your source (for example CWB info, a DB table, or an
       external API). This is an implementation hook and should not be called directly from plugin logic; use
       `_get_protection_info()` instead to ensure caching is used.
-    - `get_protected_corpora(auth_ctx)`: Return all protected corpora (uppercase corpus ids). This is used by `/info`
+    - `get_protected_corpora(auth_ctx)`: Return all protected corpora (lowercase corpus ids). This is used by `/info`
       and similar "list all protected corpora" use cases.
     - `check_authorization(corpora, auth_ctx)`: Return `(success, unauthorized, message)` for the requested corpora.
       `unauthorized` should contain corpus ids that failed authorization.
@@ -261,7 +263,7 @@ class Authorizer(ABC):
 
     @abstractmethod
     async def get_protected_corpora(self, auth_ctx: AuthContext) -> list[str]:
-        """Get list of corpora with restricted access, in uppercase."""
+        """Get list of corpora with restricted access, as lowercase corpus ids."""
 
     @abstractmethod
     async def check_authorization(

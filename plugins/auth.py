@@ -14,7 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from korp import auth, plugin
+from korp import auth, plugin, utils
 from korp.dependencies import AuthContext, CtxDep
 from korp.handler import api_handler
 from plugins import protection_cwb
@@ -90,7 +90,7 @@ def _authenticate_from_auth_header(auth_header: str | None) -> dict:
             if "corpora" in permitted_resources:
                 for c in permitted_resources["corpora"]:
                     if permitted_resources["corpora"][c]["read"]:
-                        result["corpora"].append(c.upper())
+                        result["corpora"].append(utils.normalize_corpus_id(c))
             return result
 
     return {}
@@ -129,11 +129,11 @@ class Auth(auth.Authorizer):
         """Get list of protected corpora.
 
         Returns:
-            Uppercased corpus ids marked as protected.
+            Lowercase corpus ids marked as protected.
         """
         corpora = protection_cwb.list_corpora(self.cwb)
         protection_info = await self._get_protection_info(corpora, auth_ctx)
-        return [corpus.upper() for corpus in corpora if protection_info[corpus].protected]
+        return [corpus for corpus in corpora if protection_info[corpus].protected]
 
     async def check_authorization(
         self, corpora: list[str], auth_ctx: AuthContext
@@ -150,9 +150,8 @@ class Auth(auth.Authorizer):
                 - A list of unauthorized corpora (if access is denied).
                 - An optional message (not used in this implementation).
         """
-        corpora_upper = [corpus.upper() for corpus in corpora]
-        protection_info = await self._get_protection_info(corpora_upper, auth_ctx)
-        protected_requested = [corpus for corpus in corpora_upper if protection_info[corpus].protected]
+        protection_info = await self._get_protection_info(corpora, auth_ctx)
+        protected_requested = [corpus for corpus in corpora if protection_info[corpus].protected]
         if protected_requested:
             auth = _authenticate_from_auth_header(auth_ctx.request.headers.get("Authorization"))
             unauthorized = [corpus for corpus in protected_requested if corpus not in auth.get("corpora", [])]

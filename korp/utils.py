@@ -14,6 +14,11 @@ from korp.handler import ResponseFragment
 QUERY_DELIM = ","
 
 
+def normalize_corpus_id(corpus: str) -> str:
+    """Return the canonical lowercase representation of a corpus identifier."""
+    return corpus.strip().lower()
+
+
 def get_hash(values: Iterable[Any]) -> str:
     """Get a hash for a list of values.
 

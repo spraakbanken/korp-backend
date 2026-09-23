@@ -1886,7 +1886,7 @@ def frequency_query_worker(
     optimize = True
     cqpparams = {"within": within}
 
-    cmd = [f"{corpus};"]
+    cmd = [f"{corpus.upper()};"]
     cqpparams_temp = {}
     for i, c in enumerate(base_cqp):
         cqpparams_temp = cqpparams.copy()
@@ -2005,7 +2005,7 @@ def simple_frequency_query_worker(
         if cached is not None:
             return cached
 
-    lines = list(ctx.cwb.run_cwb_scan(corpus, [g[0] for g in group_by], abort_signal=abort_signal))
+    lines = list(ctx.cwb.run_cwb_scan(corpus.upper(), [g[0] for g in group_by], abort_signal=abort_signal))
     nr_hits = 0
 
     ic_index = []

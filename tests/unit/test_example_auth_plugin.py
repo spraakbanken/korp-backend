@@ -30,8 +30,8 @@ def test_example_auth_get_protected_corpora_uses_plugin_config(monkeypatch: Any)
         "PLUGINS_CONFIG",
         {
             "plugins.example_auth": {
-                "protected_corpora": ["A"],
-                "protection_details": {"A": {"license": "restricted"}},
+                "protected_corpora": [" A "],
+                "protection_details": {" A ": {"license": "restricted"}},
             }
         },
     )
@@ -42,7 +42,7 @@ def test_example_auth_get_protected_corpora_uses_plugin_config(monkeypatch: Any)
 
         protected = await authorizer.get_protected_corpora(auth_ctx)  # type: ignore
 
-        assert protected == ["A"]
+        assert protected == ["a"]
 
     anyio.run(_run)
 
@@ -64,10 +64,10 @@ def test_example_auth_check_authorization_denies_missing_header_access(monkeypat
         authorizer = ExampleAuth(cwb=FakeCWB(), cache=object())  # type: ignore
         auth_ctx = SimpleNamespace(cache_enabled=False, request=SimpleNamespace(headers={}))
 
-        ok, unauthorized, message = await authorizer.check_authorization(["A", "B"], auth_ctx)  # type: ignore
+        ok, unauthorized, message = await authorizer.check_authorization(["a", "b"], auth_ctx)  # type: ignore
 
         assert not ok
-        assert unauthorized == ["A"]
+        assert unauthorized == ["a"]
         assert message is not None
         assert "X-Authorized-Corpora" in message
 
@@ -89,9 +89,12 @@ def test_example_auth_check_authorization_allows_header_access(monkeypatch: Any)
 
     async def _run() -> None:
         authorizer = ExampleAuth(cwb=FakeCWB(), cache=object())  # type: ignore
-        auth_ctx = SimpleNamespace(cache_enabled=False, request=SimpleNamespace(headers={"X-Authorized-Corpora": "A"}))
+        auth_ctx = SimpleNamespace(
+            cache_enabled=False,
+            request=SimpleNamespace(headers={"X-Authorized-Corpora": " A "}),
+        )
 
-        ok, unauthorized, message = await authorizer.check_authorization(["A", "B"], auth_ctx)  # type: ignore
+        ok, unauthorized, message = await authorizer.check_authorization(["a", "b"], auth_ctx)  # type: ignore
 
         assert ok
         assert unauthorized == []

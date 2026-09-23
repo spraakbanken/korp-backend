@@ -7,9 +7,9 @@ PLUGINS = ["plugins.example_auth"]
 Example plugin config (YAML or PLUGINS_CONFIG):
 
 plugins.example_auth:
-  protected_corpora: ["CORPUS1", "CORPUS2"]
+  protected_corpora: ["corpus1", "corpus2"]
   protection_details:
-    CORPUS1:
+    corpus1:
       license: "restricted"
   required_header: "X-Authorized-Corpora"
 
@@ -19,7 +19,7 @@ demo purposes only).
 
 from __future__ import annotations
 
-from korp import auth, plugin
+from korp import auth, plugin, utils
 from korp.dependencies import AuthContext
 from plugins import protection_cwb
 
@@ -68,20 +68,20 @@ class ExampleAuth(auth.Authorizer):
         Returns:
             Protection metadata keyed by corpus.
         """
-        configured_protected = {corpus.upper() for corpus in router.config("protected_corpora", [])}
+        configured_protected = {utils.normalize_corpus_id(corpus) for corpus in router.config("protected_corpora", [])}
         raw_details = router.config("protection_details", {}) or {}
         details_by_corpus = {
-            corpus.upper(): details
+            utils.normalize_corpus_id(corpus): details
             for corpus, details in raw_details.items()
             if isinstance(corpus, str) and isinstance(details, dict)
         }
 
         result: dict[str, auth.ProtectionInfo] = {}
         for corpus in corpora:
-            corpus_upper = corpus.upper()
+            normalized_corpus = utils.normalize_corpus_id(corpus)
             result[corpus] = auth.ProtectionInfo(
-                protected=corpus_upper in configured_protected,
-                details=details_by_corpus.get(corpus_upper, {}),
+                protected=normalized_corpus in configured_protected,
+                details=details_by_corpus.get(normalized_corpus, {}),
             )
         return result
 
@@ -89,11 +89,11 @@ class ExampleAuth(auth.Authorizer):
         """Return all protected corpora.
 
         Returns:
-            Uppercased corpus ids marked as protected.
+            Lowercase corpus ids marked as protected.
         """
         corpora = protection_cwb.list_corpora(self.cwb)
         protection_info = await self._get_protection_info(corpora, auth_ctx)
-        return [corpus.upper() for corpus in corpora if protection_info[corpus].protected]
+        return [corpus for corpus in corpora if protection_info[corpus].protected]
 
     async def check_authorization(
         self, corpora: list[str], auth_ctx: AuthContext
@@ -110,12 +110,12 @@ class ExampleAuth(auth.Authorizer):
 
         required_header = router.config("required_header", "X-Authorized-Corpora")
         allowed = {
-            corpus.strip().upper()
+            utils.normalize_corpus_id(corpus)
             for corpus in auth_ctx.request.headers.get(required_header, "").split(",")
             if corpus.strip()
         }
 
-        unauthorized = [corpus.upper() for corpus in protected_requested if corpus.upper() not in allowed]
+        unauthorized = [corpus for corpus in protected_requested if corpus not in allowed]
         if unauthorized:
             return False, unauthorized, f"Missing access in {required_header} for: {', '.join(unauthorized)}"
         return True, [], None

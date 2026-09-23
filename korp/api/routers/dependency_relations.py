@@ -100,7 +100,7 @@ final completion event.
 
 Get dependency relations for the lexeme `ge..vb.1`:
 
-`/dependency-relations?term=ge..vb.1&term_type=lexeme&corpora=ROMI`
+`/dependency-relations?term=ge..vb.1&term_type=lexeme&corpora=romi`
 """
 
 DEPENDENCY_RELATIONS_TIME_DESCRIPTION = """Get dependency relations grouped by year or multi-year period.
@@ -262,7 +262,7 @@ class RelationRow(schemas.ResponseModel):
             "Source ids for retrieving example sentences. Use `/dependency-relations/sentences` for overall relation "
             "rows and `/dependency-relations/time/sentences` for time-sliced relation rows."
         ),
-        examples=[["ROMI:253662"]],
+        examples=[["romi:253662"]],
     )
     freq: int | SkipJsonSchema[None] = Field(None, description="Absolute relation frequency.", examples=[5])
     freq_relative: float | SkipJsonSchema[None] = Field(
@@ -337,12 +337,12 @@ class RelationsSentencesResponse(schemas.CommonResponse):
     corpus_hits: dict[str, int] = Field(
         ...,
         description="Number of matching relation sentences per corpus.",
-        examples=[{"ROMI": 3}],
+        examples=[{"romi": 3}],
     )
     corpus_order: list[str] = Field(
         ...,
         description="Order in which corpora are represented in the KWIC rows.",
-        examples=[["ROMI"]],
+        examples=[["romi"]],
     )
     kwic: list[concordance.KWICRow] = Field(
         ...,
@@ -502,7 +502,7 @@ def _build_overall_triples_query(
     rel_table = tables["rel"]
     head_rel = tables["head_rel"]
     dep_rel = tables["dep_rel"]
-    corpus_label = utils.sql_escape(corpus.upper())
+    corpus_label = utils.sql_escape(corpus)
     freq_clause = ""
     params: dict[str, object] = {}
     if min_freq is not None:
@@ -586,7 +586,7 @@ def _build_split_triples_query(
     params.update(year_params)
     if year_clause:
         year_clause = "AND " + year_clause
-    corpus_label = utils.sql_escape(corpus.upper())
+    corpus_label = utils.sql_escape(corpus)
     sql = f"""
     WITH target AS (
         SELECT s.id
@@ -1664,7 +1664,7 @@ SourcesParam: TypeAlias = Annotated[
     list[params.NonEmptyString],
     Query(
         description="Source ids in the format `CORPUS:ID`.",
-        examples=[["ROMI:253662", "ROMI:253663"]],
+        examples=[["romi:253662", "romi:253663"]],
         min_length=1,
     ),
     BeforeValidator(utils.split_csv),
@@ -1782,7 +1782,9 @@ async def _dependency_relations_impl(
 
         # Filter out corpora which don't exist in database
         corpora = [
-            c for c in corpora if f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{c.upper()}{table_suffix}" in tables
+            c
+            for c in corpora
+            if f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{c.upper()}{table_suffix}" in tables
         ]
         corpora_rest = [c for c in corpora if c not in cached_corpora]
 
@@ -2200,7 +2202,7 @@ def _parse_sources(sources: list[str]) -> dict[str, set[int]]:
     for item in sources:
         try:
             corpus, relation_id = item.split(":", 1)
-            parsed[corpus.upper()].add(int(relation_id))
+            parsed[utils.normalize_corpus_id(corpus)].add(int(relation_id))
         except ValueError as exc:
             raise APIValidationError("Malformed value for key 'sources'. Expected 'CORPUS:ID'.") from exc
     return parsed
@@ -2262,7 +2264,8 @@ async def _relations_sentences_impl(
             [
                 (corpus, ids)
                 for corpus, ids in source_map.items()
-                if f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{corpus.upper()}{table_suffix}" in tables
+                if f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{corpus.upper()}{table_suffix}"
+                in tables
             ]
         )
         if not filtered_source:
@@ -2275,14 +2278,16 @@ async def _relations_sentences_impl(
         counts: list[str] = []
         for corpus, ids in filtered_source:
             ids_list = "(" + ", ".join(f"{i:d}" for i in sorted(ids)) + ")"
-            corpus_table_sentences = f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{corpus.upper()}{table_suffix}"
+            corpus_table_sentences = (
+                f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{corpus.upper()}{table_suffix}"
+            )
             selects.append(
                 f"""(
                     SELECT
                         S.sentence,
                         S.start,
                         S.end,
-                        '{utils.sql_escape(corpus.upper())}' AS corpus
+                        '{utils.sql_escape(corpus)}' AS corpus
                     FROM
                         `{corpus_table_sentences}` as S
                     WHERE
@@ -2292,7 +2297,7 @@ async def _relations_sentences_impl(
             counts.append(
                 f"""(
                     SELECT
-                        '{utils.sql_escape(corpus.upper())}' AS corpus,
+                        '{utils.sql_escape(corpus)}' AS corpus,
                         COUNT(*) AS freq
                     FROM
                         `{corpus_table_sentences}` as S

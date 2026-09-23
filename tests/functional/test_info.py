@@ -28,7 +28,7 @@ def corpus_info_single(corpus_info: Callable[[list[str]], dict]) -> Callable[[st
 
     def _corpus_info_single(corpus: str) -> dict:
         """Return `/corpora/info` response for corpus (corpus-specific part)."""
-        return corpus_info([corpus])["corpora"][corpus.upper()]
+        return corpus_info([corpus])["corpora"][corpus.lower()]
 
     return _corpus_info_single
 
@@ -37,10 +37,12 @@ class TestInfo:
     """Tests for the `/info` endpoint."""
 
     @staticmethod
-    def test_info_contains_version(get_json: Callable) -> None:
-        """Test that `/info` response contains version info."""
+    def test_info_contains_version(get_json: Callable, corpora: list[str]) -> None:
+        """Test that `/info` returns version info and canonical lowercase corpus ids."""
         data = get_json("/info")
         assert data["version"]
+        assert set(data["corpora"]) == {corpus.lower() for corpus in corpora}
+        assert all(corpus == corpus.lower() for corpus in data["protected_corpora"])
 
 
 class TestCorpusInfo:
@@ -55,7 +57,7 @@ class TestCorpusInfo:
         """Test `/corpora/info` for all corpora."""
         data = corpus_info(corpora)
         assert len(data["corpora"]) == len(corpora)
-        assert set(data["corpora"].keys()) == {corpus.upper() for corpus in corpora}
+        assert set(data["corpora"].keys()) == {corpus.lower() for corpus in corpora}
         assert data["total_size"] == self._get_corpora_info_sum(data, "size")
         assert data["total_sentences"] == self._get_corpora_info_sum(data, "sentences")
 
@@ -121,3 +123,4 @@ class TestCorpusInfo:
         assert attrs["positional"] == attrs_p
         assert attrs["structural"] == attrs_s
         assert attrs["alignment"] == attrs_a
+        assert data["info"]["name"] == corpus.lower()

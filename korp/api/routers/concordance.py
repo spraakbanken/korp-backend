@@ -63,9 +63,9 @@ final completion event.
 
 ### Examples
 
-Query `SUC3` and return the first ten hits for `"och" [] [pos="NN"]`, including the `msd` and `lemma` annotations:
+Query `suc3` and return the first ten hits for `"och" [] [pos="NN"]`, including the `msd` and `lemma` annotations:
 
-`/concordance?corpora=SUC3&offset=0&limit=10&default_context=1+sentence&cqp="och"+[]+[pos="NN"]&attributes=msd,lemma`
+`/concordance?corpora=suc3&offset=0&limit=10&default_context=1+sentence&cqp="och"+[]+[pos="NN"]&attributes=msd,lemma`
 """
 
 CONCORDANCE_SAMPLE_DESCRIPTION = """Do a random-sample concordance search.
@@ -88,9 +88,9 @@ LeftContextParam: TypeAlias = Annotated[
     Query(
         description=(
             "Left-side context to show for specific corpora, overriding `default_context` and `context`. "
-            "Each value uses `corpus:context`, for example `SUC3:5 words`."
+            "Each value uses `corpus:context`, for example `suc3:5 words`."
         ),
-        examples=[["SUC3:5 words", "ROMI:1 sentence"]],
+        examples=[["suc3:5 words", "romi:1 sentence"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -100,9 +100,9 @@ RightContextParam: TypeAlias = Annotated[
     Query(
         description=(
             "Right-side context to show for specific corpora, overriding `default_context` and `context`. "
-            "Each value uses `corpus:context`, for example `SUC3:5 words`."
+            "Each value uses `corpus:context`, for example `suc3:5 words`."
         ),
-        examples=[["SUC3:5 words", "ROMI:1 sentence"]],
+        examples=[["suc3:5 words", "romi:1 sentence"]],
     ),
     BeforeValidator(utils.split_csv),
 ]
@@ -321,7 +321,7 @@ class Token(schemas.ResponseModel):
 class KWICRow(schemas.ResponseModel):
     """A single concordance row."""
 
-    corpus: str = Field(..., description="Corpus that produced this KWIC row.", examples=["SUC3"])
+    corpus: str = Field(..., description="Corpus that produced this KWIC row.", examples=["suc3"])
     matches: list[Match] = Field(
         ...,
         description=(
@@ -348,12 +348,12 @@ class ConcordanceResponse(schemas.CommonResponse):
 
     total_hits: int = Field(..., description="Total number of hits across all selected corpora.", examples=[1422])
     hits_by_corpus: dict[str, int] = Field(
-        ..., description="Number of hits grouped by corpus.", examples=[{"ROMI": 1135, "SUC3": 287}]
+        ..., description="Number of hits grouped by corpus.", examples=[{"romi": 1135, "suc3": 287}]
     )
     corpus_order: list[str] = Field(
         ...,
         description="Order in which corpora are represented in the grouped result.",
-        examples=[["ROMI", "SUC3"]],
+        examples=[["romi", "suc3"]],
     )
     kwic: list[KWICRow] = Field(..., description="Returned KWIC rows for the requested page.")
     pagination_state: str = Field(
@@ -486,7 +486,7 @@ async def parse_parameters(
                 if ":" not in pair:
                     raise APIValidationError(f"Malformed value for key '{context_type}'.")
                 contexts[context_type] = {
-                    context_corpus.upper(): value
+                    utils.normalize_corpus_id(context_corpus): value
                     for context_corpus, value in (pair.split(":", 1) for pair in context_pairs)
                 }
         else:
@@ -1141,14 +1141,17 @@ def query_corpus(
 
             for d in cs[1:]:
                 linked_corpora, link_cqp = d.split(None, 1)
-                if linked[1] in linked_corpora.split("|"):
-                    cc.append(f"{linked[1]} {link_cqp}")
+                normalized_linked_corpora = {
+                    utils.normalize_corpus_id(linked_corpus) for linked_corpus in linked_corpora.split("|")
+                }
+                if linked[1] in normalized_linked_corpora:
+                    cc.append(f"{linked[1].upper()} {link_cqp}")
 
             cqp_final.append("".join(cc).rstrip(": "))
 
         cqp_query = cqp_final
         corpus = linked[0]
-        attributes.add(linked[1].lower())
+        attributes.add(utils.normalize_corpus_id(linked[1]))
 
     # Sorting
     if sort == "left":
@@ -1171,7 +1174,7 @@ def query_corpus(
     if cache:
         cmd.append(f'set DataDirectory "{cache_dir}";')
 
-    cmd.append(f"{corpus};")
+    cmd.append(f"{corpus.upper()};")
 
     # This prints the attributes and their relative order:
     cmd += cwb.show_attributes()
@@ -1291,7 +1294,7 @@ def _parse_line_header(line: str) -> tuple[str | None, int | None, str]:
     header, remainder = line.split(":", 1)
     if header.startswith("-->"):
         # For aligned corpora, every other line is the aligned result
-        return header[3:], None, remainder
+        return utils.normalize_corpus_id(header[3:]), None, remainder
     # This is the result row for the query corpus
     return None, int(header), remainder
 

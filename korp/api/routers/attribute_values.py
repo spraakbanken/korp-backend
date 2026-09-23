@@ -50,7 +50,7 @@ result fragments, and a final completion event.
 
 Get all authors and their titles with token counts:
 
-`/attribute-values?corpora=ROMI&attributes=text_author>text_title&include_counts=true`
+`/attribute-values?corpora=romi&attributes=text_author>text_title&include_counts=true`
 """
 
 AttrParam: TypeAlias = Annotated[
@@ -107,7 +107,7 @@ class AttrValuesResponse(schemas.CommonResponse):
             "corpus, keys are the requested `attributes` expressions. Every requested expression is present, including "
             "when it has no values."
         ),
-        examples=[{"ROMI": {"text_author": ["Söderberg, Hjalmar"], "pos": {"NN": 1250, "VB": 341}}}],
+        examples=[{"romi": {"text_author": ["Söderberg, Hjalmar"], "pos": {"NN": 1250, "VB": 341}}}],
     )
     combined: AttributeValuesData | SkipJsonSchema[None] = Field(
         None,
