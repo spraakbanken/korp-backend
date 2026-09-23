@@ -203,7 +203,7 @@ def _normalize_cwb_info(raw_info: Mapping[str, Any]) -> dict[str, Any]:
     "/info",
     name="General Information",
     response_model=None,
-    responses=handler.docs_response(InfoResponse),
+    responses=handler.docs_response(InfoResponse, cqp_error=True),
     summary="General Information",
     description=INFO_DESCRIPTION,
     operation_id="get_info",
@@ -271,7 +271,7 @@ class CorpusInfoQuery(QueryRequestModel, CorpusInfoRequest):
 @router.get(
     "/corpora/info",
     response_model=None,
-    responses=handler.docs_response(CorpusInfoResponse),
+    responses=handler.docs_response(CorpusInfoResponse, cqp_error=True),
     name="Corpus Information",
     summary="Corpus Information",
     description=CORPUS_INFO_DESCRIPTION,
@@ -293,7 +293,7 @@ async def corpus_info_get(
 @router.post(
     "/corpora/info",
     response_model=None,
-    responses=handler.docs_response(CorpusInfoResponse),
+    responses=handler.docs_response(CorpusInfoResponse, cqp_error=True),
     name="Corpus Information",
     summary="Corpus Information",
     description=CORPUS_INFO_DESCRIPTION,

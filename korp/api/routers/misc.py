@@ -144,7 +144,7 @@ async def sleep(_ctx: CtxDep, t: int = 5) -> AsyncIterator[dict]:
 @router.get(
     "/optimize",
     response_model=None,
-    responses=docs_response(OptimizeResponse),
+    responses=docs_response(OptimizeResponse, cqp_error=True),
     summary="Optimize CQP Query",
     description=OPTIMIZE_DESCRIPTION,
     tags=["Miscellaneous"],
@@ -166,7 +166,7 @@ async def optimize_get(
 @router.post(
     "/optimize",
     response_model=None,
-    responses=docs_response(OptimizeResponse),
+    responses=docs_response(OptimizeResponse, cqp_error=True),
     summary="Optimize CQP Query",
     description=OPTIMIZE_DESCRIPTION,
     tags=["Miscellaneous"],

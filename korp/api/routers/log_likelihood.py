@@ -361,7 +361,7 @@ async def _log_likelihood_stream(
 @router.get(
     "/log-likelihood",
     response_model=None,
-    responses=docs_response(LogLikelihoodResponse, corpus_authorization=True),
+    responses=docs_response(LogLikelihoodResponse, corpus_authorization=True, cqp_error=True),
     summary="Log-Likelihood Comparison",
     description=LOGLIKE_DESCRIPTION,
     operation_id="get_log_likelihood",
@@ -383,7 +383,7 @@ async def log_likelihood_get(
 @router.post(
     "/log-likelihood",
     response_model=None,
-    responses=docs_response(LogLikelihoodResponse, corpus_authorization=True),
+    responses=docs_response(LogLikelihoodResponse, corpus_authorization=True, cqp_error=True),
     summary="Log-Likelihood Comparison",
     description=LOGLIKE_DESCRIPTION,
     operation_id="post_log_likelihood",

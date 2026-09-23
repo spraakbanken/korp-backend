@@ -2044,7 +2044,7 @@ class DependencyRelationsTimeQuery(QueryRequestModel, DependencyRelationsTimeReq
 @router.get(
     "/dependency-relations",
     response_model=None,
-    responses=docs_response(RelationsResponse, corpus_authorization=True),
+    responses=docs_response(RelationsResponse, corpus_authorization=True, cqp_error=True),
     summary="Dependency Relations",
     description=DEPENDENCY_RELATIONS_DESCRIPTION,
     operation_id="get_dependency_relations",
@@ -2066,7 +2066,7 @@ async def relations_get(
 @router.post(
     "/dependency-relations",
     response_model=None,
-    responses=docs_response(RelationsResponse, corpus_authorization=True),
+    responses=docs_response(RelationsResponse, corpus_authorization=True, cqp_error=True),
     summary="Dependency Relations",
     description=DEPENDENCY_RELATIONS_DESCRIPTION,
     operation_id="post_dependency_relations",
@@ -2122,7 +2122,7 @@ async def _relations(
 @router.get(
     "/dependency-relations/time",
     response_model=None,
-    responses=docs_response(RelationsResponse, corpus_authorization=True),
+    responses=docs_response(RelationsResponse, corpus_authorization=True, cqp_error=True),
     summary="Dependency Relations Over Time",
     description=DEPENDENCY_RELATIONS_TIME_DESCRIPTION,
     operation_id="get_dependency_relations_time",
@@ -2144,7 +2144,7 @@ async def relations_time_get(
 @router.post(
     "/dependency-relations/time",
     response_model=None,
-    responses=docs_response(RelationsResponse, corpus_authorization=True),
+    responses=docs_response(RelationsResponse, corpus_authorization=True, cqp_error=True),
     summary="Dependency Relations Over Time",
     description=DEPENDENCY_RELATIONS_TIME_DESCRIPTION,
     operation_id="post_dependency_relations_time",
@@ -2419,7 +2419,7 @@ class RelationTimeSentencesQuery(QueryRequestModel, RelationTimeSentencesRequest
 @router.get(
     "/dependency-relations/sentences",
     response_model=None,
-    responses=docs_response(RelationsSentencesResponse, corpus_authorization=True),
+    responses=docs_response(RelationsSentencesResponse, corpus_authorization=True, cqp_error=True),
     summary="Dependency Relations Sentences",
     description=DEPENDENCY_RELATIONS_SENTENCES_DESCRIPTION,
     operation_id="get_dependency_relations_sentences",
@@ -2443,7 +2443,7 @@ async def relations_sentences_get(
 @router.post(
     "/dependency-relations/sentences",
     response_model=None,
-    responses=docs_response(RelationsSentencesResponse, corpus_authorization=True),
+    responses=docs_response(RelationsSentencesResponse, corpus_authorization=True, cqp_error=True),
     summary="Dependency Relations Sentences",
     description=DEPENDENCY_RELATIONS_SENTENCES_DESCRIPTION,
     operation_id="post_dependency_relations_sentences",
@@ -2499,7 +2499,7 @@ async def _relations_sentences(
 @router.get(
     "/dependency-relations/time/sentences",
     response_model=None,
-    responses=docs_response(RelationsSentencesResponse, corpus_authorization=True),
+    responses=docs_response(RelationsSentencesResponse, corpus_authorization=True, cqp_error=True),
     summary="Dependency Relations Time Sentences",
     description=DEPENDENCY_RELATIONS_TIME_SENTENCES_DESCRIPTION,
     operation_id="get_dependency_relations_time_sentences",
@@ -2523,7 +2523,7 @@ async def relations_time_sentences_get(
 @router.post(
     "/dependency-relations/time/sentences",
     response_model=None,
-    responses=docs_response(RelationsSentencesResponse, corpus_authorization=True),
+    responses=docs_response(RelationsSentencesResponse, corpus_authorization=True, cqp_error=True),
     summary="Dependency Relations Time Sentences",
     description=DEPENDENCY_RELATIONS_TIME_SENTENCES_DESCRIPTION,
     operation_id="post_dependency_relations_time_sentences",

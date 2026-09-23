@@ -186,13 +186,18 @@ def _unwrap_error(exc: BaseException) -> BaseException:
     return leaves[0]
 
 
-def docs_error_responses(http_errors: Mapping[int, str] | None = None) -> dict[int | str, dict[str, Any]]:
+def docs_error_responses(
+    http_errors: Mapping[int, str] | None = None,
+    *,
+    cqp_error: bool = False,
+) -> dict[int | str, dict[str, Any]]:
     """Document errors raised before the response starts.
 
     Args:
         http_errors: Additional HTTPException status codes mapped to route-specific descriptions, for example
             `{404: "The requested resource was not found."}` or `{429: "Configured rate limit exceeded."}`.
             These declarations describe existing behavior; they do not enable authorization or rate limiting.
+        cqp_error: Whether the route can fail with an HTTP 400 response from Corpus Workbench.
 
     Returns:
         FastAPI response declarations for validation, unexpected server errors, and the supplied HTTP errors.
@@ -200,10 +205,6 @@ def docs_error_responses(http_errors: Mapping[int, str] | None = None) -> dict[i
     from korp.api.schemas import ErrorResponse  # noqa: PLC0415
 
     responses: dict[int | str, dict[str, Any]] = {
-        400: {
-            "model": ErrorResponse,
-            "description": "The request or CQP query was invalid.",
-        },
         422: {
             "model": ErrorResponse,
             "description": "Request validation or preflight processing failed.",
@@ -217,6 +218,11 @@ def docs_error_responses(http_errors: Mapping[int, str] | None = None) -> dict[i
             "description": "A required backend service was unavailable.",
         },
     }
+    if cqp_error:
+        responses[400] = {
+            "model": ErrorResponse,
+            "description": "Corpus Workbench rejected the query or command.",
+        }
     for code, description in (http_errors or {}).items():
         responses[code] = {"model": ErrorResponse, "description": description}
     return responses
@@ -228,6 +234,7 @@ def docs_response(
     status_code: int = 200,
     description: str | None = None,
     corpus_authorization: bool = False,
+    cqp_error: bool = False,
     http_errors: Mapping[int, str] | None = None,
 ) -> dict[int | str, dict[str, Any]]:
     """Build OpenAPI response documentation without enabling response processing.
@@ -241,6 +248,7 @@ def docs_response(
         description: Optional description for the documented response.
         corpus_authorization: Whether to document the HTTP 403 response from corpus authorization. This only describes
             existing behavior; it does not enable authorization.
+        cqp_error: Whether to document the HTTP 400 response produced when Corpus Workbench rejects a query or command.
         http_errors: Additional pre-response HTTP errors; see `docs_error_responses`.
 
     Returns:
@@ -272,7 +280,7 @@ def docs_response(
         response["description"] = description
     errors = {403: "Access to a requested corpus was denied."} if corpus_authorization else {}
     errors.update(http_errors or {})
-    responses = docs_error_responses(errors)
+    responses = docs_error_responses(errors, cqp_error=cqp_error)
     responses[status_code] = response
     return responses
 

@@ -142,7 +142,7 @@ class AttributeValuesQuery(QueryRequestModel, AttributeValuesRequest):
 @router.get(
     "/attribute-values",
     response_model=None,
-    responses=handler.docs_response(AttrValuesResponse, corpus_authorization=True),
+    responses=handler.docs_response(AttrValuesResponse, corpus_authorization=True, cqp_error=True),
     summary="Attribute Values",
     description=ATTRIBUTE_VALUES_DESCRIPTION,
     operation_id="get_attribute_values",
@@ -163,7 +163,7 @@ async def attribute_values_get(
 @router.post(
     "/attribute-values",
     response_model=None,
-    responses=handler.docs_response(AttrValuesResponse, corpus_authorization=True),
+    responses=handler.docs_response(AttrValuesResponse, corpus_authorization=True, cqp_error=True),
     summary="Attribute Values",
     description=ATTRIBUTE_VALUES_DESCRIPTION,
     operation_id="post_attribute_values",

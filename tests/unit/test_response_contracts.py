@@ -193,7 +193,7 @@ def test_generated_openapi_documents_errors_only_on_applicable_routes() -> None:
             responses = operation["responses"]
             assert ("403" in responses) == (path in AUTHORIZED_PATHS)
             assert "429" not in responses  # A bare FastAPI app should not have rate limiting enabled
-            for status in ("400", "422", "500", "503"):
+            for status in ("422", "500", "503"):
                 assert responses[status]["content"] == {
                     "application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}
                 }

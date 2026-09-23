@@ -943,7 +943,7 @@ class CorpusFrequenciesQuery(QueryRequestModel, CorpusFrequenciesRequest):
 @router.get(
     "/frequencies",
     response_model=None,
-    responses=handler.docs_response(FrequenciesResponse, corpus_authorization=True),
+    responses=handler.docs_response(FrequenciesResponse, corpus_authorization=True, cqp_error=True),
     summary="Statistics",
     description=FREQUENCIES_DESCRIPTION,
     operation_id="get_frequencies",
@@ -965,7 +965,7 @@ async def frequencies_get(
 @router.post(
     "/frequencies",
     response_model=None,
-    responses=handler.docs_response(FrequenciesResponse, corpus_authorization=True),
+    responses=handler.docs_response(FrequenciesResponse, corpus_authorization=True, cqp_error=True),
     summary="Statistics",
     description=FREQUENCIES_DESCRIPTION,
     operation_id="post_frequencies",
@@ -1017,7 +1017,7 @@ async def _frequencies(
 @router.get(
     "/frequencies/corpus",
     response_model=None,
-    responses=handler.docs_response(CorpusFrequenciesResponse, corpus_authorization=True),
+    responses=handler.docs_response(CorpusFrequenciesResponse, corpus_authorization=True, cqp_error=True),
     summary="Complete Statistics",
     description=CORPUS_FREQUENCIES_DESCRIPTION,
     operation_id="get_corpus_frequencies",
@@ -1039,7 +1039,7 @@ async def corpus_frequencies_get(
 @router.post(
     "/frequencies/corpus",
     response_model=None,
-    responses=handler.docs_response(CorpusFrequenciesResponse, corpus_authorization=True),
+    responses=handler.docs_response(CorpusFrequenciesResponse, corpus_authorization=True, cqp_error=True),
     summary="Complete Statistics",
     description=CORPUS_FREQUENCIES_DESCRIPTION,
     operation_id="post_corpus_frequencies",
@@ -1658,7 +1658,7 @@ async def _frequencies_time_stream(
 @router.get(
     "/frequencies/time",
     response_model=None,
-    responses=handler.docs_response(FrequenciesTimeResponse, corpus_authorization=True),
+    responses=handler.docs_response(FrequenciesTimeResponse, corpus_authorization=True, cqp_error=True),
     summary="Statistics Over Time",
     description=FREQUENCIES_TIME_DESCRIPTION,
     operation_id="get_frequencies_time",
@@ -1680,7 +1680,7 @@ async def frequencies_time_get(
 @router.post(
     "/frequencies/time",
     response_model=None,
-    responses=handler.docs_response(FrequenciesTimeResponse, corpus_authorization=True),
+    responses=handler.docs_response(FrequenciesTimeResponse, corpus_authorization=True, cqp_error=True),
     summary="Statistics Over Time",
     description=FREQUENCIES_TIME_DESCRIPTION,
     operation_id="post_frequencies_time",
