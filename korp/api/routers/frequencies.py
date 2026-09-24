@@ -222,21 +222,31 @@ class FrequencyStatistics(schemas.ResponseModel):
 class FrequenciesResponse(schemas.CommonResponse):
     """Response model for `/frequencies` route."""
 
-    corpora: dict[str, list[FrequencyStatistics]] = Field(
-        ...,
-        description="Statistics per corpus, always as arrays. The main query is first, followed by `subcqp` results.",
+    corpora: dict[str, list[FrequencyStatistics]] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Statistics per corpus, always as arrays. Omitted when `include_per_corpus=false`. The main query is "
+            "first, followed by `subcqp` results."
+        ),
     )
-    combined: list[FrequencyStatistics] = Field(
-        ...,
-        description="Combined statistics for all corpora, always as an array with the main query first.",
+    combined: list[FrequencyStatistics] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Combined statistics for all corpora, always as an array with the main query first. Omitted when "
+            "`include_combined=false`."
+        ),
     )
 
 
 class CorpusFrequenciesResponse(schemas.CommonResponse):
     """Response model for `/frequencies/corpus` route."""
 
-    corpora: dict[str, FrequencyStatistics] = Field(..., description="Statistics per corpus.")
-    combined: FrequencyStatistics = Field(..., description="Combined statistics for all corpora.")
+    corpora: dict[str, FrequencyStatistics] | SkipJsonSchema[None] = Field(
+        None, description="Statistics per corpus. Omitted when `include_per_corpus=false`."
+    )
+    combined: FrequencyStatistics | SkipJsonSchema[None] = Field(
+        None, description="Combined statistics for all corpora. Omitted when `include_combined=false`."
+    )
 
 
 PeriodBoundary: TypeAlias = date | datetime
@@ -632,6 +642,9 @@ async def perform_frequency_query(
     frequency_params: FrequencyParameters,
     ctx: CtxDep,
     abort_signal: AbortSignal | None,
+    *,
+    include_combined: bool = True,
+    include_per_corpus: bool = True,
 ) -> AsyncGenerator[handler.ResponseFragment]:
     """Perform the frequency query based on the given parameters.
 
@@ -641,6 +654,8 @@ async def perform_frequency_query(
         frequency_params: Parsed frequency query parameters.
         ctx: The request context.
         abort_signal: Event to signal abortion of the query.
+        include_combined: Whether to include combined statistics in the public result.
+        include_per_corpus: Whether to include per-corpus statistics in the public result.
 
     Yields:
         Progress events and frequency-result dictionaries.
@@ -864,6 +879,11 @@ async def perform_frequency_query(
 
     result["combined"] = total_stats
 
+    if not include_per_corpus:
+        del result["corpora"]
+    if not include_combined:
+        del result["combined"]
+
     if ctx.common.debug:
         debug.update({"cqp": cqp_combined, "simple": simple})
         result["debug"] = debug
@@ -906,6 +926,8 @@ class FrequenciesRequest(RequestModel):
     strip_pointer_suffix: StripPointerSuffixParam = None
     max_values_per_set: MaxValuesPerSetParam = None
     expand_prequeries: params.ExpandPrequeriesParam = True
+    include_combined: params.IncludeCombinedParam = True
+    include_per_corpus: params.IncludePerCorpusParam = True
 
 
 class CorpusFrequenciesRequest(RequestModel):
@@ -926,6 +948,8 @@ class CorpusFrequenciesRequest(RequestModel):
     strip_pointer_suffix: StripPointerSuffixParam = None
     max_values_per_set: MaxValuesPerSetParam = None
     expand_prequeries: params.ExpandPrequeriesParam = True
+    include_combined: params.IncludeCombinedParam = True
+    include_per_corpus: params.IncludePerCorpusParam = True
 
 
 class FrequenciesQuery(QueryRequestModel, FrequenciesRequest):
@@ -989,7 +1013,13 @@ async def _frequencies(
 
     Returns:
         An async iterator yielding count result dictionaries.
+
+    Raises:
+        APIValidationError: When both `include_per_corpus` and `include_combined` are false.
     """
+    if not request.include_per_corpus and not request.include_combined:
+        raise APIValidationError("At least one of `include_per_corpus` and `include_combined` must be true.")
+
     frequency_params = await parse_frequency_parameters(
         ctx=ctx,
         corpora=request.corpora,
@@ -1011,7 +1041,13 @@ async def _frequencies(
         limit=request.limit,
     )
 
-    return perform_frequency_query(frequency_params, ctx, abort_signal)
+    return perform_frequency_query(
+        frequency_params,
+        ctx,
+        abort_signal,
+        include_combined=request.include_combined,
+        include_per_corpus=request.include_per_corpus,
+    )
 
 
 @router.get(
@@ -1063,7 +1099,13 @@ async def _corpus_frequencies(
 
     Returns:
         An async iterator yielding count result dictionaries.
+
+    Raises:
+        APIValidationError: When both `include_per_corpus` and `include_combined` are false.
     """
+    if not request.include_per_corpus and not request.include_combined:
+        raise APIValidationError("At least one of `include_per_corpus` and `include_combined` must be true.")
+
     frequency_params = await parse_frequency_parameters(
         ctx=ctx,
         corpora=request.corpora,
@@ -1085,23 +1127,40 @@ async def _corpus_frequencies(
         limit=request.limit,
     )
 
-    return _perform_corpus_frequency_query(frequency_params, ctx, abort_signal)
+    return _perform_corpus_frequency_query(
+        frequency_params,
+        ctx,
+        abort_signal,
+        include_combined=request.include_combined,
+        include_per_corpus=request.include_per_corpus,
+    )
 
 
 async def _perform_corpus_frequency_query(
     frequency_params: FrequencyParameters,
     ctx: CtxDep,
     abort_signal: AbortSignal | None,
+    *,
+    include_combined: bool = True,
+    include_per_corpus: bool = True,
 ) -> AsyncGenerator[handler.ResponseFragment]:
     """Return single statistics objects for each corpus rather than arrays of one-element statistics.
 
     Yields:
         Progress events and a result with one statistics object rather than a one-element query array.
     """
-    async for fragment in perform_frequency_query(frequency_params, ctx, abort_signal):
+    async for fragment in perform_frequency_query(
+        frequency_params,
+        ctx,
+        abort_signal,
+        include_combined=include_combined,
+        include_per_corpus=include_per_corpus,
+    ):
         if isinstance(fragment, dict):
-            fragment["corpora"] = {corpus: statistics[0] for corpus, statistics in fragment["corpora"].items()}
-            fragment["combined"] = fragment["combined"][0]
+            if include_per_corpus:
+                fragment["corpora"] = {corpus: statistics[0] for corpus, statistics in fragment["corpora"].items()}
+            if include_combined:
+                fragment["combined"] = fragment["combined"][0]
         yield fragment
 
 

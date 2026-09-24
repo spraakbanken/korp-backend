@@ -63,7 +63,8 @@ Version 9 is a breaking rewrite of the backend and its HTTP API.
 - Concordance responses use `total_hits`, `hits_by_corpus`, `pagination_state`, and the `matches` field is now always an
   array.
 - Frequency responses always use arrays for the main query plus subqueries, put pre-pagination `total_rows` on each
-  statistics object, and represent all grouped attribute values as arrays.
+  statistics object, and represent all grouped attribute values as arrays. `/frequencies` and `/frequencies/corpus`
+  support `include_combined` and `include_per_corpus` for selecting their top-level result sections.
 - Time-based responses use typed period arrays with inclusive ISO 8601 `start`/`end` boundaries instead of dynamic
   period keys. Undated material uses `{ "dated": false, ... }`.
 - Corpus metadata uses `positional`, `structural`, and `alignment` instead of the old single letter abbreviations; known
