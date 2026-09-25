@@ -9,6 +9,7 @@ from typing import List, Tuple, Optional
 from flask import request
 
 from korp import utils
+from plugins import protection_cwb
 
 bp = utils.Plugin("authenticate", __name__)
 
@@ -53,27 +54,17 @@ def authenticate(_=None):
 
 
 class Auth(utils.Authorizer):
-
-    def __init__(self):
-        self._protected = []
-
     def get_protected_corpora(self, use_cache: bool = True):
-        """Get list of protected corpora."""
-        if bp.config("PROTECTED_FILE"):
-            with open(bp.config("PROTECTED_FILE")) as infile:
-                return [x.strip() for x in infile.readlines()]
-        else:
-            return []
+        """Get list of corpora with restricted access."""
+        return protection_cwb.get_all_protected_corpora(use_cache)
 
     def check_authorization(self, corpora: List[str]) -> Tuple[bool, List[str], Optional[str]]:
         """Take a list of corpora, and check if the user has access to them."""
 
-        if bp.config("PROTECTED_FILE"):
-            protected = self.get_protected_corpora()
-            c = [c for c in corpora if c.upper() in protected]
-            if c:
-                auth = utils.generator_to_dict(authenticate({}))
-                unauthorized = [x for x in c if x.upper() not in auth.get("corpora", [])]
-                if not auth or unauthorized:
-                    return False, unauthorized, None
+        protected = protection_cwb.get_protected_corpora(corpora)
+        if protected:
+            auth = utils.generator_to_dict(authenticate({}))
+            unauthorized = [x for x in protected if x.upper() not in auth.get("corpora", [])]
+            if not auth or unauthorized:
+                return False, unauthorized, None
         return True, [], None

@@ -8,9 +8,8 @@ import jwt  # From pyjwt[crypto]
 from flask import current_app as app
 from flask import request
 
-from korp import cwb, utils
-from korp import memcached
-from korp.views import info
+from korp import utils
+from plugins import protection_cwb
 
 bp = utils.Plugin("auth_jwt", __name__)
 
@@ -22,29 +21,10 @@ class AuthJWT(utils.Authorizer):
 
     def get_protected_corpora(self, use_cache: bool = True) -> List[str]:
         """Get list of corpora with restricted access."""
-        if use_cache:
-            with memcached.get_client() as mc:
-                key = f"protected:{utils.cache_prefix(mc)}"
-                result = mc.get(key)
-            if result is not None:
-                return result
-
-        # Get list of all corpora from CWB
-        corpora = cwb.run_cqp("show corpora;")
-        next(corpora)  # Skip version number
-        corpus_info = utils.generator_to_dict(info.corpus_info({"corpus": list(corpora)}))
-        protected_corpora = []
-        for corpus, c_info in corpus_info["corpora"].items():
-            if c_info["info"].get("Protected", "false").lower() == "true":
-                protected_corpora.append(corpus.upper())
-
-        if use_cache:
-            with memcached.get_client() as mc:
-                mc.add(key, protected_corpora)
-        return protected_corpora
+        return protection_cwb.get_all_protected_corpora(use_cache)
 
     def check_authorization(self, corpora: List[str]) -> Tuple[bool, List[str], Optional[str]]:
-        protected = self.get_protected_corpora()
+        protected = protection_cwb.get_protected_corpora(corpora)
         if protected:
             user_corpora = []
 
