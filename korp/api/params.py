@@ -172,7 +172,8 @@ SplitParam: TypeAlias = Annotated[
     Query(
         description=(
             "Set-valued CWB attributes whose values should be split on `|` before counting. "
-            "Each split value is treated as a separate value in the result."
+            "Each split value is treated as a separate value in the result. Empty sets and missing structural "
+            "annotations are counted together as an empty-string value."
         ),
         examples=[["sense"], ["text_topic", "sense"]],
     ),

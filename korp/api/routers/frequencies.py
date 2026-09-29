@@ -486,11 +486,15 @@ def _parse_ngram_groups(
             tokens[-1] = tokens[-1][:-1]
             if group_by[i][0] in max_values_per_set:
                 split_tokens = [
-                    [x for x in token.split("|") if x][: max_values_per_set[group_by[i][0]]] if token != "|" else [""]
+                    [x for x in token.split("|") if x][: max_values_per_set[group_by[i][0]]]
+                    if token not in {"", "|"}
+                    else [""]
                     for token in tokens
                 ]
             else:
-                split_tokens = [[x for x in token.split("|") if x] if token != "|" else [""] for token in tokens]
+                split_tokens = [
+                    [x for x in token.split("|") if x] if token not in {"", "|"} else [""] for token in tokens
+                ]
 
             # Strip multi-word pointers if requested
             if strip_pointer_suffixes:
