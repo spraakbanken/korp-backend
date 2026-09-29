@@ -263,6 +263,7 @@ def docs_response(
     # Add NDJSON schema for streaming responses.
     # The regular application/json schema is added automatically by FastAPI.
     ndjson_record_schema = TypeAdapter(StreamEvent).json_schema()
+    # create_app() moves these definitions into components.schemas after FastAPI has assembled the document.
     ndjson_record_schema["description"] = (
         "Schema for each line in the NDJSON stream returned when `stream=true`. To assemble a successful response, "
         "start with an empty object and copy each top-level member of every result event's `data` object into it in "

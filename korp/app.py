@@ -68,6 +68,47 @@ _API_DOCUMENTATION_STRUCTURE = [
 
 _OPENAPI_TAGS = [{k: v for k, v in tag.items() if k != "routes"} for tag in _API_DOCUMENTATION_STRUCTURE]
 
+
+def _register_stream_event_schemas(schema: dict[str, Any]) -> None:
+    """Move embedded NDJSON definitions to OpenAPI components and fix their references.
+
+    Raises:
+        ValueError: If a stream schema conflicts with an existing component.
+    """
+    components = schema.setdefault("components", {}).setdefault("schemas", {})
+
+    def component_references(value: Any) -> Any:
+        if isinstance(value, str) and value.startswith("#/$defs/"):
+            return value.replace("#/$defs/", "#/components/schemas/", 1)
+        if isinstance(value, dict):
+            return {key: component_references(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [component_references(item) for item in value]
+        return value
+
+    for path_item in schema["paths"].values():
+        for operation in path_item.values():
+            if not isinstance(operation, dict):
+                continue
+            for response in operation.get("responses", {}).values():
+                ndjson = response.get("content", {}).get("application/x-ndjson")
+                if ndjson is None:
+                    continue
+                record_schema = ndjson["schema"]
+                definitions = record_schema.pop("$defs", None)
+                if definitions is None:
+                    continue
+                for name, definition in definitions.items():
+                    if name == "ErrorResponse":
+                        continue  # FastAPI already registered this shared response model.
+                    registered = component_references(definition)
+                    if name in components and components[name] != registered:
+                        raise ValueError(f"Conflicting OpenAPI schema component: {name}")
+                    if name not in components:
+                        components[name] = registered
+                ndjson["schema"] = component_references(record_schema)
+
+
 _DESCRIPTION = """
 # Korp Backend API
 
@@ -334,6 +375,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         if app.openapi_schema is not None:
             return app.openapi_schema
         schema = original_openapi()
+        _register_stream_event_schemas(schema)
 
         # Add 429 response documentation for rate-limited routes
         if settings.RATE_LIMIT_ENABLED:
