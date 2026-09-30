@@ -158,10 +158,14 @@ RelativeToStructParam: TypeAlias = Annotated[
     BeforeValidator(utils.split_csv),
 ]
 
-StripPointerSuffixParam: TypeAlias = Annotated[
+StripSuffixParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
-        description="CWB attributes whose multi-word pointer suffixes should be stripped.",
+        description=(
+            "CWB attributes whose annotation suffixes should be stripped before grouping. "
+            "The server's `STRIP_SUFFIX_PATTERN` determines which suffixes are recognized; by default, "
+            "integer pointers and decimal scores are removed, including both in a combined value."
+        ),
         examples=[["sense"]],
     ),
     BeforeValidator(utils.split_csv),
@@ -337,7 +341,7 @@ class FrequencyParameters:
     simple: bool = False
     relative_to_struct: list[tuple[str, bool]] = dataclasses.field(default_factory=list)
     split: set[str] = dataclasses.field(default_factory=set)
-    strip_pointer_suffix: set[str] = dataclasses.field(default_factory=set)
+    strip_suffix: set[str] = dataclasses.field(default_factory=set)
     max_values_per_set: dict[str, int] = dataclasses.field(default_factory=dict)
     expand_prequeries: bool = True
     start: int = 0
@@ -358,7 +362,7 @@ async def parse_frequency_parameters(
     ignore_case: list[str] | None,
     relative_to_struct: list[str] | None,
     split: list[str] | None,
-    strip_pointer_suffix: list[str] | None,
+    strip_suffix: list[str] | None,
     max_values_per_set: list[str] | None,
     simple: bool,
     expand_prequeries: bool,
@@ -431,7 +435,7 @@ async def parse_frequency_parameters(
         simple=simple,
         relative_to_struct=relative_to,
         split=set(split) if split else set(),
-        strip_pointer_suffix=set(strip_pointer_suffix) if strip_pointer_suffix else set(),
+        strip_suffix=set(strip_suffix) if strip_suffix else set(),
         max_values_per_set=max_values,
         expand_prequeries=expand_prequeries,
         start=offset,
@@ -440,19 +444,20 @@ async def parse_frequency_parameters(
     )
 
 
-def _strip_pointer_suffix(tok: str) -> str:
-    """Strip multi-word pointer suffix from a token.
+def _strip_suffix(tok: str) -> str:
+    """Strip recognized annotation suffixes from a token.
 
     Args:
-        tok: Token string, possibly with a pointer suffix like "word:123".
+        tok: Token string, possibly with suffixes like "word:123:1.350".
 
     Returns:
-        Token with pointer suffix removed if present.
+        Token with all recognized suffixes removed.
     """
-    if ":" in tok:
-        base, ptr = tok.rsplit(":", 1)
-        if ptr.isnumeric():
-            return base
+    pattern = re.compile(settings.STRIP_SUFFIX_PATTERN)
+    while match := pattern.search(tok):
+        if match.end() != len(tok) or match.start() == match.end():
+            break
+        tok = tok[: match.start()]
     return tok
 
 
@@ -460,7 +465,7 @@ def _parse_ngram_groups(
     ngram_groups: list[str],
     group_by: list[tuple[str, bool]],
     split: set[str],
-    strip_pointer_suffix: set[str],
+    strip_suffix: set[str],
     max_values_per_set: dict[str, int],
 ) -> list[tuple[tuple[str, ...], ...]]:
     """Parse ngram groups into expanded ngram tuples.
@@ -469,7 +474,7 @@ def _parse_ngram_groups(
         ngram_groups: Raw ngram group strings from count output.
         group_by: List of (attribute, is_struct) tuples.
         split: Attributes to split on.
-        strip_pointer_suffix: Attributes to strip pointer suffixes from.
+        strip_suffix: Attributes to strip recognized suffixes from.
         max_values_per_set: Dict of attribute to maximum values per set.
 
     Returns:
@@ -478,7 +483,7 @@ def _parse_ngram_groups(
     all_ngrams = []
 
     for i, ngram in enumerate(ngram_groups):
-        strip_pointer_suffixes = group_by[i][0] in strip_pointer_suffix
+        strip_suffixes = group_by[i][0] in strip_suffix
 
         # Split value sets and treat each value as a hit
         if group_by[i][0] in split:
@@ -496,14 +501,16 @@ def _parse_ngram_groups(
                     [x for x in token.split("|") if x] if token not in {"", "|"} else [""] for token in tokens
                 ]
 
-            # Strip multi-word pointers if requested
-            if strip_pointer_suffixes:
+            # Strip recognized suffixes from each value in the set.
+            if strip_suffixes:
                 for j in range(len(split_tokens)):
-                    split_tokens[j] = [_strip_pointer_suffix(t) for t in split_tokens[j]]
+                    split_tokens[j] = [_strip_suffix(t) for t in split_tokens[j]]
 
             ngrams = tuple(itertools.product(*split_tokens))
         else:
             ngrams = (tuple(ngram.split(" ")),) if not group_by[i][1] else ((ngram,),)
+            if strip_suffixes:
+                ngrams = tuple(tuple(_strip_suffix(value) for value in values) for values in ngrams)
 
         all_ngrams.append(ngrams)
 
@@ -684,7 +691,7 @@ async def perform_frequency_query(
     simple = frequency_params.simple
     relative_to_struct = frequency_params.relative_to_struct
     split = frequency_params.split
-    strip_pointer_suffix = frequency_params.strip_pointer_suffix
+    strip_suffix = frequency_params.strip_suffix
     max_values_per_set = frequency_params.max_values_per_set
     expand_prequeries = frequency_params.expand_prequeries
     start = frequency_params.start
@@ -845,9 +852,7 @@ async def perform_frequency_query(
                         "attribute containing tabs, which is not supported."
                     )
 
-                all_ngrams = _parse_ngram_groups(
-                    ngram_groups, group_by, split, strip_pointer_suffix, max_values_per_set
-                )
+                all_ngrams = _parse_ngram_groups(ngram_groups, group_by, split, strip_suffix, max_values_per_set)
                 cross = list(itertools.product(*all_ngrams))
 
                 _accumulate_ngram_stats(
@@ -916,7 +921,7 @@ class FrequenciesRequest(RequestModel):
             "ignore_case",
             "relative_to_struct",
             "split",
-            "strip_pointer_suffix",
+            "strip_suffix",
             "max_values_per_set",
         }
     )
@@ -934,7 +939,7 @@ class FrequenciesRequest(RequestModel):
     ignore_case: IgnoreCaseParam = None
     relative_to_struct: RelativeToStructParam = None
     split: params.SplitParam = None
-    strip_pointer_suffix: StripPointerSuffixParam = None
+    strip_suffix: StripSuffixParam = None
     max_values_per_set: MaxValuesPerSetParam = None
     expand_prequeries: params.ExpandPrequeriesParam = True
     include_combined: params.IncludeCombinedParam = True
@@ -956,7 +961,7 @@ class CorpusFrequenciesRequest(RequestModel):
     ignore_case: IgnoreCaseParam = None
     relative_to_struct: RelativeToStructParam = None
     split: params.SplitParam = None
-    strip_pointer_suffix: StripPointerSuffixParam = None
+    strip_suffix: StripSuffixParam = None
     max_values_per_set: MaxValuesPerSetParam = None
     expand_prequeries: params.ExpandPrequeriesParam = True
     include_combined: params.IncludeCombinedParam = True
@@ -1044,7 +1049,7 @@ async def _frequencies(
         ignore_case=request.ignore_case,
         relative_to_struct=request.relative_to_struct,
         split=request.split,
-        strip_pointer_suffix=request.strip_pointer_suffix,
+        strip_suffix=request.strip_suffix,
         max_values_per_set=request.max_values_per_set,
         simple=False,
         expand_prequeries=request.expand_prequeries,
@@ -1130,7 +1135,7 @@ async def _corpus_frequencies(
         ignore_case=request.ignore_case,
         relative_to_struct=request.relative_to_struct,
         split=request.split,
-        strip_pointer_suffix=request.strip_pointer_suffix,
+        strip_suffix=request.strip_suffix,
         max_values_per_set=request.max_values_per_set,
         simple=True,
         expand_prequeries=request.expand_prequeries,
@@ -1269,7 +1274,7 @@ async def _resolve_frequencies_time_request(
         ignore_case=None,
         relative_to_struct=None,
         split=None,
-        strip_pointer_suffix=None,
+        strip_suffix=None,
         max_values_per_set=None,
         simple=True,
         expand_prequeries=expand_prequeries,

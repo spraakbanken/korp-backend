@@ -65,6 +65,8 @@ Version 9 is a breaking rewrite of the backend and its HTTP API.
 - Frequency responses always use arrays for the main query plus subqueries, put pre-pagination `total_rows` on each
   statistics object, and represent all grouped attribute values as arrays. `/frequencies` and `/frequencies/corpus`
   support `include_combined` and `include_per_corpus` for selecting their top-level result sections.
+- Renamed statistics `strip_pointer` to `strip_suffix`. Selected attributes now lose suffixes matched by the
+  server's configurable `STRIP_SUFFIX_PATTERN`; the default handles integers, floats, and their combination.
 - Time-based responses use typed period arrays with inclusive ISO 8601 `start`/`end` boundaries instead of dynamic
   period keys. Undated material uses `{ "dated": false, ... }`.
 - Corpus metadata uses `positional`, `structural`, and `alignment` instead of the old single letter abbreviations; known

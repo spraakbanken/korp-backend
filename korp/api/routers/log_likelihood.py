@@ -40,7 +40,7 @@ Use `max_results` to limit how many values to return from each side of the compa
 return up to ten set-1-prominent values and ten set-2-prominent values. Omit `max_results` for no limit.
 
 Most grouping and value-normalization parameters are shared with `/frequencies`, including `group_by`,
-`group_by_struct`, `ignore_case`, `split`, `strip_pointer_suffix`, `max_values_per_set`, `within`, and
+`group_by_struct`, `ignore_case`, `split`, `strip_suffix`, `max_values_per_set`, `within`, and
 `default_within`.
 
 ### Example
@@ -143,7 +143,7 @@ class LogLikelihoodRequest(RequestModel):
             "ignore_case",
             "relative_to_struct",
             "split",
-            "strip_pointer_suffix",
+            "strip_suffix",
             "max_values_per_set",
         }
     )
@@ -160,7 +160,7 @@ class LogLikelihoodRequest(RequestModel):
     ignore_case: frequencies.IgnoreCaseParam = None
     relative_to_struct: frequencies.RelativeToStructParam = None
     split: params.SplitParam = None
-    strip_pointer_suffix: frequencies.StripPointerSuffixParam = None
+    strip_suffix: frequencies.StripSuffixParam = None
     max_values_per_set: frequencies.MaxValuesPerSetParam = None
     expand_prequeries: params.ExpandPrequeriesParam = True
 
@@ -424,7 +424,7 @@ async def _log_likelihood(
         ignore_case=request.ignore_case,
         relative_to_struct=request.relative_to_struct,
         split=request.split,
-        strip_pointer_suffix=request.strip_pointer_suffix,
+        strip_suffix=request.strip_suffix,
         max_values_per_set=request.max_values_per_set,
         simple=False,
         expand_prequeries=request.expand_prequeries,

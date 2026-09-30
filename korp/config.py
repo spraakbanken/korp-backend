@@ -10,7 +10,7 @@ from types import UnionType
 from typing import Any, Literal, get_args, get_origin
 
 import yaml
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _CORS_ORIGIN_REGEX_MATCH_ALL_EXAMPLES = (
@@ -60,6 +60,9 @@ class Settings(BaseSettings):
 
     # The maximum number of search results that can be returned per query (0 = no limit)
     MAX_KWIC_ROWS: int = 0
+
+    # Suffix to remove from selected statistics attributes. Matches one suffix at a time.
+    STRIP_SUFFIX_PATTERN: str = r":[0-9]+(?:\.[0-9]+)?$"
 
     # Number of threads to use during parallel processing
     PARALLEL_THREADS: int = 3
@@ -189,6 +192,23 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", env_nested_delimiter="__", env_parse_none_str="null"
     )
+
+    @field_validator("STRIP_SUFFIX_PATTERN")
+    @classmethod
+    def _validate_strip_suffix_pattern(cls, pattern: str) -> str:
+        """Validate the configured statistics suffix regex.
+
+        Returns:
+            The validated regex string.
+
+        Raises:
+            ValueError: If the regex is malformed.
+        """
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise ValueError(f"Invalid STRIP_SUFFIX_PATTERN: {exc}") from exc
+        return pattern
 
     @model_validator(mode="after")
     def _expand_paths(self) -> "Settings":
