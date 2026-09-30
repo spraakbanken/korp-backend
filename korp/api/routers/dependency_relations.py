@@ -154,9 +154,10 @@ MinFreqParam: TypeAlias = Annotated[
 ]
 
 MaxResultsParam: TypeAlias = Annotated[
-    Annotated[int, Field(ge=1)] | SkipJsonSchema[None],
+    int,
     Query(
-        description="Maximum number of rows to return for each relation label and direction. Omit for no limit.",
+        description="Maximum number of rows to return for each relation label and direction. Use `0` for no limit.",
+        ge=0,
         examples=[15],
     ),
 ]
@@ -1997,7 +1998,7 @@ class DependencyRelationsRequest(RequestModel):
     term: TermParam
     term_type: TermTypeParam = TermType.word
     min_freq: MinFreqParam = None
-    max_results: MaxResultsParam = None
+    max_results: MaxResultsParam = 15
     sort: RelationsSortParam = DependencyRelationsSort.mi
     include_time: RelationsIncludeTimeParam = False
     period_size: PeriodSizeParam = 1
@@ -2018,7 +2019,7 @@ class DependencyRelationsTimeRequest(RequestModel):
     term: TermParam
     term_type: TermTypeParam = TermType.word
     min_freq: MinFreqParam = None
-    max_results: MaxResultsParam = None
+    max_results: MaxResultsParam = 15
     sort: RelationsSortParam = DependencyRelationsSort.mi
     period_size: PeriodSizeParam = 1
     period_align: PeriodAlignParam = PeriodAlign.newest
@@ -2106,7 +2107,7 @@ async def _relations(
         term_type=request.term_type,
         min_freq=request.min_freq,
         sort_field=request.sort,
-        max_results=request.max_results,
+        max_results=request.max_results or None,
         include_split=request.include_time,
         period_size=request.period_size,
         period_align=request.period_align,
@@ -2184,7 +2185,7 @@ async def _relations_time(
         term_type=request.term_type,
         min_freq=request.min_freq,
         sort_field=request.sort,
-        max_results=request.max_results,
+        max_results=request.max_results or None,
         include_split=True,
         period_size=request.period_size,
         period_align=request.period_align,

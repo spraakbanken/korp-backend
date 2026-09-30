@@ -9,7 +9,6 @@ from typing import Annotated, TypeAlias
 
 from fastapi import APIRouter, Query
 from pydantic import AfterValidator, BeforeValidator, Field
-from pydantic.json_schema import SkipJsonSchema
 
 from korp import utils
 from korp.api import params, schemas
@@ -36,8 +35,9 @@ The sign of each score shows which set the value is relatively more prominent in
 Each result row contains the grouped value, its log-likelihood score, and the absolute frequencies used from each set.
 `average` is the average absolute log-likelihood score before the result list is split by sign and limited.
 
-Use `max_results` to limit how many values to return from each side of the comparison. For example, `max_results=10` can
-return up to ten set-1-prominent values and ten set-2-prominent values. Omit `max_results` for no limit.
+By default, up to 15 values are returned from each side of the comparison. Use `max_results` to change this limit. For
+example, `max_results=10` can return up to ten set-1-prominent values and ten set-2-prominent values. Use
+`max_results=0` for no limit.
 
 Most grouping and value-normalization parameters are shared with `/frequencies`, including `group_by`,
 `group_by_struct`, `ignore_case`, `split`, `strip_suffix`, `max_values_per_set`, `within`, and
@@ -81,9 +81,10 @@ Set2CorporaParam: TypeAlias = Annotated[
 ]
 
 MaxResultsParam: TypeAlias = Annotated[
-    Annotated[int, Field(ge=1)] | SkipJsonSchema[None],
+    int,
     Query(
-        description="Maximum number of results to return from each side of the comparison. Omit for no limit.",
+        description="Maximum number of results to return from each side of the comparison. Use `0` for no limit.",
+        ge=0,
         examples=[15],
     ),
 ]
@@ -152,7 +153,7 @@ class LogLikelihoodRequest(RequestModel):
     set2_cqp: Set2CQPParam
     set1_corpora: Set1CorporaParam
     set2_corpora: Set2CorporaParam
-    max_results: MaxResultsParam = None
+    max_results: MaxResultsParam = 15
     group_by: frequencies.GroupByParam = None
     group_by_struct: frequencies.GroupByStructParam = None
     within: params.WithinParam = None
@@ -185,7 +186,7 @@ async def _log_likelihood_stream(
     request_state: _LogLikelihoodRequestState,
     set1_cqp: Set1CQPParam,
     set2_cqp: Set2CQPParam,
-    max_results: MaxResultsParam = None,
+    max_results: int | None = None,
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
     """Stream a log-likelihood comparison from validated request state.
@@ -441,6 +442,6 @@ async def _log_likelihood(
         request_state=request_state,
         set1_cqp=request.set1_cqp,
         set2_cqp=request.set2_cqp,
-        max_results=request.max_results,
+        max_results=request.max_results or None,
         abort_signal=abort_signal,
     )

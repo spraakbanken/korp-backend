@@ -117,9 +117,10 @@ OffsetParam: TypeAlias = Annotated[
 ]
 
 LimitParam: TypeAlias = Annotated[
-    Annotated[int, Field(ge=1)] | SkipJsonSchema[None],
+    int,
     Query(
-        description="Maximum number of result rows to return after `offset`. Omit for no limit.",
+        description="Maximum number of result rows to return after `offset`. Use `0` for no limit.",
+        ge=0,
         examples=[25],
     ),
 ]
@@ -439,7 +440,7 @@ async def parse_frequency_parameters(
         max_values_per_set=max_values,
         expand_prequeries=expand_prequeries,
         start=offset,
-        end=-1 if limit is None else offset + limit - 1,
+        end=-1 if limit is None or limit == 0 else offset + limit - 1,
         cut=cut,
     )
 
@@ -935,7 +936,7 @@ class FrequenciesRequest(RequestModel):
     within: params.WithinParam = None
     default_within: params.DefaultWithinParam = None
     offset: OffsetParam = 0
-    limit: LimitParam = None
+    limit: LimitParam = 25
     ignore_case: IgnoreCaseParam = None
     relative_to_struct: RelativeToStructParam = None
     split: params.SplitParam = None
@@ -957,7 +958,7 @@ class CorpusFrequenciesRequest(RequestModel):
     within: params.WithinParam = None
     default_within: params.DefaultWithinParam = None
     offset: OffsetParam = 0
-    limit: LimitParam = None
+    limit: LimitParam = 25
     ignore_case: IgnoreCaseParam = None
     relative_to_struct: RelativeToStructParam = None
     split: params.SplitParam = None
