@@ -190,7 +190,7 @@ class FrequencySums(schemas.ResponseModel):
 class FrequencyRow(schemas.ResponseModel):
     """A grouped frequency row."""
 
-    value: dict[str, list[str]] = Field(
+    value: dict[str, list[str | None]] = Field(
         ...,
         description=(
             "Grouped CWB attribute values. Every value is an array: positional values contain one value per token in "
@@ -571,7 +571,14 @@ def _rows_to_list(rows: dict, group_by: list[tuple[str, bool]]) -> list[dict]:
         List of dicts with "value" key and stat values.
     """
     return [
-        {"value": {key[0]: list(ngram[i]) for i, key in enumerate(group_by)}, **vals} for ngram, vals in rows.items()
+        {
+            "value": {
+                key[0]: [cqp.translate_undef(value) for value in ngram[i]] if not key[1] else list(ngram[i])
+                for i, key in enumerate(group_by)
+            },
+            **vals,
+        }
+        for ngram, vals in rows.items()
     ]
 
 

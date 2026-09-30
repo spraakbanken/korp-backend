@@ -18,7 +18,7 @@ import anyio
 from anyio import CapacityLimiter
 from fastapi import APIRouter, Query
 
-from korp import auth, caching, handler, utils
+from korp import auth, caching, cqp, handler, utils
 from korp.config import settings
 from korp.dependencies import CtxDep, QueryCtxDep
 from korp.handler import APIValidationError, api_handler
@@ -86,8 +86,8 @@ IncludeCountsParam: TypeAlias = Annotated[
 ]
 
 
-class AttributeValuesWithoutCounts(RootModel["list[str] | dict[str, AttributeValuesWithoutCounts]"]):
-    """Compact attribute-value tree whose leaves are string arrays."""
+class AttributeValuesWithoutCounts(RootModel["list[str | None] | dict[str, AttributeValuesWithoutCounts]"]):
+    """Compact attribute-value tree whose leaves are arrays of strings or undefined values."""
 
 
 class AttributeValuesWithCounts(RootModel["dict[str, int | AttributeValuesWithCounts]"]):
@@ -273,7 +273,7 @@ async def _attribute_values(ctx: CtxDep, request: AttributeValuesRequest) -> Asy
 
             async for c, attribute, lines in receive:
                 corpus_stats_dict: dict[str, int] = {}
-                corpus_stats_set: set[str] = set()
+                corpus_stats_set: set[str | None] = set()
                 vals_dict: dict = {}
                 attr_parts = attribute.split(">")
                 is_nested = len(attr_parts) > 1
@@ -304,7 +304,7 @@ async def _attribute_values(ctx: CtxDep, request: AttributeValuesRequest) -> Asy
                                 cur = vals_dict
                                 for part in combo[:-2]:
                                     cur = cur.setdefault(part, {})
-                                cur.setdefault(combo[-2], []).append(combo[-1])
+                                cur.setdefault(combo[-2], []).append(cqp.translate_undef(combo[-1]))
                     else:
                         split_vals = (
                             ([x for x in raw_val.split("|") if x] if raw_val else [""])
@@ -315,14 +315,16 @@ async def _attribute_values(ctx: CtxDep, request: AttributeValuesRequest) -> Asy
                             if include_counts:
                                 corpus_stats_dict[v] = freq
                             else:
-                                corpus_stats_set.add(v)
+                                corpus_stats_set.add(cqp.translate_undef(v))
 
                 if is_nested:
                     result["corpora"][c][attribute] = vals_dict
                 elif include_counts:
                     result["corpora"][c][attribute] = corpus_stats_dict
                 else:
-                    result["corpora"][c][attribute] = sorted(corpus_stats_set)
+                    result["corpora"][c][attribute] = sorted(
+                        corpus_stats_set, key=lambda value: (value is not None, value or "")
+                    )
 
                 if stream:
                     progress_count += 1
