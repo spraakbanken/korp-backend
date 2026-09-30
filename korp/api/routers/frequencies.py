@@ -113,7 +113,13 @@ GroupByStructParam: TypeAlias = Annotated[
 
 OffsetParam: TypeAlias = Annotated[
     int,
-    Query(description="Number of result rows to skip after sorting by absolute frequency.", ge=0, examples=[0]),
+    Query(
+        description=(
+            "Number of result rows to skip after sorting by absolute frequency (descending), then grouped value."
+        ),
+        ge=0,
+        examples=[0],
+    ),
 ]
 
 LimitParam: TypeAlias = Annotated[
@@ -620,20 +626,18 @@ def _finalize_frequency_results(
             corpus_stats = result["corpora"][c][query_no]
             corpus_stats["total_rows"] = len(corpus_stats["rows"])
 
-        slice_end = None if end == -1 else end + 1
-        if start > 0 or (end > -1 and len(total_stats[query_no]["rows"]) > (end - start) + 1):
-            # Only a selected range of results requested
+        if start > 0 or (end > -1 and len(total_stats[query_no]["rows"]) > end - start + 1):
+            slice_end = None if end == -1 else end + 1
             total_stats[query_no]["rows"] = dict(
-                sorted(total_stats[query_no]["rows"].items(), key=lambda x: x[1]["absolute"], reverse=True)[
+                sorted(total_stats[query_no]["rows"].items(), key=lambda item: (-item[1]["absolute"], item[0]))[
                     start:slice_end
                 ]
             )
 
             for c in corpora:
+                corpus_rows = result["corpora"][c][query_no]["rows"]
                 result["corpora"][c][query_no]["rows"] = {
-                    k: v
-                    for k, v in result["corpora"][c][query_no]["rows"].items()
-                    if k in total_stats[query_no]["rows"]
+                    ngram: corpus_rows[ngram] for ngram in total_stats[query_no]["rows"] if ngram in corpus_rows
                 }
 
         if not relative_to_struct:
