@@ -29,7 +29,7 @@ The optimizer targets simple multi-token searches that can be transformed into C
 contains the optimized query when optimization succeeds, or the original query when optimization is not needed or not
 possible.
 
-Use `within` to tell the optimizer which structural unit the query should stay inside. Set `in_order=false` for
+Use `within` to tell the optimizer which structural unit the query should stay inside. Set `free_order=true` for
 free-order searches, where the matched query tokens may occur in any order inside the structural unit.
 
 It is not necessary to use this route before every search, as Korp automatically optimizes queries internally when
@@ -54,11 +54,9 @@ OptimizeWithinParam: TypeAlias = Annotated[
     ),
 ]
 
-OptimizeInOrderParam: TypeAlias = Annotated[
+OptimizeFreeOrderParam: TypeAlias = Annotated[
     bool,
-    Query(
-        description=("Whether token order should matter. Set to `false` to optimize the query as a free-order search.")
-    ),
+    Query(description=("Set to `true` to optimize the query as a free-order search.")),
 ]
 
 
@@ -91,7 +89,7 @@ class OptimizeRequest(RequestModel):
 
     cqp_query: OptimizeCQPParam
     within: OptimizeWithinParam = None
-    in_order: OptimizeInOrderParam = True
+    free_order: OptimizeFreeOrderParam = False
 
 
 class OptimizeQuery(QueryRequestModel, OptimizeRequest):
@@ -193,10 +191,10 @@ def _optimize(request: OptimizeRequest) -> dict:
             optimization status.
     """
     cqp_params: dict[str, str | int] = {"within": request.within or "sentence"}
-    free_search = not request.in_order
+    free_order = request.free_order
 
     optimization_status, optimized_cqp = cqp.optimize_query(
-        request.cqp_query, cqp_params, find_match=False, expand=False, free_search=free_search
+        request.cqp_query, cqp_params, find_match=False, expand=False, free_order=free_order
     )
 
     return {

@@ -53,10 +53,9 @@ previous one. When multiple `cqp` parameters are used with the default `expand_p
 Context is controlled by `default_context`, or per corpus with `context`, `left_context`, and `right_context`.
 `left_context` and `right_context` let you request asymmetric context around the match.
 
-When `in_order=false`, token order in the CQP query does not matter. Each occurrence of a matched query token is
+When `free_order=true`, token order in the CQP query does not matter. Each occurrence of a matched query token is
 highlighted separately, and the row's `matches` list contains multiple match objects. Free-order searches require
-`default_within` or `within`. Not all CQP queries can be run in free order; if the query cannot be executed in free
-order, an error is returned.
+`default_within` or `within`. Not all CQP queries support free-order searches; unsupported queries return an error.
 
 With `stream=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
 final completion event.
@@ -107,13 +106,14 @@ RightContextParam: TypeAlias = Annotated[
     BeforeValidator(utils.split_csv),
 ]
 
-InOrderParam: TypeAlias = Annotated[
+FreeOrderParam: TypeAlias = Annotated[
     bool,
     Query(
         description=(
-            "Whether token order in the CQP query should matter. When set to `false`, Korp performs a free-order "
-            "search, highlights each matched query token separately, and returns all match positions in `matches`. "
-            "Free-order search also requires `default_within` or `within`."
+            "When `true`, the order of tokens in the CQP query does not matter. Each occurrence of a matched query "
+            "token is highlighted separately, and the row's `matches` list contains multiple match objects. Free-order "
+            "searches require `default_within` or `within`. Not all CQP queries support free-order searches; "
+            "unsupported queries return an error."
         )
     ),
 ]
@@ -229,7 +229,7 @@ class ConcordanceRequest(RequestModel):
     max_hits_per_corpus: MaxHitsPerCorpusParam = None
     sort: SortParam = None
     random_seed: RandomSeedParam = None
-    in_order: InOrderParam = True
+    free_order: FreeOrderParam = False
     within: params.WithinParam = None
     default_within: params.DefaultWithinParam = None
     default_context: params.DefaultContextParam = "10 words"
@@ -262,7 +262,7 @@ class ConcordanceSampleRequest(RequestModel):
     attributes: AttributesParam = ("word",)
     struct_attributes: StructAttributesParam = ()
     random_seed: RandomSeedParam = None
-    in_order: InOrderParam = True
+    free_order: FreeOrderParam = False
     within: params.WithinParam = None
     default_within: params.DefaultWithinParam = None
     context: params.ContextParam = None
@@ -360,7 +360,7 @@ class ConcordanceResponse(schemas.CommonResponse):
         ...,
         description=(
             "Compact hit-distribution data for this query. Submit this value as the `pagination_state` parameter when "
-            "requesting another page with the same corpus, CQP, `within`, `max_hits_per_corpus`, and `in_order` "
+            "requesting another page with the same corpus, CQP, `within`, `max_hits_per_corpus`, and `free_order` "
             "settings."
         ),
         examples=[
@@ -391,7 +391,7 @@ class ConcordanceParameters:
     max_hits_per_corpus: int | None = None
     sort: str | None = None
     random_seed: int | None = None
-    in_order: bool = True
+    free_order: bool = False
     within: dict[str, str | None] = dataclasses.field(default_factory=dict)
     default_within: str | None = None
     context: defaultdict[str, tuple[str, ...]] = dataclasses.field(default_factory=lambda: defaultdict(tuple))
@@ -416,7 +416,7 @@ async def parse_parameters(
     max_hits_per_corpus: int | None = None,
     sort: str | None = None,
     random_seed: int | None = None,
-    in_order: bool = True,
+    free_order: bool = False,
     within: Sequence[str] | None = None,
     default_within: str | None = None,
     context: Sequence[str] | None = None,
@@ -440,7 +440,7 @@ async def parse_parameters(
             results will be incorrect.
         sort: Sorting method for the results.
         random_seed: Random seed for random sorting.
-        in_order: Whether to perform an in-order search.
+        free_order: Whether to perform a free-order search.
         within: List of "within" specifications for each corpus.
         default_within: Default "within" specification if not provided for a corpus.
         context: List of context specifications for each corpus.
@@ -517,7 +517,7 @@ async def parse_parameters(
         max_hits_per_corpus=max_hits_per_corpus,
         sort=sort,
         random_seed=random_seed,
-        in_order=in_order,
+        free_order=free_order,
         default_within=default_within,
         default_context=default_context,
         context=context_dict,
@@ -541,12 +541,12 @@ async def perform_query(
     """
     stream = ctx.common.stream
     use_cache = ctx.common.cache
-    free_search = not concordance_parameters.in_order
 
     corpora = concordance_parameters.corpora
     cqp_query = concordance_parameters.cqp_query
     within = concordance_parameters.within
     max_hits_per_corpus = concordance_parameters.max_hits_per_corpus
+    free_order = concordance_parameters.free_order
     expand_prequeries = concordance_parameters.expand_prequeries
     pagination_state = concordance_parameters.pagination_state
     start = concordance_parameters.start
@@ -556,7 +556,7 @@ async def perform_query(
 
     # Checksum for whole query, used to verify pagination_state from the client
     checksum = utils.get_hash(
-        (sorted(corpora), cqp_query, sorted(within.items()), max_hits_per_corpus, expand_prequeries, free_search)
+        (sorted(corpora), cqp_query, sorted(within.items()), max_hits_per_corpus, expand_prequeries, free_order)
     )
 
     debug = {}
@@ -595,7 +595,7 @@ async def perform_query(
         cache_prefixes = await caching.cache_prefix(ctx.cache, [corpus.split("|")[0] for corpus in corpora])
         for corpus in corpora:
             corpus_checksum = utils.get_hash(
-                (cqp_query, within[corpus], max_hits_per_corpus, expand_prequeries, free_search)
+                (cqp_query, within[corpus], max_hits_per_corpus, expand_prequeries, free_order)
             )
             memcached_keys[f"{cache_prefixes[corpus.split('|')[0]]}:concordance_size_{corpus_checksum}"] = corpus
 
@@ -935,7 +935,7 @@ async def _concordance_sample(
         max_hits_per_corpus=1,
         sort="random",
         random_seed=request.random_seed,
-        in_order=request.in_order,
+        free_order=request.free_order,
         within=request.within,
         default_within=request.default_within,
         default_context=request.default_context,
@@ -1014,7 +1014,7 @@ async def _concordance(
         max_hits_per_corpus=request.max_hits_per_corpus,
         sort=request.sort,
         random_seed=request.random_seed,
-        in_order=request.in_order,
+        free_order=request.free_order,
         within=request.within,
         default_within=request.default_within,
         default_context=request.default_context,
@@ -1067,7 +1067,7 @@ def query_corpus(
     context = concordance_params.context[corpus]
     struct_attributes = concordance_params.struct_attributes
     expand_prequeries = concordance_params.expand_prequeries
-    free_search = not concordance_params.in_order
+    free_order = concordance_params.free_order
     max_hits_per_corpus = concordance_params.max_hits_per_corpus
     sort = concordance_params.sort
     random_seed = concordance_params.random_seed
@@ -1091,7 +1091,7 @@ def query_corpus(
         assert cache_dir is not None
 
         # Calculate checksum (needs to contain all arguments that may influence the results)
-        checksum_data = (cqp_query, within, max_hits_per_corpus, expand_prequeries, free_search)
+        checksum_data = (cqp_query, within, max_hits_per_corpus, expand_prequeries, free_order)
 
         checksum = utils.get_hash(checksum_data)
         unique_id = str(uuid.uuid4())
@@ -1195,10 +1195,10 @@ def query_corpus(
             if pre_query and expand_prequeries:
                 cqpparams_temp["expand"] = "to " + cast(str, within)
 
-            if free_search:
-                retcode, free_query = cqp.optimize_query(c, cqpparams_temp, free_search=True)
+            if free_order:
+                retcode, free_query = cqp.optimize_query(c, cqpparams_temp, free_order=True)
                 if retcode == cqp.QueryOptimizeResult.NOT_POSSIBLE:
-                    raise cqp.CQPError("Couldn't convert into free order query.")
+                    raise cqp.CQPError("Couldn't convert into free-order query.")
                 cmd += free_query
             elif optimize and expand_prequeries:
                 # We can only optimize when expand_prequeries is enabled
@@ -1220,7 +1220,7 @@ def query_corpus(
         cmd.append(f"{cache.query_temp} = Last; save {cache.query_temp};")
 
     if not no_results and not (cache and cache.cached_no_hits):
-        if free_search and retcode == cqp.QueryOptimizeResult.SUCCESS:
+        if free_order and retcode == cqp.QueryOptimizeResult.SUCCESS:
             tokens, _ = cqp.parse_cqp(cqp_query[-1])
             cmd.append("Last;")
             cmd.append(f"cut {start} {end};")
@@ -1237,7 +1237,7 @@ def query_corpus(
             cmd.append(f"set PrintStructures '{', '.join(struct_attributes)}';")
         cmd.append("set ExternalSort yes;")
         cmd += sortcmd
-        if free_search and retcode == cqp.QueryOptimizeResult.SUCCESS:
+        if free_order and retcode == cqp.QueryOptimizeResult.SUCCESS:
             # The results are already cut to the right range, so print all of them
             cmd.append("cat Last;")
         else:
@@ -1465,7 +1465,7 @@ def query_parse_lines(
     """
     attributes = concordance_params.attributes
     struct_attributes = concordance_params.struct_attributes
-    free_search = not concordance_params.in_order
+    free_order = concordance_params.free_order
 
     # Filter out unavailable attributes
     p_attrs = [attr for attr in attrs["p"] if attr in attributes]
@@ -1519,8 +1519,8 @@ def query_parse_lines(
             kwic_row["structs"] = linestructs
         kwic_row["tokens"] = tokens
 
-        # Handle free search deduplication
-        if free_search:
+        # Handle free-order query deduplication
+        if free_order:
             line_span = (match["position"] - match["start"], match["position"] - match["start"] + len(tokens) - 1)
             if line_span == last_line_span:
                 kwic[-1]["matches"].append(match)

@@ -48,6 +48,8 @@ Version 9 is a breaking rewrite of the backend and its HTTP API.
   `/relations*` family to `/dependency-relations*`.
 - Numbered `cqp1`/`cqp2` and `subcqp0`/`subcqp1` inputs are replaced by repeated `cqp` and `subcqp` query parameters, or
   ordered JSON arrays in POST bodies.
+- Replaced `in_order` with the opt-in `free_order` flag on concordance and optimizer routes.
+  `in_order=false` becomes `free_order=true`; ordered searches remain the default (`free_order=false`).
 - Pagination uses `offset` plus a row count in `limit`, rather than inclusive `start` and `end`. `/frequencies` and
   `/frequencies/corpus` default to `limit=25`; dependency relations and log-likelihood default to `max_results=15`.
   These routes accept `0` for unlimited results.

@@ -132,15 +132,15 @@ class TestQueryOptimize:
         ]
 
     @staticmethod
-    def test_optimize_query_rejects_wildcards_in_free_search() -> None:
+    def test_optimize_query_rejects_wildcards_in_free_order_search() -> None:
         """Raise error when free-order search contains wildcard tokens."""
-        with pytest.raises(cqp.CQPError, match="Wildcards not allowed in free order queries"):
-            cqp.optimize_query('[] [word="a"] [word="b"]', {"within": "sentence"}, free_search=True)
+        with pytest.raises(cqp.CQPError, match="Wildcards not allowed in free-order queries"):
+            cqp.optimize_query('[] [word="a"] [word="b"]', {"within": "sentence"}, free_order=True)
 
     @staticmethod
-    def test_optimize_query_builds_free_search_mu_query() -> None:
+    def test_optimize_query_builds_free_order_search_mu_query() -> None:
         """Build free-order MU query using within-based constraints."""
-        retcode, query = cqp.optimize_query('[word="a"] [word="b"]', {"within": "sentence"}, free_search=True)
+        retcode, query = cqp.optimize_query('[word="a"] [word="b"]', {"within": "sentence"}, free_order=True)
 
         assert retcode == cqp.QueryOptimizeResult.SUCCESS
         assert query == ['MU (meet [word="a"] [word="b"] sentence) expand to sentence;']

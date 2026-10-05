@@ -63,7 +63,7 @@ def parse_within(within: Sequence[str] | None, default_within: str | None = None
 def parse_cqp(cqp: str) -> tuple[list[str], bool]:
     """Try to parse a CQP query, returning identified tokens and a boolean indicating partial failure if True.
 
-    This is used by the query optimizer, and by "free order" searches.
+    This is used by the query optimizer, and by free-order searches.
 
     Args:
         cqp: The CQP query string.
@@ -227,7 +227,7 @@ class QueryOptimizeResult(Enum):
 
 
 def optimize_query(
-    cqp: str, cqp_params: dict, find_match: bool = True, expand: bool = True, free_search: bool = False
+    cqp: str, cqp_params: dict, find_match: bool = True, expand: bool = True, free_order: bool = False
 ) -> tuple[QueryOptimizeResult, list[str]]:
     """Optimize simple queries with multiple words by converting them to MU queries.
 
@@ -239,7 +239,7 @@ def optimize_query(
         cqp_params: Additional CQP parameters (within, cut, expand).
         find_match: Whether to mark all matching words in the result (not just the first).
         expand: Whether to expand the query.
-        free_search: Whether the query is a free order search.
+        free_order: Whether the query is a free-order search.
 
     Returns:
         A tuple containing:
@@ -255,14 +255,14 @@ def optimize_query(
 
     leading_wildcards = False
 
-    if free_search:
-        # Don't allow wildcards in free order queries
+    if free_order:
+        # Don't allow wildcards in free-order queries
         if any(token.startswith("[]") for token in tokens):
-            raise CQPError("Wildcards not allowed in free order queries.")
+            raise CQPError("Wildcards not allowed in free-order queries.")
 
-        # Don't allow distance-based within values in free order queries (e.g. "5 sentence")
+        # Don't allow distance-based within values in free-order queries (e.g. "5 sentence")
         if within and re.match(r"^\d+ ", within):
-            raise CQPError("Distance-based 'within' values not allowed in free order queries.")
+            raise CQPError("Distance-based 'within' values not allowed in free-order queries.")
     else:
         # Strip leading and trailing wildcards since they only slow things down
         start = 0
@@ -311,7 +311,7 @@ def optimize_query(
         if i + 1 in wildcards:
             mu_parts.append(f"{within})" if wc_max >= _WILDCARD_MAX else f"{wc_min} {wc_max})")
             wc_min = wc_max = 1
-        elif free_search:
+        elif free_order:
             mu_parts.append(f"{within})")
         else:
             mu_parts.append("1 1)")
@@ -319,13 +319,13 @@ def optimize_query(
     mu_cmd = " ".join(mu_parts)
     cmd: list[str] = []
 
-    if find_match and not free_search:
+    if find_match and not free_order:
         # MU searches only highlight the first keyword of each hit. To highlight all keywords we need to
         # do a new non-optimized search within the results, and to be able to do that we first need to expand the rows.
         # Most of the time we only need to expand to the right, except for when leading wildcards are used.
         direction = "expand to" if leading_wildcards else "expand right to"
         cmd.extend([f"{mu_cmd} {direction} {within};", "Last;", *fallback_query])
-    elif expand or free_search:
+    elif expand or free_order:
         cmd.append(f"{mu_cmd} expand to {within};")
     else:
         cmd.append(f"{mu_cmd};")
