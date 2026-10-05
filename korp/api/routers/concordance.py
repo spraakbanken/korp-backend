@@ -60,6 +60,25 @@ highlighted separately, and the row's `matches` list contains multiple match obj
 With `stream=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
 final completion event.
 
+### Parallel corpora
+
+To search aligned corpora, specify each base/aligned pair as `BASE|ALIGNED` in `corpora`. For example,
+`corpora=mycorpus-swe|mycorpus-dan,mycorpus-swe|mycorpus-eng` searches the Swedish corpus with its Danish alignment and
+then with its English alignment. Each entry describes exactly one pair; repeat the base corpus in another entry to
+search another alignment.
+
+Write the base-corpus query first. Introduce each aligned query with the Korp-specific marker
+`:LINKED_CORPUS:<corpus ids>`, where `<corpus ids>` is one or more aligned corpus ids separated by `|`:
+
+`[word="katt"] :LINKED_CORPUS:mycorpus-dan [word="kat"] :LINKED_CORPUS:mycorpus-eng [word="cat"]`
+
+For each pair in `corpora`, Korp uses the base query and the aligned query whose marker includes that pair's aligned
+corpus. Listing several corpus ids on one marker lets pairs that use the same aligned-language query share a clause,
+for example `:LINKED_CORPUS:corpus-a-eng|corpus-b-eng [word="cat"]`.
+
+The returned KWIC row has the `BASE|ALIGNED` pair in `corpus`. Its `tokens` contain the base-corpus context, while
+`aligned` contains the aligned context keyed by aligned corpus id.
+
 ### Examples
 
 Query `suc3` and return the first ten hits for `"och" [] [pos="NN"]`, including the `msd` and `lemma` annotations:
