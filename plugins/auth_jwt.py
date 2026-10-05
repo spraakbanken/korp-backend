@@ -8,15 +8,22 @@ The plugin expects the JWT to be provided in the Authorization header as a Beare
 to validate the token. The public key file can be configured using the "pubkey_file" setting in the plugin
 configuration.
 
+The optional "license_claim" setting names a top-level JWT claim containing a list of license access grants
+(strings). When configured, a protected corpus is also accessible if its CWB "License" value appears in that
+claim. License values are case-sensitive; metadata key names are case-insensitive. Explicit corpus scopes still
+grant access regardless of license metadata. Without this setting, only corpus scopes grant access.
+
 To determine which corpora are protected, it checks the CWB info for each corpus. A corpus is considered protected if
 it has the "Protected" key set to "true" in its CWB `.info` file.
 
 To use this plugin, you need to install the `pyjwt[crypto]` package.
 """
 
-import time
+from __future__ import annotations
+
 from functools import cached_property
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import jwt  # type: ignore
 
@@ -24,11 +31,27 @@ from korp import auth, plugin, utils
 from korp.dependencies import AuthContext
 from plugins import protection_cwb
 
+if TYPE_CHECKING:
+    from korp.cwb import CWB
+    from korp.memcached import Memcached
+
 bp = plugin.Plugin("auth_jwt", __name__)
 
 
 class AuthJWT(auth.Authorizer):
     """Authorizer plugin using JWT token scopes."""
+
+    def __init__(self, cwb: CWB, cache: Memcached) -> None:
+        """Initialize JWT settings.
+
+        Raises:
+            ValueError: If license_claim is not a non-empty string or None.
+        """
+        super().__init__(cwb, cache)
+        license_claim = bp.config("license_claim")
+        if license_claim is not None and (not isinstance(license_claim, str) or not license_claim.strip()):
+            raise ValueError("license_claim must be a non-empty top-level JWT claim name or None.")
+        self.license_claim: str | None = license_claim
 
     @classmethod
     def openapi_security(cls) -> tuple[dict[str, dict[str, str]], list[dict[str, list[str]]]]:
@@ -54,7 +77,9 @@ class AuthJWT(auth.Authorizer):
         Returns:
             Protection metadata keyed by corpus.
         """
-        return await protection_cwb.fetch_protection_info(self.cwb, corpora, self.cache, auth_ctx)
+        return await protection_cwb.fetch_protection_info(
+            self.cwb, corpora, self.cache, auth_ctx, detail_keys=("License",)
+        )
 
     async def get_protected_corpora(self, auth_ctx: AuthContext) -> list[str]:
         """Get list of corpora with restricted access.
@@ -69,7 +94,7 @@ class AuthJWT(auth.Authorizer):
     async def check_authorization(
         self, corpora: list[str], auth_ctx: AuthContext
     ) -> tuple[bool, list[str], str | None]:
-        """Check if the user has access to the specified corpora based on JWT scopes.
+        """Check access through JWT corpus scopes or configured license grants.
 
         Args:
             corpora: A list of corpora to check access for.
@@ -84,7 +109,8 @@ class AuthJWT(auth.Authorizer):
         protection_info = await self._get_protection_info(corpora, auth_ctx)
         protected_requested = [corpus for corpus in corpora if protection_info[corpus].protected]
         if protected_requested:
-            user_corpora = []
+            user_corpora: set[str] = set()
+            user_licenses: set[str] = set()
 
             # Get authorization header
             auth_header = auth_ctx.request.headers.get("Authorization")
@@ -101,21 +127,32 @@ class AuthJWT(auth.Authorizer):
                 except jwt.InvalidTokenError:
                     return False, [], "Could not validate the provided JWT."
 
-                if user_token.get("exp") and user_token["exp"] < time.time():
-                    return False, [], "The provided JWT has expired"
-
-                user_corpora.extend(
+                user_corpora.update(
                     utils.normalize_corpus_id(corpus) for corpus in user_token.get("scope", {}).get("corpora", {})
                 )
+                if self.license_claim is not None:
+                    grants = user_token.get(self.license_claim)
+                    if isinstance(grants, list) and all(isinstance(grant, str) for grant in grants):
+                        user_licenses.update(grants)
 
-            unauthorized = [corpus for corpus in protected_requested if corpus not in user_corpora]
+            unauthorized = []
+            for corpus in protected_requested:
+                if corpus in user_corpora:
+                    continue
+                license_value = next(
+                    (value for key, value in protection_info[corpus].details.items() if key.casefold() == "license"),
+                    None,
+                )
+                if isinstance(license_value, str) and license_value and license_value in user_licenses:
+                    continue
+                unauthorized.append(corpus)
             if unauthorized:
                 return False, unauthorized, None
         return True, [], None
 
     @cached_property
     def jwt_key(self) -> str | None:
-        """Return the public key for validating JWTs."""
+        """Public key for validating JWTs."""
         pubkey_file = bp.config("pubkey_file")
         if not pubkey_file:
             return None
