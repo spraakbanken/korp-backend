@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING, overload
 
@@ -13,13 +14,33 @@ if TYPE_CHECKING:
 
 
 def get_corpus_timestamps() -> dict[str, float]:
-    """Get modification time of corpus registry files.
+    """Get the latest modification time of each corpus registry and its declared info file.
 
     Returns:
         A dictionary mapping corpus names to their modification timestamps.
     """
     assert settings.CWB_REGISTRY is not None  # Should be guaranteed by settings validation
-    return {utils.normalize_corpus_id(f.name): f.stat().st_mtime for f in Path(settings.CWB_REGISTRY).glob("*")}
+    corpora: dict[str, float] = {}
+    for registry_file in Path(settings.CWB_REGISTRY).glob("*"):
+        timestamp = registry_file.stat().st_mtime
+        with registry_file.open(encoding="utf-8") as registry:
+            for line in registry:
+                fields = line.split(maxsplit=1)
+                if not fields or fields[0] != "INFO":
+                    continue
+
+                # CWB paths may be double-quoted and contain escaped quotes or backslashes.
+                _, info_path = shlex.split(line, comments=True)
+                try:
+                    info_timestamp = Path(info_path).stat().st_mtime
+                except FileNotFoundError:
+                    pass
+                else:
+                    timestamp = max(timestamp, info_timestamp)
+                break
+
+        corpora[utils.normalize_corpus_id(registry_file.name)] = timestamp
+    return corpora
 
 
 def get_corpus_config_timestamps() -> tuple[dict[str, float], float, float]:
