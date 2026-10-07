@@ -266,5 +266,5 @@ class Memcached:
 
     @cached_property
     def sync(self) -> MemcachedSyncClient:
-        """Get a synchronous Memcached client wrapper."""
+        """A synchronous Memcached client wrapper."""
         return MemcachedSyncClient(self)

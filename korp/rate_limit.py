@@ -43,7 +43,7 @@ class RateLimitCheck:
 
     @property
     def headers(self) -> dict[str, str]:
-        """Return HTTP headers representing the check result."""
+        """HTTP headers representing the check result."""
         return {header: str(value) for attr, header in _HEADER_FIELDS if (value := getattr(self, attr)) is not None}
 
 
