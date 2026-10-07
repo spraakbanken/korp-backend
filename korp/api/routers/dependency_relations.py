@@ -1783,9 +1783,7 @@ async def _dependency_relations_impl(
 
         # Filter out corpora which don't exist in database
         corpora = [
-            c
-            for c in corpora
-            if f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{c.upper()}{table_suffix}" in tables
+            c for c in corpora if f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{c.upper()}{table_suffix}" in tables
         ]
         corpora_rest = [c for c in corpora if c not in cached_corpora]
 
@@ -2265,8 +2263,7 @@ async def _relations_sentences_impl(
             [
                 (corpus, ids)
                 for corpus, ids in source_map.items()
-                if f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{corpus.upper()}{table_suffix}"
-                in tables
+                if f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{corpus.upper()}{table_suffix}" in tables
             ]
         )
         if not filtered_source:
@@ -2279,9 +2276,7 @@ async def _relations_sentences_impl(
         counts: list[str] = []
         for corpus, ids in filtered_source:
             ids_list = "(" + ", ".join(f"{i:d}" for i in sorted(ids)) + ")"
-            corpus_table_sentences = (
-                f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{corpus.upper()}{table_suffix}"
-            )
+            corpus_table_sentences = f"{settings.DB_DEPENDENCY_RELATIONS_TABLE_PREFIX}_{corpus.upper()}{table_suffix}"
             selects.append(
                 f"""(
                     SELECT

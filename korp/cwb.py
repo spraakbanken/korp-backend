@@ -26,9 +26,7 @@ class CWB:
         "CL: major error, cannot compose string: invalid UTF8 string passed to cl_string_canonical...",
     )
 
-    def __init__(
-        self, executable: Path, scan_executable: Path, registry: Path, locale: str, encoding: str
-    ) -> None:
+    def __init__(self, executable: Path, scan_executable: Path, registry: Path, locale: str, encoding: str) -> None:
         """Initialize CWB interface.
 
         Args:
