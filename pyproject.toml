@@ -14,8 +14,8 @@ authors = [
     { name = "Språkbanken Text", email = "sb-info@svenska.gu.se" }
 ]
 dependencies = [
-    "fastapi==0.141.1",
-    "sqlalchemy~=2.0",
+    "fastapi==0.142.2",
+    "sqlalchemy[asyncio]~=2.0",
     "asyncmy~=0.2.14",  # MySQL driver for SQLAlchemy
     "psutil~=7.2",
     "aiomcache~=0.8.2",  # Memcached client
@@ -40,7 +40,7 @@ jwt = [
 dev = [
     "fastapi-cli[standard-no-fastapi-cloud-cli]",
     "pyright~=1.1",
-    "ruff~=0.15.0",
+    "ruff~=0.16.0",
     {include-group = "test"}
 ]
 test = [
