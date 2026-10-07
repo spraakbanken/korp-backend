@@ -66,11 +66,11 @@ def strptime(date: str) -> datetime.datetime:
         A datetime object representing the parsed date.
     """
     year = int(date[:4])
-    month = int(date[4:6]) if len(date) > 4 else 1  # noqa: PLR2004
-    day = int(date[6:8]) if len(date) > 6 else 1  # noqa: PLR2004
-    hour = int(date[8:10]) if len(date) > 8 else 0  # noqa: PLR2004
-    minute = int(date[10:12]) if len(date) > 10 else 0  # noqa: PLR2004
-    second = int(date[12:14]) if len(date) > 12 else 0  # noqa: PLR2004
+    month = int(date[4:6]) if len(date) > 4 else 1  # ruff: ignore[magic-value-comparison]
+    day = int(date[6:8]) if len(date) > 6 else 1  # ruff: ignore[magic-value-comparison]
+    hour = int(date[8:10]) if len(date) > 8 else 0  # ruff: ignore[magic-value-comparison]
+    minute = int(date[10:12]) if len(date) > 10 else 0  # ruff: ignore[magic-value-comparison]
+    second = int(date[12:14]) if len(date) > 12 else 0  # ruff: ignore[magic-value-comparison]
     return datetime.datetime(year, month, day, hour, minute, second)
 
 

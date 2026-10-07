@@ -1,5 +1,5 @@
 """Pytest fixtures for testing the Korp backend as a FastAPI app."""
-# ruff: noqa: E402 - pytest.register_assert_rewrite needs to be called before importing testutils
+# ruff: file-ignore[module-import-not-at-top-of-file] - pytest.register_assert_rewrite needs to be called before importing testutils
 
 import warnings
 from collections.abc import Callable, Iterator

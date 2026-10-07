@@ -890,7 +890,7 @@ def build_token_distribution(
             # All overlaps permitted
             # t1 <= t2' AND t2 >= t1'
             pass
-        elif strategy == params.StrategyValues.strict:  # noqa: SIM102
+        elif strategy == params.StrategyValues.strict:  # ruff: ignore[collapsible-if]
             # Strict matching. No overlaps tolerated.
             # t1 >= t1' AND t2 <= t2'
 

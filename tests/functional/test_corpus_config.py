@@ -7,7 +7,7 @@ class TestCorpusConfig:
     """Tests for /corpora/config."""
 
     @staticmethod
-    def test_corpus_config(get_json: Callable, corpus_configs: None) -> None:  # noqa: ARG004
+    def test_corpus_config(get_json: Callable, corpus_configs: None) -> None:  # ruff: ignore[unused-static-method-argument]
         """Test that a corpus configuration can be retrieved."""
         data = get_json(
             "/corpora/config",

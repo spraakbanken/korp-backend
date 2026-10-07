@@ -6,7 +6,7 @@ import pytest
 
 
 @pytest.fixture
-def concordance_testcorpus(get_json: Callable, corpora: list[str]) -> Callable[..., dict]:  # noqa: ARG001
+def concordance_testcorpus(get_json: Callable, corpora: list[str]) -> Callable[..., dict]:  # ruff: ignore[unused-function-argument]
     """Return function returning JSON response for `/concordance` to testcorpus.
 
     The returned function takes as its parameters the CQP query, possible additional query parameters and Korp
@@ -32,7 +32,7 @@ def concordance_testcorpus(get_json: Callable, corpora: list[str]) -> Callable[.
 
 
 @pytest.fixture
-def concordance_sample_testcorpus(get_json: Callable, corpora: list[str]) -> Callable[..., dict]:  # noqa: ARG001
+def concordance_sample_testcorpus(get_json: Callable, corpora: list[str]) -> Callable[..., dict]:  # ruff: ignore[unused-function-argument]
     """Return function returning JSON response for `/concordance/sample` to testcorpus."""
 
     def _concordance_sample_testcorpus(cqp: str, params: dict | None = None, config: dict | None = None) -> dict:

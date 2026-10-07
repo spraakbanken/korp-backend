@@ -1317,7 +1317,7 @@ async def _fetch_mappings(
     sql: str,
     params: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Execute SQL and return mapping rows as plain dictionaries."""  # noqa: DOC201
+    """Execute SQL and return mapping rows as plain dictionaries."""  # ruff: ignore[docstring-missing-returns]
     result = await conn.execute(text(sql), params or {})
     return [dict(row) for row in result.mappings().all()]
 

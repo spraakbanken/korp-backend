@@ -58,10 +58,10 @@ class ExampleAuth(auth.Authorizer):
         """
         return (router.config("required_header", "X-Authorized-Corpora"),)
 
-    async def _fetch_protection_info(  # noqa: PLR6301
+    async def _fetch_protection_info(  # ruff: ignore[no-self-use]
         self,
         corpora: list[str],
-        auth_ctx: AuthContext,  # noqa: ARG002
+        auth_ctx: AuthContext,  # ruff: ignore[unused-method-argument]
     ) -> dict[str, auth.ProtectionInfo]:
         """Build protection metadata from plugin configuration.
 

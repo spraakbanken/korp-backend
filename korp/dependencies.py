@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from korp.memcached import Memcached
 
 
-async def common_params(  # noqa: RUF029 - avoid unnecessarily running dependency in a worker thread
+async def common_params(  # ruff:ignore[unused-async] - avoid unnecessarily running dependency in a worker thread
     request: Request,
     controls: Annotated[CommonQueryControls, Query()],
 ) -> CommonParams:
@@ -96,7 +96,7 @@ class AuthContext:
     cache_enabled: bool
 
 
-async def get_ctx(  # noqa: RUF029
+async def get_ctx(  # ruff:ignore[unused-async]
     request: Request,
     common: Annotated[CommonParams, Depends(common_params)],
 ) -> Ctx:
@@ -117,7 +117,7 @@ async def get_ctx(  # noqa: RUF029
     return Ctx(request=request, common=common, cache=cache, db=db, cwb=cwb)
 
 
-async def get_query_ctx(request: Request) -> Ctx:  # noqa: RUF029
+async def get_query_ctx(request: Request) -> Ctx:  # ruff: ignore[unused-async]
     """FastAPI dependency for getting the request context object (Ctx) for GET query routes.
 
     GET routes that use a query parameter model (Pydantic model annotated with `Query()`) instead of explicit parameters
@@ -141,7 +141,7 @@ async def get_query_ctx(request: Request) -> Ctx:  # noqa: RUF029
     )
 
 
-async def get_admin_ctx(request: Request) -> Ctx:  # noqa: RUF029
+async def get_admin_ctx(request: Request) -> Ctx:  # ruff: ignore[unused-async]
     """Build a context for administrative routes without public response controls.
 
     Returns:
@@ -193,7 +193,7 @@ class AbortSignal:
         await self._async_evt.wait()
 
 
-async def abort_signal_dep() -> None:  # noqa: RUF029
+async def abort_signal_dep() -> None:  # ruff: ignore[unused-async]
     """Dummy dependency for abort_signal parameter.
 
     The real AbortSignal is created in the api_handler decorator and injected there. We use this dummy dependency to

@@ -1,6 +1,6 @@
 """Rate-limiting helpers for API routes."""
 
-# ruff: noqa: PLC0415
+# ruff: file-ignore[import-outside-top-level]
 from __future__ import annotations
 
 import asyncio

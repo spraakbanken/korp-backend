@@ -94,7 +94,7 @@ class KorpDatabase:
         """
         for opt, args in cls._pytest_db_option_help.items():
             if isinstance(args, str):
-                args = {"help": args}  # noqa: PLW2901
+                args = {"help": args}  # ruff: ignore[redefined-loop-name]
             args["metavar"] = opt.replace("create-", "").upper()
             args["help"] = args["help"].replace("{}", "%(metavar)s")
             parser.addoption(f"--db-{opt}", **args)
@@ -374,10 +374,10 @@ class KorpDatabase:
             filenames_re = []
             for regex in filenames:
                 if not regex.endswith(r"\.tsv"):
-                    regex += r"\.tsv"  # noqa: PLW2901
+                    regex += r"\.tsv"  # ruff: ignore[redefined-loop-name]
                 if not regex.startswith(r".*/"):
-                    regex = r".*/" + regex  # noqa: PLW2901
-                regex = regex.replace("{corpus}", "(?P<corpus>[a-zA-Z0-9_-]+?)")  # noqa: PLW2901
+                    regex = r".*/" + regex  # ruff: ignore[redefined-loop-name]
+                regex = regex.replace("{corpus}", "(?P<corpus>[a-zA-Z0-9_-]+?)")  # ruff: ignore[redefined-loop-name]
                 filenames_re.append(re.compile(regex))
             return filenames_re
 
@@ -420,7 +420,7 @@ class KorpDatabase:
             # Add filename patterns for the table type
             for filename in info["filenames"]:
                 if not filename.startswith(".*/"):
-                    filename = ".*/" + filename  # noqa: PLW2901
+                    filename = ".*/" + filename  # ruff: ignore[redefined-loop-name]
                 self._table_type_patts[info["table_type"]].append(filename)
             self._table_type_info[info["table_type"]].append(info)
         self._table_info = table_info

@@ -379,7 +379,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
 
         # Add 429 response documentation for rate-limited routes
         if settings.RATE_LIMIT_ENABLED:
-            from korp.api.schemas import ErrorResponse  # noqa: PLC0415
+            from korp.api.schemas import ErrorResponse  # ruff: ignore[import-outside-top-level]
 
             for route_context in handler.iter_api_route_contexts(app):
                 route = route_context.original_route

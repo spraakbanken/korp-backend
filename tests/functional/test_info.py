@@ -6,7 +6,7 @@ import pytest
 
 
 @pytest.fixture
-def corpus_info(get_json: Callable, corpora: list[str]) -> Callable[[list[str]], dict]:  # noqa: ARG001
+def corpus_info(get_json: Callable, corpora: list[str]) -> Callable[[list[str]], dict]:  # ruff: ignore[unused-function-argument]
     """Return function returning `/corpora/info` response for list of corpora."""
 
     def _corpus_info(corpus_list: list[str]) -> dict:

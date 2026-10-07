@@ -74,9 +74,9 @@ def test_unlimited_route_skips_rate_limiter(monkeypatch: Any) -> None:
 
 def test_limited_route_allows_when_quota_available() -> None:
     """Test that limited routes pass through when quota is available."""
-    from unittest.mock import patch  # noqa: PLC0415
+    from unittest.mock import patch  # ruff: ignore[import-outside-top-level]
 
-    from korp import handler  # noqa: PLC0415
+    from korp import handler  # ruff: ignore[import-outside-top-level]
 
     limiter = FakeRateLimiter(result=RateLimitCheck(allowed=True, limit=2, remaining=1, reset_seconds=1_000_000_000))
     app = _make_test_app(limiter)
@@ -95,9 +95,9 @@ def test_limited_route_allows_when_quota_available() -> None:
 
 def test_limited_route_returns_429_when_quota_exceeded() -> None:
     """Test that limited routes return HTTP 429 when no quota remains."""
-    from unittest.mock import patch  # noqa: PLC0415
+    from unittest.mock import patch  # ruff: ignore[import-outside-top-level]
 
-    from korp import handler  # noqa: PLC0415
+    from korp import handler  # ruff: ignore[import-outside-top-level]
 
     limiter = FakeRateLimiter(
         result=RateLimitCheck(
@@ -129,9 +129,9 @@ def test_limited_route_returns_429_when_quota_exceeded() -> None:
 
 def test_limited_route_is_noop_without_config() -> None:
     """Test that limited routes skip the rate limiter without a configured limit."""
-    from unittest.mock import patch  # noqa: PLC0415
+    from unittest.mock import patch  # ruff: ignore[import-outside-top-level]
 
-    from korp import handler  # noqa: PLC0415
+    from korp import handler  # ruff: ignore[import-outside-top-level]
 
     limiter = FakeRateLimiter(result=RateLimitCheck(allowed=False, retry_after_seconds=1))
     app = _make_test_app(limiter)
@@ -156,9 +156,9 @@ def test_limited_route_is_noop_without_app_limiter() -> None:
 
 def test_config_override_changes_effective_limit() -> None:
     """Test that RATE_LIMITS overrides change the limit sent to the limiter."""
-    from unittest.mock import patch  # noqa: PLC0415
+    from unittest.mock import patch  # ruff: ignore[import-outside-top-level]
 
-    from korp import handler  # noqa: PLC0415
+    from korp import handler  # ruff: ignore[import-outside-top-level]
 
     limiter = FakeRateLimiter(result=RateLimitCheck(allowed=True))
     app = _make_test_app(limiter)
@@ -172,9 +172,9 @@ def test_config_override_changes_effective_limit() -> None:
 
 def test_config_override_disables_rate_limit_with_empty_string() -> None:
     """Test that an empty RATE_LIMITS override disables route rate limiting, even if RATE_LIMIT_DEFAULT is set."""
-    from unittest.mock import patch  # noqa: PLC0415
+    from unittest.mock import patch  # ruff: ignore[import-outside-top-level]
 
-    from korp import handler  # noqa: PLC0415
+    from korp import handler  # ruff: ignore[import-outside-top-level]
 
     limiter = FakeRateLimiter(result=RateLimitCheck(allowed=False, retry_after_seconds=1))
     app = _make_test_app(limiter)

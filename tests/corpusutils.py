@@ -3,7 +3,7 @@
 import re
 import shutil
 import subprocess
-import xml.etree.ElementTree as et  # noqa: N813
+import xml.etree.ElementTree as et  # ruff: ignore[camelcase-imported-as-lowercase]
 from collections import defaultdict
 from pathlib import Path
 from typing import ClassVar

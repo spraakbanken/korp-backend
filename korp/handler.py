@@ -202,7 +202,7 @@ def docs_error_responses(
     Returns:
         FastAPI response declarations for validation, unexpected server errors, and the supplied HTTP errors.
     """
-    from korp.api.schemas import ErrorResponse  # noqa: PLC0415
+    from korp.api.schemas import ErrorResponse  # ruff: ignore[import-outside-top-level]
 
     responses: dict[int | str, dict[str, Any]] = {
         422: {
@@ -254,9 +254,9 @@ def docs_response(
     Returns:
         A dictionary suitable for the `responses` parameter of FastAPI route decorators.
     """
-    from pydantic import TypeAdapter  # noqa: PLC0415
+    from pydantic import TypeAdapter  # ruff: ignore[import-outside-top-level]
 
-    from korp.api.schemas import StreamEvent  # noqa: PLC0415
+    from korp.api.schemas import StreamEvent  # ruff: ignore[import-outside-top-level]
 
     response: dict[str, Any] = {"model": model}
 
@@ -377,8 +377,8 @@ def _problem_details(exc: BaseException, *, debug: bool) -> dict[str, Any]:
     Returns:
         The serialized public error object.
     """
-    from korp import cqp  # noqa: PLC0415
-    from korp.memcached import CacheError  # noqa: PLC0415
+    from korp import cqp  # ruff: ignore[import-outside-top-level]
+    from korp.memcached import CacheError  # ruff: ignore[import-outside-top-level]
 
     error = _unwrap_error(exc)
     field: str | None = None
@@ -466,21 +466,21 @@ def _request_debug_enabled(request: Request) -> bool:
 def install_error_handlers(app: FastAPI) -> None:
     """Install the API's unified JSON exception handlers on the FastAPI app."""
 
-    async def request_validation_handler(request: Request, exc: Exception) -> JSONResponse:  # noqa: RUF029
+    async def request_validation_handler(request: Request, exc: Exception) -> JSONResponse:  # ruff: ignore[unused-async]
         assert isinstance(exc, RequestValidationError)
         response = _problem_response(exc, debug=_request_debug_enabled(request))
         if _route_disables_cache(request):
             response.headers["Cache-Control"] = "no-store"
         return response
 
-    async def http_exception_handler(request: Request, exc: Exception) -> JSONResponse:  # noqa: RUF029
+    async def http_exception_handler(request: Request, exc: Exception) -> JSONResponse:  # ruff: ignore[unused-async]
         assert isinstance(exc, StarletteHTTPException)
         response = _problem_response(exc, debug=_request_debug_enabled(request))
         if _route_disables_cache(request):
             response.headers["Cache-Control"] = "no-store"
         return response
 
-    async def unexpected_exception_handler(request: Request, exc: Exception) -> JSONResponse:  # noqa: RUF029
+    async def unexpected_exception_handler(request: Request, exc: Exception) -> JSONResponse:  # ruff: ignore[unused-async]
         logger.error(
             "Unhandled API error: %s %s",
             request.method,
@@ -683,7 +683,7 @@ def api_handler(
 
             rate_limit_headers: dict[str, str] = {}
             if rate_limit and (app_rate_limiter := getattr(request.app.state, "rate_limiter", None)):
-                from korp.rate_limit import resolve_rate_limit  # noqa: PLC0415
+                from korp.rate_limit import resolve_rate_limit  # ruff: ignore[import-outside-top-level]
 
                 effective_limit = resolve_rate_limit(route, settings=settings)
                 if effective_limit is not None:

@@ -179,7 +179,7 @@ struct_attributes:
     )
     def test_get_attrs_vrt(
         self,
-        comment: str,  # noqa: ARG002
+        comment: str,  # ruff: ignore[unused-method-argument]
         header: str,
         result_pos: list[str],
         result_struct: list[str],
@@ -309,7 +309,7 @@ struct_attributes:
     def test_get_attrs_attrsfile(
         self,
         header: str,
-        comment: str,  # noqa: ARG002
+        comment: str,  # ruff: ignore[unused-method-argument]
         attrsfile: str,
         result_pos: list,
         result_struct: list,
