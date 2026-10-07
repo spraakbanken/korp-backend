@@ -92,7 +92,7 @@ select = [
     "RET",    # flake8-return
     "RSE",    # flake8-raise
     "RUF",    # Ruff-specific rules
-    "S113",   # flake8-bandit: request-without-timeout
+    "request-without-timeout",
     "SIM",    # flake8-simplify
     "T20",    # flake8-print
     "TID",    # flake8-tidy-imports
@@ -100,13 +100,14 @@ select = [
     "W",      # pycodestyle: warnings
 ]
 ignore = [
-    "ANN401",  # flake8-annotations: any-type
-    "COM812",  # flake8-commas: missing-trailing-comma
-    "E741",    # pycodestyle: ambiguous-variable-name
-    "PERF203", # Perflint: try-except-in-loop
+    "ambiguous-variable-name",
+    "any-type",
+    "missing-trailing-comma",
+    "try-except-in-loop",
     "PLR09",   # Pylint: too-many-*
-    "PLR1702", # Pylint: too-many-nested-blocks
-    "SIM105",  # flake8-simplify: suppressible-exception
+    "too-many-nested-blocks",
+    "too-many-statements-in-try-clause",
+    "suppressible-exception",
 ]
 preview = true
 
