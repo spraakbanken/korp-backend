@@ -114,7 +114,7 @@ def get_response_json(client: TestClient, *args: Any, expected_status_code: int 
         The JSON content of the response.
     """
     response = client.get(*args, **kwargs)
-    assert response.status_code == expected_status_code
+    assert response.status_code == expected_status_code, response.text
     assert "application/json" in response.headers.get("content-type", "")
     path = str(args[0]).partition("?")[0]
     validate_response_contract(client, response, path)
