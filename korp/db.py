@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from logging import getLogger
 from time import perf_counter
@@ -151,7 +151,7 @@ class MySQL:
         return self._async_engine
 
     @asynccontextmanager
-    async def async_connection(self) -> AsyncIterator[AsyncConnection]:
+    async def async_connection(self) -> AsyncGenerator[AsyncConnection]:
         """Yield an async database connection."""
         engine = self._require_async_engine()
         async with engine.connect() as conn:

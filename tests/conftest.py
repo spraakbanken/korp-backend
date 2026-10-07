@@ -2,7 +2,7 @@
 # ruff: file-ignore[module-import-not-at-top-of-file] - pytest.register_assert_rewrite needs to be called before importing testutils
 
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from shutil import copytree
@@ -147,7 +147,7 @@ def client_factory(app_factory: Callable[..., FastAPI]) -> Callable[..., Abstrac
     """Return a context manager creating a TestClient for custom config."""
 
     @contextmanager
-    def _client_factory(config: dict | None = None) -> Iterator[TestClient]:
+    def _client_factory(config: dict | None = None) -> Generator[TestClient]:
         with TestClient(app_factory(config or {})) as test_client:
             yield test_client
 

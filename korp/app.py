@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import importlib.metadata
 import inspect
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from logging import getLogger
 from pathlib import Path
@@ -262,7 +262,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
     cqp_executable, cwb_scan_executable, cwb_registry = _get_required_cwb_settings()
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         """Initialize and finalize resources for the app lifespan."""
         try:
             handler.enforce_ctx_dependency(app)

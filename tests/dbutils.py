@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from collections.abc import Iterable, Iterator
+from collections.abc import Generator, Iterable
 from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
@@ -185,7 +185,7 @@ class KorpDatabase:
         )
 
     @contextmanager
-    def _connection(self, *, include_database: bool, local_infile: bool = True) -> Iterator[Connection]:
+    def _connection(self, *, include_database: bool, local_infile: bool = True) -> Generator[Connection]:
         """Yield a database connection and always dispose its engine afterwards.
 
         Args:
