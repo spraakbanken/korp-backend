@@ -103,7 +103,11 @@ class CWBEncoder:
         Returns:
             A set of corpus IDs that were copied from the cache.
         """
-        cached_corpora = {regfile.name for regfile in (cache_dir / "registry").glob("*")}
+        cached_corpora = {
+            regfile.name
+            for regfile in (cache_dir / "registry").glob("*")
+            if regfile.is_file() and (cache_dir / "data" / regfile.name).is_dir()
+        }
         for corpus_id in cached_corpora:
             self._copy_corpus(cache_dir, self._corpus_root, corpus_id)
         return cached_corpora
@@ -119,16 +123,25 @@ class CWBEncoder:
             target: The directory where the corpus data should be copied to.
             corpus_id: The ID of the corpus to be copied.
         """
-        shutil.copytree(source / "data" / corpus_id, target / "data" / corpus_id, symlinks=True, dirs_exist_ok=True)
+        data_dir = target.resolve() / "data" / corpus_id
+        shutil.copytree(source / "data" / corpus_id, data_dir, symlinks=True, dirs_exist_ok=True)
         reg_content = (source / "registry" / corpus_id).read_text()
-        (target / "registry" / corpus_id).write_text(reg_content.replace(str(source), str(target)))
+        for field, path in (("HOME", data_dir), ("INFO", data_dir / ".info")):
+            reg_content = re.sub(
+                rf"^{field}\b[^\n]*",
+                # Use lambda to avoid potential backslash issues in replacement string
+                lambda _match: f'{field} "{path}"',  # ruff:ignore[function-uses-loop-variable]
+                reg_content,
+                flags=re.MULTILINE,
+            )
+        (target / "registry" / corpus_id).write_text(reg_content)
 
     @staticmethod
     def _cached_corpus_is_outdated(cache_dir: Path | None, corpus_id: str, src_file: Path) -> bool:
         """Test if CWB data for `corpus_id` in `cache_dir` is older than source.
 
-        Consider cached data outdated if `cache_dir` does not exist, if the corpus registry file does not exist or if it
-        is older than the corpus source file, its info file or its attributes YAML file.
+        Consider cached data outdated if its data directory or registry file is missing, or if the registry is older
+        than the corpus source file, its info file or its attributes YAML file.
 
         Args:
             cache_dir: The directory where the cached corpus data is located.
@@ -141,7 +154,7 @@ class CWBEncoder:
         if cache_dir is None:
             return True
         cached_regfile = cache_dir / "registry" / corpus_id
-        if not cached_regfile.exists():
+        if not cached_regfile.is_file() or not (cache_dir / "data" / corpus_id).is_dir():
             return True
         cached_mtime = cached_regfile.stat().st_mtime
         src_file_noext = src_file.with_suffix("")
