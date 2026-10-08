@@ -18,7 +18,7 @@ import anyio
 import anyio.to_thread
 from anyio import CapacityLimiter
 from fastapi import APIRouter, Query
-from pydantic import BeforeValidator, ConfigDict, Field
+from pydantic import BeforeValidator, Field
 from pydantic.json_schema import SkipJsonSchema
 
 from korp import auth, caching, cqp, handler, utils
@@ -39,7 +39,8 @@ CONCORDANCE_DESCRIPTION = """Search for concordance lines in one or more corpora
 
 The route returns KWIC rows: each row contains the matching tokens, the requested left and right context, token
 annotations selected through positional CWB attributes in `attributes`, optional structural annotations selected through
-`struct_attributes`, and the match position inside the returned context.
+`struct_attributes`, and the match position inside the returned context. Each token has a `word` field and an
+`attributes` object containing its other requested positional annotations; inline structural spans use `structs`.
 
 Results are grouped by corpus and returned in `corpus_order`; sorting is also done within each corpus, not globally
 across all selected corpora. Use `offset` and `limit` for pagination. The response includes `total_hits`, a
@@ -317,17 +318,41 @@ class Match(schemas.ResponseModel):
     )
 
 
+class TokenStructs(schemas.ResponseModel):
+    """Structural spans opening or closing at a token."""
+
+    open: list[dict[str, dict[str, str]]] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Spans starting at this token, in opening order. Each item maps a structure name to its annotations; "
+            "the annotation object is empty for a structure without values."
+        ),
+        examples=[[{"sentence": {"id": "s1"}}, {"phrase": {}}]],
+    )
+    close: list[str] | SkipJsonSchema[None] = Field(
+        None,
+        description="Names of spans ending at this token, in closing order.",
+        examples=[["phrase", "sentence"]],
+    )
+
+
 class Token(schemas.ResponseModel):
     """Token and its requested annotations."""
-
-    model_config = ConfigDict(extra="allow")
 
     word: str | None = Field(
         ...,
         description="The token text. This can be `null` if the corpus stores the token value as undefined.",
         examples=["cat"],
     )
-    structs: dict[str, Any] | SkipJsonSchema[None] = Field(
+    attributes: dict[str, str | None] = Field(
+        ...,
+        description=(
+            "Requested positional annotations other than `word`, keyed by CWB attribute name. "
+            "Undefined values are `null`; the object is empty when no additional positional attributes are requested."
+        ),
+        examples=[{"lemma": "cat", "pos": "NN"}],
+    )
+    structs: TokenStructs | SkipJsonSchema[None] = Field(
         None,
         description=(
             "Structural annotations whose span starts or ends at this token, included when the corresponding "
@@ -1448,8 +1473,10 @@ def _parse_tokens(
 
         # What's left is the word with its p-attrs
         values = word.rsplit("/", nr_splits)
+        positional_attributes = {attr: cqp.translate_undef(val) for (attr, val) in zip(p_attrs, values, strict=True)}
         token: dict[str, str | dict | None] = {
-            attr: cqp.translate_undef(val) for (attr, val) in zip(p_attrs, values, strict=True)
+            "word": positional_attributes.pop("word"),
+            "attributes": positional_attributes,
         }
         if state.structs:
             # Convert dict into list

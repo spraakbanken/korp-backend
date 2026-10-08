@@ -79,9 +79,15 @@ class TestConcordance:
     @staticmethod
     def test_concordance_single_corpus(concordance_testcorpus: Callable[..., dict]) -> None:
         """Test a simple concordance search on a single corpus."""
-        data = concordance_testcorpus('[lemma="this"]')
+        data = concordance_testcorpus('[lemma="this"]', {"attributes": "lemma"})
         kwic = data["kwic"]
         assert len(kwic) == data["total_hits"]
+        assert kwic
+        for row in kwic:
+            for token in row["tokens"]:
+                assert "word" in token
+                assert "lemma" in token["attributes"]
+                assert "word" not in token["attributes"]
 
     @staticmethod
     def test_concordance_max_kwic_rows(concordance_testcorpus_kwic_rows: Callable[[int, int], dict]) -> None:

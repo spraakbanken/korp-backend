@@ -24,6 +24,8 @@ Version 9 is a breaking rewrite of the backend and its HTTP API.
 
 ### Changed
 
+- Concordance tokens keep `word` at the top level and return other positional annotations in an `attributes` object,
+  separate from inline structural spans in `structs`.
 - Dropped support for Python versions older than 3.11 and moved packaging and dependency management to `pyproject.toml`
   and `uv`.
 - Replaced Flask, gevent, and the WSGI entrypoint with FastAPI and a native ASGI deployment. Production installations
