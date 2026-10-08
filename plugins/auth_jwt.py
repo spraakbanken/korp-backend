@@ -109,31 +109,10 @@ class AuthJWT(auth.Authorizer):
         protection_info = await self._get_protection_info(corpora, auth_ctx)
         protected_requested = [corpus for corpus in corpora if protection_info[corpus].protected]
         if protected_requested:
-            user_corpora: set[str] = set()
-            user_licenses: set[str] = set()
-
-            # Get authorization header
-            auth_header = auth_ctx.request.headers.get("Authorization")
-            if auth_header and " " in auth_header:
-                auth_token = auth_header.split(" ")[1]
-
-                # Parse JWT
-                if not self.jwt_key:
-                    return False, [], "JWT public key is not configured."
-                try:
-                    user_token = jwt.decode(auth_token, key=self.jwt_key, algorithms=["RS256"])
-                except jwt.ExpiredSignatureError:
-                    return False, [], "The provided JWT has expired"
-                except jwt.InvalidTokenError:
-                    return False, [], "Could not validate the provided JWT."
-
-                user_corpora.update(
-                    utils.normalize_corpus_id(corpus) for corpus in user_token.get("scope", {}).get("corpora", {})
-                )
-                if self.license_claim is not None:
-                    grants = user_token.get(self.license_claim)
-                    if isinstance(grants, list) and all(isinstance(grant, str) for grant in grants):
-                        user_licenses.update(grants)
+            try:
+                user_corpora, user_licenses = self._get_user_grants(auth_ctx)
+            except auth.KorpAuthorizationError as error:
+                return False, [], str(error)
 
             unauthorized = []
             for corpus in protected_requested:
@@ -149,6 +128,53 @@ class AuthJWT(auth.Authorizer):
             if unauthorized:
                 return False, unauthorized, None
         return True, [], None
+
+    async def get_user_corpora(self, auth_ctx: AuthContext) -> list[str]:
+        """Return explicit JWT corpus grants, excluding license-based access.
+
+        Returns:
+            Sorted lowercase corpus ids, or an empty list for anonymous requests or tokens without corpus grants.
+        """
+        corpora, _licenses = self._get_user_grants(auth_ctx)
+        return sorted(corpora)
+
+    def _get_user_grants(self, auth_ctx: AuthContext) -> tuple[set[str], set[str]]:
+        """Validate the JWT and extract corpus and license grants.
+
+        Returns:
+            Explicit corpus grants and configured license grants.
+
+        Raises:
+            auth.KorpAuthorizationError: If supplied credentials or corpus claims are invalid, or no key is configured.
+        """
+        auth_header = auth_ctx.request.headers.get("Authorization")
+        if not auth_header:
+            return set(), set()
+        scheme, separator, token = auth_header.partition(" ")
+        if scheme.casefold() != "bearer" or not separator or not token.strip():
+            raise auth.KorpAuthorizationError("Could not validate the provided JWT.")
+        if not self.jwt_key:
+            raise auth.KorpAuthorizationError("JWT public key is not configured.")
+        try:
+            user_token = jwt.decode(token.strip(), key=self.jwt_key, algorithms=["RS256"])
+        except jwt.ExpiredSignatureError:
+            raise auth.KorpAuthorizationError("The provided JWT has expired") from None
+        except jwt.InvalidTokenError:
+            raise auth.KorpAuthorizationError("Could not validate the provided JWT.") from None
+
+        scope = user_token.get("scope", {})
+        if not isinstance(scope, dict):
+            raise auth.KorpAuthorizationError("Invalid corpus grants in the provided JWT.")
+        corpora = scope.get("corpora", {})
+        if not isinstance(corpora, (dict, list)) or not all(isinstance(corpus, str) for corpus in corpora):
+            raise auth.KorpAuthorizationError("Invalid corpus grants in the provided JWT.")
+        user_corpora = {utils.normalize_corpus_id(corpus) for corpus in corpora}
+        user_licenses: set[str] = set()
+        if self.license_claim is not None:
+            grants = user_token.get(self.license_claim)
+            if isinstance(grants, list) and all(isinstance(grant, str) for grant in grants):
+                user_licenses.update(grants)
+        return user_corpora, user_licenses
 
     @cached_property
     def jwt_key(self) -> str | None:

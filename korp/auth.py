@@ -85,6 +85,21 @@ async def get_protected_corpora(ctx: Ctx) -> list[str]:
     return []
 
 
+async def get_user_corpora(ctx: Ctx) -> list[str]:
+    """Return explicit user corpus grants, requiring an authorizer that supports enumeration.
+
+    Raises:
+        RuntimeError: If no authorizer is configured or enumeration is unsupported.
+    """
+    authorizer = ctx.request.app.state.authorizer
+    if authorizer is None:
+        raise RuntimeError("No authorizer is configured; user corpus enumeration is unavailable.")
+    corpora = await authorizer.get_user_corpora(_make_auth_context(ctx))
+    if corpora is None:
+        raise RuntimeError("The configured authorizer does not support user corpus enumeration.")
+    return sorted({utils.normalize_corpus_id(corpus) for corpus in corpora})
+
+
 async def check_authorization(corpora: Iterable[str], ctx: Ctx) -> None:
     """Take a list of corpora, and if any of them are protected, check authorization.
 
@@ -129,6 +144,9 @@ class Authorizer(ABC):
       `unauthorized` should contain corpus ids that failed authorization.
 
     Optional methods to implement:
+    - `get_user_corpora(auth_ctx)`: Enumerate explicit corpus grants for the current user. Currently only used by the
+      `/corpora/config` route, for modes with `protected_corpora: true`. The default returns `None` to indicate that
+      enumeration is unsupported.
     - `openapi_security()`: Describe the plugin's OpenAPI security schemes and requirements. These requirements are
       optional on corpus-authorized operations and mandatory on administrative operations.
     - `cache_vary_headers()`: Name the request headers that can change an authorized response. Declaring these headers
@@ -181,6 +199,19 @@ class Authorizer(ABC):
         Returns:
             Header names for the response's `Vary` field, or `None` to disable HTTP caching when this authorizer is
             active.
+        """
+        return None
+
+    async def get_user_corpora(self, auth_ctx: AuthContext) -> list[str] | None:  # ruff: ignore[no-self-use, unused-method-argument]
+        """Return explicit corpus grants for the current user.
+
+        This lists user grants, which may include corpora not installed locally. It does not necessarily enumerate all
+        searchable corpora (for example, public corpora or corpora accessible through license grants). Implementations
+        must validate supplied credentials and raise `KorpAuthorizationError` if they are invalid.
+
+        Returns:
+            Lowercase corpus ids, an empty list for no grants (including anonymous requests), or `None` if enumeration
+            is unsupported.
         """
         return None
 
