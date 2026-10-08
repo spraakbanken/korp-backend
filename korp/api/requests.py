@@ -106,6 +106,8 @@ class QueryRequestModel(CommonQueryControls, RequestModel):
                 continue
             key = input_name if input_name in normalized else field_name
             raw_value = normalized[key]
+            if raw_value is None:
+                continue
             values = raw_value if isinstance(raw_value, (list, tuple)) else [raw_value]
             normalized[key] = [part for item in values for part in str(item).split(",") if part]
         return normalized

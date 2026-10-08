@@ -15,7 +15,7 @@ from pydantic.json_schema import SkipJsonSchema
 from korp.api import schemas
 from korp.api.requests import QueryRequestModel, RequestModel
 from korp.config import settings
-from korp.memcached import CacheError, Memcached
+from korp.memcached import CacheError
 
 try:
     from yaml import CSafeLoader as SafeLoader
@@ -24,8 +24,8 @@ except ImportError:
 
 from fastapi import APIRouter, Query
 
-from korp import caching, utils
-from korp.dependencies import CtxDep, QueryCtxDep
+from korp import auth, caching, utils
+from korp.dependencies import Ctx, CtxDep, QueryCtxDep
 from korp.handler import api_handler, docs_response
 
 router = APIRouter(tags=["Corpus Information"])
@@ -37,6 +37,13 @@ metadata, and configuration warnings.
 
 If `corpora` is omitted, the route includes the corpora that belong to the selected `mode`. If `corpora` is provided,
 only the specified corpora are included.
+
+Modes with `protected_corpora: true` include only the current user's explicit corpus grants that have a local corpus
+configuration. In these modes, `corpora` can only narrow that selection. Anonymous users receive an empty corpus
+selection. The configured authorizer must support user corpus enumeration.
+
+Ordinary modes may use an internal assembled-configuration cache. Protected modes cache only raw corpus configuration
+files. HTTP responses use `Cache-Control: no-store`.
 
 Hidden modes are omitted from the returned `modes` list unless the hidden mode is requested directly.
 
@@ -50,12 +57,12 @@ CorporaParam: TypeAlias = Annotated[
     list[str] | SkipJsonSchema[None],
     Query(
         description=(
-            "Corpora to include in the configuration. If specified, this overrides the corpus list from `mode`."
+            "Corpora to include. Overrides normal mode membership; in protected modes, only narrows the user grants."
         ),
         examples=[["romi", "suc3"]],
     ),
-    BeforeValidator(utils.split_csv),
-    AfterValidator(lambda v: sorted({utils.normalize_corpus_id(x) for x in v})),
+    BeforeValidator(lambda v: None if v is None else utils.split_csv(v)),
+    AfterValidator(lambda v: None if v is None else sorted({utils.normalize_corpus_id(x) for x in v})),
 ]
 
 
@@ -140,13 +147,13 @@ class CorpusConfigQuery(QueryRequestModel, CorpusConfigRequest):
 @router.get(
     "/corpora/config",
     response_model=None,
-    responses=docs_response(CorpusConfigResponse),
+    responses=docs_response(CorpusConfigResponse, corpus_authorization=True),
     name="Corpus Configuration",
     summary="Corpus Configuration",
     description=CORPUS_CONFIG_DESCRIPTION,
     operation_id="get_corpora_config",
 )
-@api_handler
+@api_handler(cache_headers=False)
 async def corpus_config_get(
     ctx: QueryCtxDep,
     query: Annotated[CorpusConfigQuery, Query()],
@@ -163,13 +170,13 @@ async def corpus_config_get(
 @router.post(
     "/corpora/config",
     response_model=None,
-    responses=docs_response(CorpusConfigResponse),
+    responses=docs_response(CorpusConfigResponse, corpus_authorization=True),
     name="Corpus Configuration",
     summary="Corpus Configuration",
     description=CORPUS_CONFIG_DESCRIPTION,
     operation_id="post_corpora_config",
 )
-@api_handler
+@api_handler(cache_headers=False)
 async def corpus_config_post(ctx: CtxDep, request: CorpusConfigRequest) -> AsyncIterator[dict]:
     """Get corpus configuration for a given mode or list of corpora.
 
@@ -194,42 +201,37 @@ async def _corpus_config(ctx: CtxDep, mode: str, corpora: list[str] | None) -> A
 
     Raises:
         NameError: If the specified mode does not exist.
-        RuntimeError: If corpus configuration directory is not set in settings.
+        RuntimeError: If corpus configuration is missing or a protected mode lacks user corpus enumeration.
     """
-    corpora = corpora or []
-    cache_checksum = utils.get_hash((mode, sorted(corpora), settings.LAB_MODE))
-    cache = ctx.cache
-
-    # Try to fetch complete config from cache
-    if ctx.common.cache:
-        result = await cache.get(f"{await caching.cache_prefix(cache, config=True)}:corpus_config_{cache_checksum}")
-        if result:
-            if ctx.common.debug:
-                result.setdefault("debug", {})
-                result["debug"]["cache_read"] = True
-            yield result
-            return
-
     if not settings.CORPUS_CONFIG_DIR:
         raise RuntimeError("Corpus config directory is not set in settings, cannot fetch corpus configuration.")
 
-    result = await get_mode(mode, corpora, cache if ctx.common.cache else None)
+    cache_key = None
+    if ctx.common.cache:
+        selection = None if corpora is None else sorted(corpora)
+        checksum = utils.get_hash((mode, json.dumps(selection), settings.LAB_MODE))
+        cache_key = f"{await caching.cache_prefix(ctx.cache, config=True)}:corpus_config_mode_{checksum}"
+        cached = await ctx.cache.get(cache_key)
+        if isinstance(cached, dict) and cached and not cached.get("protected_corpora"):
+            result = deepcopy(cached)
+            if ctx.common.debug:
+                result.setdefault("debug", {})["cache_read"] = True
+            yield result
+            return
+
+    result = await get_mode(ctx, mode, corpora)
     if result is None:
         raise NameError(f"The mode {mode!r} does not exist.")
     result["modes"] = get_modes(mode)
 
-    # Save to cache
-    if ctx.common.cache:
+    if cache_key is not None and not result.get("protected_corpora"):
         try:
-            added = await cache.add(
-                f"{await caching.cache_prefix(cache, config=True)}:corpus_config_{cache_checksum}", result
-            )
+            added = await ctx.cache.add(cache_key, deepcopy(result))
         except CacheError:
             pass
         else:
             if added and ctx.common.debug:
-                result.setdefault("debug", {})
-                result["debug"]["cache_saved"] = True
+                result.setdefault("debug", {})["cache_saved"] = True
 
     if ctx.common.debug:
         result.setdefault("debug", {})
@@ -267,7 +269,7 @@ def get_modes(current_mode: str | None = None) -> list[dict]:
 def _get_mode_sync(
     mode: dict,
     mode_name: str,
-    corpora: list,
+    corpora: list[str] | None,
     corpus_files: list[Path],
     cached_corpora: dict[Path, dict] | None = None,
 ) -> dict[str, dict]:
@@ -276,7 +278,7 @@ def _get_mode_sync(
     Args:
         mode: Mode configuration structure to populate.
         mode_name: Name of mode to get.
-        corpora: Optionally specify which corpora to include, otherwise all corpora in mode are included.
+        corpora: Corpus selection; `None` uses mode membership and an empty list includes no corpora.
         corpus_files: Iterator of corpus config file paths.
         cached_corpora: Cached corpus configurations, if available. None if not using cache.
 
@@ -318,7 +320,7 @@ def _get_mode_sync(
         # Load corpus config from cache if possible
         corpus_def = None
         if cached_corpora and (cached_corpus := cached_corpora.get(corpus_file)):
-            corpus_def = cached_corpus
+            corpus_def = deepcopy(cached_corpus)
 
         if not corpus_def:
             with corpus_file.open("r", encoding="utf-8") as fp:
@@ -333,8 +335,11 @@ def _get_mode_sync(
             raise ValueError(f"Duplicate corpus id after case normalization: {corpus_id!r}.")
         seen_corpus_ids.add(corpus_id)
 
+        if corpora is not None and corpus_id not in corpora:
+            continue
+
         # Skip corpus if it's not included in the selected mode, unless specific corpora are requested
-        if not corpora and not any(m["name"] == mode_name for m in corpus_def.get("mode", [])):
+        if corpora is None and not any(m["name"] == mode_name for m in corpus_def.get("mode", [])):
             continue
         for attr_type_name, attr_type in attr_types.items():
             if attr_type in corpus_def:
@@ -418,8 +423,11 @@ def _get_mode_sync(
             # Add corpus configuration to mode
             mode["corpora"][corpus_id] = corpus
 
-    if corpora and "preselected_corpora" in mode:
-        del mode["preselected_corpora"]
+    if corpora is not None and "preselected_corpora" in mode:
+        if mode.get("protected_corpora"):
+            mode["preselected_corpora"] = [c for c in mode["preselected_corpora"] if c in mode["corpora"]]
+        else:
+            del mode["preselected_corpora"]
 
     _remove_empty_folders(mode)
     if warnings:
@@ -428,13 +436,14 @@ def _get_mode_sync(
     return save_to_cache
 
 
-async def get_mode(mode_name: str, corpora: list, cache: Memcached | None = None) -> dict | None:
+async def get_mode(ctx: Ctx, mode_name: str, corpora: list[str] | None) -> dict | None:
     """Build configuration structure for a given mode.
 
     Args:
+        ctx: Request context providing authorization and caching.
         mode_name: Name of mode to get.
-        corpora: Optionally specify which corpora to include, otherwise all corpora in mode are included.
-        cache: Memcached instance to use for caching.
+        corpora: Corpus selection; `None` uses mode membership and an empty list includes no corpora.
+            In protected modes, selections can only narrow the user's grants.
 
     Returns:
         Mode configuration structure, or None if mode does not exist.
@@ -450,16 +459,25 @@ async def get_mode(mode_name: str, corpora: list, cache: Memcached | None = None
     if "preselected_corpora" in mode:
         mode["preselected_corpora"] = [utils.normalize_corpus_id(corpus) for corpus in mode["preselected_corpora"]]
 
-    if corpora:
+    protected = mode.get("protected_corpora", False)
+    if protected:
+        allowed = set(await auth.get_user_corpora(ctx))
+        if corpora is not None:
+            allowed &= {utils.normalize_corpus_id(corpus) for corpus in corpora}
+        corpora = sorted(allowed)
+
+    cache = ctx.cache if ctx.common.cache else None
+    corpus_dir = Path(settings.CORPUS_CONFIG_DIR, "corpora")
+    if corpora is not None:
         corpus_files = []
         for c in corpora:
-            file_path = Path(settings.CORPUS_CONFIG_DIR) / "corpora" / f"{utils.normalize_corpus_id(c)}.yaml"
-            if file_path.is_file():
+            file_path = corpus_dir / f"{utils.normalize_corpus_id(c)}.yaml"
+            if (not protected or file_path.parent == corpus_dir) and file_path.is_file():
                 corpus_files.append(file_path)
-            else:
+            elif not protected:
                 warnings.add(f"The corpus {c!r} does not exist, or does not have a config file.")
     else:
-        corpus_files = list(Path(settings.CORPUS_CONFIG_DIR, "corpora").glob("*.yaml"))
+        corpus_files = list(corpus_dir.glob("*.yaml"))
 
     cached_corpora: dict[Path, dict] | None = None
     cache_prefix = None
@@ -522,7 +540,15 @@ def _remove_empty_folders(mode: dict) -> None:
         Returns:
             True if folder or any of its subfolders contain corpora, False otherwise.
         """
-        include = "corpora" in folder
+        if mode.get("protected_corpora") and "corpora" in folder:
+            folder["corpora"] = list(
+                dict.fromkeys(
+                    corpus_id
+                    for corpus in folder["corpora"]
+                    if (corpus_id := utils.normalize_corpus_id(corpus)) in mode["corpora"]
+                )
+            )
+        include = bool(folder.get("corpora"))
 
         for subfolder_name, subfolder in list(folder.get("subfolders", {}).items()):
             include_subfolder = should_include(subfolder)
