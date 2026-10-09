@@ -112,6 +112,10 @@ DEPENDENCY_RELATIONS_SENTENCES_DESCRIPTION = """Return KWIC sentences containing
 Use the `sources` ids returned by `/dependency-relations` as the `sources` collection to retrieve the
 corpus sentences where those relation instances occur. The sentence rows use the same KWIC structure as `/concordance`,
 with the relation span highlighted as the match.
+
+The response includes `total_hits`, `hits_by_corpus`, `corpus_order`, and `kwic`. Counts refer to relation occurrences,
+so the same sentence can appear more than once with different highlighted spans.
+Use `offset` and `limit` for pagination.
 """
 
 DEPENDENCY_RELATIONS_TIME_SENTENCES_DESCRIPTION = """Return KWIC sentences for time-sliced dependency relation sources.
@@ -325,10 +329,10 @@ class RelationsResponse(schemas.CommonResponse):
 class RelationsSentencesResponse(schemas.CommonResponse):
     """Response model for relation sentence lookup routes."""
 
-    hits: int = Field(..., description="Total number of matching relation sentences.")
-    corpus_hits: dict[str, int] = Field(
+    total_hits: int = Field(..., description="Total number of matching relation occurrences.")
+    hits_by_corpus: dict[str, int] = Field(
         ...,
-        description="Number of matching relation sentences per corpus.",
+        description="Number of matching relation occurrences per corpus.",
         examples=[{"romi": 3}],
     )
     corpus_order: list[str] = Field(
@@ -2244,7 +2248,7 @@ async def _relations_sentences_impl(
     source_map = request_state.source_map
     table_suffix = f"{SPLIT_SUFFIX}_sentences" if yearly else "_sentences"
     debug: dict[str, Any] = {}
-    result: dict[str, Any] = {"hits": 0, "corpus_hits": {}, "corpus_order": [], "kwic": []}
+    result: dict[str, Any] = {"total_hits": 0, "hits_by_corpus": {}, "corpus_order": [], "kwic": []}
 
     sql_query_start_time = time.perf_counter()
     async with ctx.db.async_connection() as conn:
@@ -2294,7 +2298,7 @@ async def _relations_sentences_impl(
             )
 
         count_rows = await _fetch_mappings(conn, " UNION ALL ".join(counts))
-        corpus_hits = {row["corpus"]: int(row["freq"]) for row in count_rows}
+        hits_by_corpus = {row["corpus"]: int(row["freq"]) for row in count_rows}
         sentence_rows = await _fetch_mappings(conn, " UNION ALL ".join(selects) + f" LIMIT {offset}, {limit}")
         if ctx.common.debug:
             debug["sql_time"] = time.perf_counter() - sql_query_start_time
@@ -2303,11 +2307,9 @@ async def _relations_sentences_impl(
     for row in sentence_rows:
         corpora_dict.setdefault(row["corpus"], {}).setdefault(row["sentence"], []).append((row["start"], row["end"]))
 
-    total_hits = sum(corpus_hits.values())
-    result["hits"] = total_hits
-    if total_hits:
-        result["corpus_hits"] = corpus_hits
-        result["corpus_order"] = corpora
+    result["total_hits"] = sum(hits_by_corpus.values())
+    result["hits_by_corpus"] = hits_by_corpus
+    result["corpus_order"] = corpora
     if not corpora_dict:
         if ctx.common.debug:
             result["debug"] = debug
@@ -2333,8 +2335,11 @@ async def _relations_sentences_impl(
             sid = sentence["structs"]["sentence_id"]
             relation_positions = sids[sid][0]
             sentence_start = sentence["matches"][0]["start"]
+            sentence_position = sentence["matches"][0].get("position")
             sentence["matches"][0]["start"] = sentence_start + min(map(int, relation_positions)) - 1
             sentence["matches"][0]["end"] = sentence_start + max(map(int, relation_positions))
+            if sentence_position is not None:
+                sentence["matches"][0]["position"] = sentence_position + min(map(int, relation_positions)) - 1
 
             # If the same relation appears more than once in the same sentence,
             # append copies of the sentence as separate results
@@ -2342,6 +2347,8 @@ async def _relations_sentences_impl(
                 copy_sentence = deepcopy(sentence)
                 copy_sentence["matches"][0]["start"] = sentence_start + min(map(int, relation_positions)) - 1
                 copy_sentence["matches"][0]["end"] = sentence_start + max(map(int, relation_positions))
+                if sentence_position is not None:
+                    copy_sentence["matches"][0]["position"] = sentence_position + min(map(int, relation_positions)) - 1
                 result_temp["kwic"].insert(i + 1, copy_sentence)
 
         result["kwic"].extend(result_temp["kwic"])
