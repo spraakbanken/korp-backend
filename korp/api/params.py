@@ -99,7 +99,7 @@ DateValue: TypeAlias = Annotated[
 ]
 
 
-class GranularityValues(StrEnum):
+class Granularity(StrEnum):
     """Allowed granularities for time-related routes."""
 
     year = "year"
@@ -111,7 +111,7 @@ class GranularityValues(StrEnum):
 
 
 GranularityParam: TypeAlias = Annotated[
-    GranularityValues,
+    Granularity,
     Query(description=("Time resolution for returned buckets: `year`, `month`, `day`, `hour`, `minute`, or `second`.")),
 ]
 
@@ -138,7 +138,7 @@ span:
 """
 
 
-class StrategyValues(StrEnum):
+class TimeStrategy(StrEnum):
     """Allowed strategies for timespan matching."""
 
     some_overlaps = "some_overlaps"
@@ -147,7 +147,7 @@ class StrategyValues(StrEnum):
 
 
 StrategyParam: TypeAlias = Annotated[
-    StrategyValues,
+    TimeStrategy,
     Query(
         description=(
             "Date-span matching strategy for time-based routes. `some_overlaps` includes material when either the "

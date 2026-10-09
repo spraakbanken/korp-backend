@@ -1219,10 +1219,10 @@ class FrequenciesTimeRequest(RequestModel):
     within: params.WithinParam = None
     default_within: params.DefaultWithinParam = None
     expand_prequeries: params.ExpandPrequeriesParam = True
-    granularity: params.GranularityParam = params.GranularityValues.year
+    granularity: params.GranularityParam = params.Granularity.year
     date_from: DateFromParam = None
     date_to: DateToParam = None
-    strategy: params.StrategyParam = params.StrategyValues.some_overlaps
+    strategy: params.StrategyParam = params.TimeStrategy.some_overlaps
     include_combined: params.IncludeCombinedParam = True
     include_per_corpus: params.IncludePerCorpusParam = True
 
@@ -1252,7 +1252,7 @@ async def _resolve_frequencies_time_request(
     within: params.WithinParam = None,
     default_within: params.DefaultWithinParam = None,
     expand_prequeries: params.ExpandPrequeriesParam = True,
-    granularity: params.GranularityParam = params.GranularityValues.year,
+    granularity: params.GranularityParam = params.Granularity.year,
     date_from: DateFromParam = None,
     date_to: DateToParam = None,
     include_per_corpus: params.IncludePerCorpusParam = True,
@@ -1307,12 +1307,12 @@ async def _resolve_frequencies_time_request(
 
     max_points = 3600
     granularity_units = {
-        params.GranularityValues.year: "years",
-        params.GranularityValues.month: "months",
-        params.GranularityValues.day: "days",
-        params.GranularityValues.hour: "hours",
-        params.GranularityValues.minute: "minutes",
-        params.GranularityValues.second: "seconds",
+        params.Granularity.year: "years",
+        params.Granularity.month: "months",
+        params.Granularity.day: "days",
+        params.Granularity.hour: "hours",
+        params.Granularity.minute: "minutes",
+        params.Granularity.second: "seconds",
     }
     add = relativedelta(**{granularity_units[granularity]: max_points})  # type: ignore
     if parsed_date_from and parsed_date_to and parsed_date_to > parsed_date_from + add:
@@ -1339,7 +1339,7 @@ class _FrequencyPeriodData:
     relative: float | None
 
 
-def _serialize_frequency_period(period: _FrequencyPeriodData, granularity: params.GranularityValues) -> dict[str, Any]:
+def _serialize_frequency_period(period: _FrequencyPeriodData, granularity: params.Granularity) -> dict[str, Any]:
     """Serialize one internal frequency period for the public response.
 
     Returns:
@@ -1372,7 +1372,7 @@ def _containing_token_period(
 def _frequency_periods(
     corpus_periods: list[token_distribution.TokenPeriodData],
     search_periods: list[token_distribution.TokenPeriodData],
-    granularity: params.GranularityValues,
+    granularity: params.Granularity,
 ) -> list[_FrequencyPeriodData]:
     """Overlay query counts on corpus periods and retain their boundaries.
 
@@ -1493,7 +1493,7 @@ def _frequency_period_sums(
 def _time_statistics(
     corpus_periods: list[token_distribution.TokenPeriodData],
     search_periods: list[token_distribution.TokenPeriodData],
-    granularity: params.GranularityValues,
+    granularity: params.Granularity,
     *,
     combined_total_size: int | None = None,
     cqp_query: str | None = None,
@@ -1521,8 +1521,8 @@ def _time_statistics(
 async def _frequencies_time_stream(
     ctx: CtxDep,
     request_state: _FrequencyTimeRequestState,
-    granularity: params.GranularityParam = params.GranularityValues.year,
-    strategy: params.StrategyParam = params.StrategyValues.some_overlaps,
+    granularity: params.GranularityParam = params.Granularity.year,
+    strategy: params.StrategyParam = params.TimeStrategy.some_overlaps,
     include_combined: params.IncludeCombinedParam = True,
     include_per_corpus: params.IncludePerCorpusParam = True,
     abort_signal: AbortDep = None,

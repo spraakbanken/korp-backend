@@ -24,7 +24,7 @@ from sqlalchemy import text
 
 from korp import auth, caching, utils
 from korp.api import params, schemas
-from korp.api.params import DateValue, GranularityValues
+from korp.api.params import DateValue, Granularity
 from korp.api.requests import QueryRequestModel, RequestModel
 from korp.config import settings
 from korp.dependencies import CtxDep, QueryCtxDep
@@ -87,10 +87,10 @@ class TokenDistributionRequest(RequestModel):
     json_array_fields = frozenset({"corpora"})
 
     corpora: params.CorporaParam
-    granularity: params.GranularityParam = GranularityValues.year
+    granularity: params.GranularityParam = Granularity.year
     include_combined: params.IncludeCombinedParam = True
     include_per_corpus: params.IncludePerCorpusParam = True
-    strategy: params.StrategyParam = params.StrategyValues.some_overlaps
+    strategy: params.StrategyParam = params.TimeStrategy.some_overlaps
     date_from: DateFromParam = None
     date_to: DateToParam = None
 
@@ -193,7 +193,7 @@ class TokenPeriodData:
 class TokenDistributionData:
     """Internal token-distribution result shared by route consumers."""
 
-    granularity: GranularityValues
+    granularity: Granularity
     corpora: dict[str, list[TokenPeriodData]] | None
     combined: list[TokenPeriodData] | None
     debug: dict[str, Any] | None = None
@@ -232,13 +232,13 @@ class _GranularityConfig:
     """Whether to use the 'timedata_date' table (True) or 'timedata' (False)."""
 
 
-_GRANULARITY: dict[GranularityValues, _GranularityConfig] = {
-    GranularityValues.year: _GranularityConfig(4, 4, "%Y", relativedelta(years=1), True),
-    GranularityValues.month: _GranularityConfig(7, 6, "%Y%m", relativedelta(months=1), True),
-    GranularityValues.day: _GranularityConfig(10, 8, "%Y%m%d", relativedelta(days=1), True),
-    GranularityValues.hour: _GranularityConfig(13, 10, "%Y%m%d%H", relativedelta(hours=1), False),
-    GranularityValues.minute: _GranularityConfig(16, 12, "%Y%m%d%H%M", relativedelta(minutes=1), False),
-    GranularityValues.second: _GranularityConfig(19, 14, "%Y%m%d%H%M%S", relativedelta(seconds=1), False),
+_GRANULARITY: dict[Granularity, _GranularityConfig] = {
+    Granularity.year: _GranularityConfig(4, 4, "%Y", relativedelta(years=1), True),
+    Granularity.month: _GranularityConfig(7, 6, "%Y%m", relativedelta(months=1), True),
+    Granularity.day: _GranularityConfig(10, 8, "%Y%m%d", relativedelta(days=1), True),
+    Granularity.hour: _GranularityConfig(13, 10, "%Y%m%d%H", relativedelta(hours=1), False),
+    Granularity.minute: _GranularityConfig(16, 12, "%Y%m%d%H%M", relativedelta(minutes=1), False),
+    Granularity.second: _GranularityConfig(19, 14, "%Y%m%d%H%M%S", relativedelta(seconds=1), False),
 }
 
 
@@ -259,7 +259,7 @@ def _digits_only(value: Any) -> str:
 
 
 @functools.lru_cache(maxsize=4096)
-def _adjust_date(date_str: str, granularity: GranularityValues, *, subtract: bool = False) -> int:
+def _adjust_date(date_str: str, granularity: Granularity, *, subtract: bool = False) -> int:
     """Adjust a date by adding or subtracting one granularity unit.
 
     Args:
@@ -290,39 +290,39 @@ def _compact_datetime(value: int) -> datetime:
     return utils.strptime("0" + raw if len(raw) % 2 else raw)
 
 
-def _format_period_start(value: int, granularity: GranularityValues) -> str:
+def _format_period_start(value: int, granularity: Granularity) -> str:
     """Format an internal period start as a canonical ISO 8601 boundary.
 
     Returns:
         The public start boundary.
     """
     boundary = _compact_datetime(value)
-    if granularity in {GranularityValues.year, GranularityValues.month, GranularityValues.day}:
+    if granularity in {Granularity.year, Granularity.month, Granularity.day}:
         return boundary.date().isoformat()
     return boundary.isoformat(timespec="seconds")
 
 
-def _format_period_end(value: int, granularity: GranularityValues) -> str:
+def _format_period_end(value: int, granularity: Granularity) -> str:
     """Format an internal inclusive period end as a canonical ISO 8601 boundary.
 
     Returns:
         The public inclusive end boundary.
     """
     boundary = _compact_datetime(value)
-    if granularity == GranularityValues.year:
+    if granularity == Granularity.year:
         return date(boundary.year, 12, 31).isoformat()
-    if granularity == GranularityValues.month:
+    if granularity == Granularity.month:
         return date(boundary.year, boundary.month, calendar.monthrange(boundary.year, boundary.month)[1]).isoformat()
-    if granularity == GranularityValues.day:
+    if granularity == Granularity.day:
         return boundary.date().isoformat()
-    if granularity == GranularityValues.hour:
+    if granularity == Granularity.hour:
         boundary = boundary.replace(minute=59, second=59)
-    elif granularity == GranularityValues.minute:
+    elif granularity == Granularity.minute:
         boundary = boundary.replace(second=59)
     return boundary.isoformat(timespec="seconds")
 
 
-def serialize_period_bounds(start: int, end: int, granularity: GranularityValues) -> dict[str, str]:
+def serialize_period_bounds(start: int, end: int, granularity: Granularity) -> dict[str, str]:
     """Serialize internal inclusive bounds as canonical public boundaries.
 
     Returns:
@@ -334,7 +334,7 @@ def serialize_period_bounds(start: int, end: int, granularity: GranularityValues
     }
 
 
-def shift_period_boundary(value: int, granularity: GranularityValues, *, subtract: bool = False) -> int:
+def shift_period_boundary(value: int, granularity: Granularity, *, subtract: bool = False) -> int:
     """Shift a compact internal boundary by one granularity unit.
 
     Returns:
@@ -344,7 +344,7 @@ def shift_period_boundary(value: int, granularity: GranularityValues, *, subtrac
 
 
 def _coalesce_token_periods(
-    periods: Iterable[TokenPeriodData], granularity: GranularityValues
+    periods: Iterable[TokenPeriodData], granularity: Granularity
 ) -> list[TokenPeriodData]:
     """Combine contiguous dated periods with identical token counts.
 
@@ -368,7 +368,7 @@ def _coalesce_token_periods(
     return result
 
 
-def serialize_token_period(period: TokenPeriodData, granularity: GranularityValues) -> dict[str, Any]:
+def serialize_token_period(period: TokenPeriodData, granularity: Granularity) -> dict[str, Any]:
     """Serialize one internal token period for the public response.
 
     Returns:
@@ -408,10 +408,10 @@ def serialize_token_distribution(distribution: TokenDistributionData) -> dict[st
 async def _token_distribution_stream(
     ctx: CtxDep,
     corpora: list[str],
-    granularity: GranularityValues,
+    granularity: Granularity,
     include_combined: bool,
     include_per_corpus: bool,
-    strategy: params.StrategyValues,
+    strategy: params.TimeStrategy,
     date_range: ValidatedDateRange,
 ) -> AsyncIterator[dict]:
     """Calculate and stream token distribution data from validated parameters.
@@ -505,10 +505,10 @@ async def _token_distribution(ctx: CtxDep, request: TokenDistributionRequest) ->
 async def get_token_distribution(
     ctx: CtxDep,
     corpora: list[str],
-    granularity: GranularityValues = GranularityValues.year,
+    granularity: Granularity = Granularity.year,
     include_combined: bool = True,
     include_per_corpus: bool = True,
-    strategy: params.StrategyValues = params.StrategyValues.some_overlaps,
+    strategy: params.TimeStrategy = params.TimeStrategy.some_overlaps,
     date_from: str | None = None,
     date_to: str | None = None,
     no_combined_cache: bool = False,
@@ -588,7 +588,7 @@ async def get_token_distribution(
             bind_params[f"corpus_{i}"] = c.upper()
 
         fromto = ""
-        if strategy == params.StrategyValues.some_overlaps:
+        if strategy == params.TimeStrategy.some_overlaps:
             if date_from and date_to:
                 fromto = (
                     " AND ((datefrom >= :date_from AND dateto <= :date_to)"
@@ -596,14 +596,14 @@ async def get_token_distribution(
                 )
                 bind_params["date_from"] = date_from
                 bind_params["date_to"] = date_to
-        elif strategy == params.StrategyValues.all_overlaps:
+        elif strategy == params.TimeStrategy.all_overlaps:
             if date_to:
                 fromto = " AND datefrom <= :date_to"
                 bind_params["date_to"] = date_to
             if date_from:
                 fromto += " AND dateto >= :date_from"
                 bind_params["date_from"] = date_from
-        elif strategy == params.StrategyValues.strict:
+        elif strategy == params.TimeStrategy.strict:
             if date_from:
                 fromto = " AND datefrom >= :date_from"
                 bind_params["date_from"] = date_from
@@ -616,7 +616,7 @@ async def get_token_distribution(
         # since it's much faster than doing it afterwards
 
         timedata_table = "timedata_date" if g_config.uses_date_table else "timedata"
-        if strategy == params.StrategyValues.some_overlaps:
+        if strategy == params.TimeStrategy.some_overlaps:
             # We need the full dates for this strategy, so no truncating of the results
             # We cast datefrom/dateto to CHAR to avoid issues with year zero (which we use to represent unknown dates)
             sql = text(
@@ -730,10 +730,10 @@ def _group_rows_by_corpus(rows: list[Mapping[str, Any]]) -> defaultdict[str, lis
 def _calculate_token_distribution_from_rows(
     cached_data: list[Mapping[str, Any]],
     rows: list[Mapping[str, Any]],
-    granularity: GranularityValues,
+    granularity: Granularity,
     include_combined: bool,
     include_per_corpus: bool,
-    strategy: params.StrategyValues,
+    strategy: params.TimeStrategy,
 ) -> TokenDistributionData:
     """Calculate token distribution output from cached and newly fetched rows.
 
@@ -834,10 +834,10 @@ def _calculate_series_sweepline(
 
 def build_token_distribution(
     timedata: Iterable[Mapping],
-    granularity: GranularityValues = GranularityValues.year,
+    granularity: Granularity = Granularity.year,
     include_combined: bool = True,
     include_per_corpus: bool = True,
-    strategy: params.StrategyValues = params.StrategyValues.some_overlaps,
+    strategy: params.TimeStrategy = params.TimeStrategy.some_overlaps,
 ) -> TokenDistributionData:
     """Aggregate corpus time intervals into token counts grouped by time period.
 
@@ -873,7 +873,7 @@ def build_token_distribution(
         datefrom_short = shorten_date(datefrom) if datefrom else 0
         dateto_short = shorten_date(dateto) if dateto else 0
 
-        if strategy == params.StrategyValues.some_overlaps:
+        if strategy == params.TimeStrategy.some_overlaps:
             # Some overlaps permitted
             # (t1 >= t1' AND t2 <= t2') OR (t1 <= t1' AND t2 >= t2')
             if datefrom_short != dateto_short:
@@ -886,11 +886,11 @@ def build_token_distribution(
                 # Check that datefrom is still before dateto
                 if not datefrom < dateto:
                     continue
-        elif strategy == params.StrategyValues.all_overlaps:
+        elif strategy == params.TimeStrategy.all_overlaps:
             # All overlaps permitted
             # t1 <= t2' AND t2 >= t1'
             pass
-        elif strategy == params.StrategyValues.strict:  # ruff: ignore[collapsible-if]
+        elif strategy == params.TimeStrategy.strict:  # ruff: ignore[collapsible-if]
             # Strict matching. No overlaps tolerated.
             # t1 >= t1' AND t2 <= t2'
 

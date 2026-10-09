@@ -1844,7 +1844,7 @@ async def _dependency_relations_impl(
     corpus_timedata = await token_distribution.get_token_distribution(
         ctx,
         corpora,
-        granularity=params.GranularityValues.year,
+        granularity=params.Granularity.year,
         include_combined=False,
         include_per_corpus=True,
         no_combined_cache=True,
