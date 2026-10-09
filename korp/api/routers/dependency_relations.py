@@ -48,15 +48,6 @@ class TermType(StrEnum):
     lexeme = "lexeme"
 
 
-class DependencyRelationsSort(StrEnum):
-    """Allowed sort fields for dependency relations."""
-
-    freq = "freq"
-    freq_relative = "freq_relative"
-    mi = "mi"
-    rmi = "rmi"
-
-
 class PeriodAlign(StrEnum):
     """Allowed period alignment values."""
 
@@ -71,7 +62,7 @@ class MaxScope(StrEnum):
     per_period = "per_period"
 
 
-class Measures(StrEnum):
+class DependencyRelationMeasure(StrEnum):
     """Available types of measures to include in the response."""
 
     freq = "freq"
@@ -163,7 +154,7 @@ MaxResultsParam: TypeAlias = Annotated[
 ]
 
 RelationsSortParam: TypeAlias = Annotated[
-    DependencyRelationsSort,
+    DependencyRelationMeasure,
     Query(description="Measure used for sorting and for selecting rows when `max_results` applies."),
 ]
 
@@ -215,7 +206,7 @@ MaxScopeParam: TypeAlias = Annotated[
 ]
 
 MeasuresParam: TypeAlias = Annotated[
-    Sequence[Measures],
+    Sequence[DependencyRelationMeasure],
     Query(
         description=(
             "Measures to include on each relation row. The relation identifiers and `sources` are always included."
@@ -382,7 +373,7 @@ def _calc_mi(freq: int, head_rel_freq: int, dep_rel_freq: int, rel_freq: int) ->
     return freq * math.log2((rel_freq * freq) / (head_rel_freq * dep_rel_freq))
 
 
-def _relation_output(entry: dict, measures: Container[Measures]) -> dict[str, str | int | float]:
+def _relation_output(entry: dict, measures: Container[DependencyRelationMeasure]) -> dict[str, str | int | float]:
     """Build the standard relation output dictionary.
 
     Args:
@@ -401,13 +392,13 @@ def _relation_output(entry: dict, measures: Container[Measures]) -> dict[str, st
         "dependent_extra": entry["dependent_extra"],
         "sources": entry["sources"],
     }
-    if Measures.freq in measures:
+    if DependencyRelationMeasure.freq in measures:
         output["freq"] = entry["freq"]
-    if Measures.freq_relative in measures:
+    if DependencyRelationMeasure.freq_relative in measures:
         output["freq_relative"] = entry["freq_relative"]
-    if Measures.mi in measures:
+    if DependencyRelationMeasure.mi in measures:
         output["mi"] = entry["mi"]
-    if Measures.rmi in measures:
+    if DependencyRelationMeasure.rmi in measures:
         output["rmi"] = entry["rmi"]
     return output
 
@@ -796,7 +787,7 @@ def _build_overall_only_relations(
     sort_field: str,
     max_results: int | None,
     corpus_size: int,
-    measures: Container[Measures],
+    measures: Container[DependencyRelationMeasure],
 ) -> list[dict[str, str | int | float]]:
     """Build aggregated relation statistics for overall (non-split) data, based on the results from multiple corpora.
 
@@ -1572,7 +1563,7 @@ def _token_totals_by_year(
 def _serialize_relation_periods(
     token_totals: Mapping[tuple[int | None, int | None], int],
     rows: Iterable[dict[str, object]],
-    measures: Container[Measures],
+    measures: Container[DependencyRelationMeasure],
 ) -> list[dict[str, object]]:
     """Combine token totals and relation rows into period records.
 
@@ -1703,7 +1694,7 @@ async def _dependency_relations_impl(
     term: str,
     term_type: TermType,
     min_freq: int | None,
-    sort_field: DependencyRelationsSort,
+    sort_field: DependencyRelationMeasure,
     max_results: int | None,
     include_split: bool,
     period_size: int,
@@ -1712,7 +1703,7 @@ async def _dependency_relations_impl(
     end_year: int | None,
     include_overall: bool,
     max_scope: MaxScope,
-    measures: Container[Measures],
+    measures: Container[DependencyRelationMeasure],
     abort_signal: AbortSignal | None = None,
 ) -> AsyncIterator[ResponseFragment]:
     """Shared implementation for `/dependency-relations` and `/dependency-relations/time`.
@@ -1829,7 +1820,7 @@ async def _dependency_relations_impl(
 
     # Fast path: overall-only with no year filtering
     if overall_only and not use_split_data:
-        if Measures.freq_relative in measures:
+        if DependencyRelationMeasure.freq_relative in measures:
             # Avoid calling CWB if relative frequencies are not needed, to be able to test the endpoint without CWB
             corpus_data = await info.get_corpus_info(ctx=ctx, corpora=corpora, no_combined_cache=True)
             total_corpus_size = sum(int(corpus_data["corpora"][corpus]["info"]["size"]) for corpus in corpora)
@@ -1997,7 +1988,7 @@ class DependencyRelationsRequest(RequestModel):
     term_type: TermTypeParam = TermType.word
     min_freq: MinFreqParam = None
     max_results: MaxResultsParam = 15
-    sort: RelationsSortParam = DependencyRelationsSort.mi
+    sort: RelationsSortParam = DependencyRelationMeasure.mi
     include_time: RelationsIncludeTimeParam = False
     period_size: PeriodSizeParam = 1
     period_align: PeriodAlignParam = PeriodAlign.newest
@@ -2005,7 +1996,7 @@ class DependencyRelationsRequest(RequestModel):
     end_year: YearParam = None
     include_overall: IncludeOverallParam = True
     max_scope: MaxScopeParam = MaxScope.per_period
-    measures: MeasuresParam = tuple(Measures)
+    measures: MeasuresParam = tuple(DependencyRelationMeasure)
 
 
 class DependencyRelationsTimeRequest(RequestModel):
@@ -2018,14 +2009,14 @@ class DependencyRelationsTimeRequest(RequestModel):
     term_type: TermTypeParam = TermType.word
     min_freq: MinFreqParam = None
     max_results: MaxResultsParam = 15
-    sort: RelationsSortParam = DependencyRelationsSort.mi
+    sort: RelationsSortParam = DependencyRelationMeasure.mi
     period_size: PeriodSizeParam = 1
     period_align: PeriodAlignParam = PeriodAlign.newest
     start_year: YearParam = None
     end_year: YearParam = None
     include_overall: IncludeOverallParam = False
     max_scope: MaxScopeParam = MaxScope.per_period
-    measures: MeasuresParam = tuple(Measures)
+    measures: MeasuresParam = tuple(DependencyRelationMeasure)
 
 
 class DependencyRelationsQuery(QueryRequestModel, DependencyRelationsRequest):
