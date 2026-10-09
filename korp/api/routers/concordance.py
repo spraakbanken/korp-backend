@@ -1082,7 +1082,7 @@ def query_corpus(
     no_results: bool = False,
     use_cache: bool = False,
     abort_signal: AbortSignal | None = None,
-) -> tuple[Iterable[str], int, dict]:
+) -> tuple[Iterable[str], int, dict[str, dict[str, list[str]]]]:
     """Perform a CQP query on a single corpus and return parsed results.
 
     Args:
@@ -1100,7 +1100,7 @@ def query_corpus(
         A tuple containing:
             - An iterable of KWIC rows (empty if no_results is True).
             - The total number of hits for the query.
-            - A dictionary with additional metadata (currently unused).
+            - Available CWB attributes by corpus and attribute type, in CQP output order.
 
     Raises:
         CQPError: If the CQP query fails.
@@ -1168,8 +1168,10 @@ def query_corpus(
     cqpparams = {"within": within, "cut": max_hits_per_corpus}
 
     # Handle aligned corpora
+    linked_corpus = None
     if "|" in corpus:
         linked = corpus.split("|")
+        linked_corpus = linked[1]
         cqp_final = []
 
         for c in cqp_query:
@@ -1217,6 +1219,10 @@ def query_corpus(
 
     if cache:
         cmd.append(f'set DataDirectory "{cache_dir}";')
+
+    if linked_corpus:
+        cmd.append(f"{linked_corpus.upper()};")
+        cmd += cwb.show_attributes()
 
     cmd.append(f"{corpus.upper()};")
 
@@ -1306,7 +1312,10 @@ def query_corpus(
             pass
 
     # Read the attributes and their relative order
-    attrs = cwb.read_attributes(lines)
+    attrs = {}
+    if linked_corpus:
+        attrs[linked_corpus] = cwb.read_attributes(lines)
+    attrs[corpus] = cwb.read_attributes(lines)
 
     # Read the size of the query, i.e., the number of results
     nr_hits = next(lines)
@@ -1494,7 +1503,7 @@ def query_parse_lines(
     concordance_params: ConcordanceParameters,
     corpus: str,
     lines: Iterable[str],
-    attrs: dict[str, list[str]],
+    attrs: dict[str, dict[str, list[str]]],
     abort_signal: AbortSignal | None = None,
 ) -> list[dict]:
     """Parse concordance lines from CWB.
@@ -1503,7 +1512,7 @@ def query_parse_lines(
         concordance_params: Parsed concordance parameters.
         corpus: Name of the corpus being queried.
         lines: Iterable of raw concordance lines from CWB.
-        attrs: Dictionary of available CWB attributes by type.
+        attrs: Available CWB attributes by corpus and attribute type, in CQP output order.
         abort_signal: Optional signal to abort processing.
 
     Returns:
@@ -1513,10 +1522,14 @@ def query_parse_lines(
     struct_attributes = concordance_params.struct_attributes
     free_order = concordance_params.free_order
 
-    # Filter out unavailable attributes
-    p_attrs = [attr for attr in attrs["p"] if attr in attributes]
-    s_attrs = {attr for attr in attrs["s"] if attr in attributes}
-    ls_attrs = {attr for attr in attrs["s"] if attr in struct_attributes}
+    base_corpus = corpus.split("|", 1)[0]
+    # Filter the requested attributes to those that are actually available in the (base) corpus.
+    active_p_attrs = attributes.intersection(attrs[base_corpus]["p"])
+    active_s_attrs = attributes.intersection(attrs[base_corpus]["s"])
+    # For aligned corpora, we can only use the attributes that are present in both corpora.
+    p_attrs = {name: [attr for attr in available["p"] if attr in active_p_attrs] for name, available in attrs.items()}
+    s_attrs = {name: active_s_attrs.intersection(available["s"]) for name, available in attrs.items()}
+    ls_attrs = {attr for attr in attrs[base_corpus]["s"] if attr in struct_attributes}
 
     last_line_span: tuple[int, int] | tuple[()] = ()
     kwic: list[dict] = []
@@ -1537,7 +1550,8 @@ def query_parse_lines(
         # Parse tokens
         words = line.split()
         try:
-            tokens, match = _parse_tokens(words, p_attrs, s_attrs)
+            line_corpus = aligned or base_corpus
+            tokens, match = _parse_tokens(words, p_attrs[line_corpus], s_attrs[line_corpus])
         except (IndexError, ValueError):
             # Attributes containing ">" or "<" can make some lines unparseable. We skip them
             # until we come up with a better solution.
