@@ -251,7 +251,7 @@ class Settings(BaseSettings):
         return self
 
     @staticmethod
-    def _load_plugins_config_file(file_path: Path) -> dict[str, Any]:
+    def _load_plugins_config_file(file_path: Path | str) -> dict[str, Any]:
         """Load plugin configuration from YAML file.
 
         Args:
@@ -263,7 +263,7 @@ class Settings(BaseSettings):
         Raises:
             ValueError: If the YAML root is not a mapping.
         """
-        path = file_path.expanduser()
+        path = Path(file_path).expanduser()
         if not path.is_file():
             return {}
 
