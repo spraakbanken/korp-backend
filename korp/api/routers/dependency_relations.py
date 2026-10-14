@@ -84,8 +84,8 @@ relative MI.
 By default `/dependency-relations` returns overall relation statistics. Set `include_time=true` to also include
 time-sliced data in `periods`; use `/dependency-relations/time` when you only want the time-sliced view.
 
-With `stream=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
-final completion event.
+When `stream=true`, this route emits `progress` events. Each event reports the number of completed and total work items,
+along with the corpus whose processing just finished.
 
 ### Example
 
@@ -103,8 +103,8 @@ Use `period_size` and `period_align` to control how years are grouped. `max_scop
 inside each period; `max_scope=overall` first selects the top overall relations and then returns time data only for
 those relations.
 
-With `stream=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
-final completion event.
+When `stream=true`, this route emits `progress` events. Each event reports the number of completed and total work items,
+along with the corpus whose processing just finished.
 """
 
 DEPENDENCY_RELATIONS_SENTENCES_DESCRIPTION = """Return KWIC sentences containing dependency relation sources.

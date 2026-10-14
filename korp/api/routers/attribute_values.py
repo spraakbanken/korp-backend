@@ -43,8 +43,10 @@ By default the result contains value lists. When `include_counts=true`, leaf val
 `split` for set-valued CWB attributes whose values should be split on `|` before being included in the result.
 
 Use `include_combined` and `include_per_corpus` to choose whether to include merged values across all selected corpora,
-per-corpus values, or both. With `stream=true`, the response is an NDJSON event stream containing progress events,
-result fragments, and a final completion event.
+per-corpus values, or both.
+
+When `stream=true`, this route emits `progress` events. Each event contains the number of completed work items and the
+total number of work items.
 
 ### Example
 

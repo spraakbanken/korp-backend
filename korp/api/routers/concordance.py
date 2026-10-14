@@ -58,8 +58,12 @@ When `free_order=true`, token order in the CQP query does not matter. Each occur
 highlighted separately, and the row's `matches` list contains multiple match objects. Free-order searches require
 `default_within` or `within`. Not all CQP queries support free-order searches; unsupported queries return an error.
 
-With `stream=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
-final completion event.
+When `stream=true`, this route emits `progress` events. Each event reports the number of completed and total work items,
+along with the corpus whose processing just finished and the number of hits found in that corpus. If the requested
+number of KWIC rows are reached before all corpora are processed, the stream will emit a partial result object
+containing the requested `kwic` rows, and then continue to emit progress events while remaining corpora are processed.
+Finally, the stream emits a second result object containing the remaining result values, including `total_hits` and
+`hits_by_corpus`.
 
 ### Parallel corpora
 
@@ -98,8 +102,10 @@ The search is always sorted randomly, so the `sort` parameter from `/concordance
 
 The response always contains a `kwic` list. Since the route stops at the first sampled hit, it does not return
 `total_hits`, `hits_by_corpus`, or `pagination_state`; those fields would only describe the capped per-corpus sample
-query, not the full
-set of selected corpora.
+query, not the full set of selected corpora.
+
+When `stream=true`, this route emits `progress` events for each corpus searched. As the route stops at the first corpus
+with a hit, the result may be returned before every corpus is queried.
 """
 
 LeftContextParam: TypeAlias = Annotated[

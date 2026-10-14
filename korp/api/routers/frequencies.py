@@ -54,8 +54,8 @@ Repeat the `cqp` parameter to run prequeries in sequence. Repeat the `subcqp` pa
 main-query result. `combined` and each entry in `corpora` are always arrays: the first item is the main query result
 and the following items are the subquery results, each with a `cqp` field.
 
-With `stream=true`, the response is an NDJSON event stream containing progress events, result fragments, and a
-final completion event.
+When `stream=true`, this route emits `progress` events. Each event reports the number of completed and total work items,
+along with the corpus whose processing just finished.
 """
 
 CORPUS_FREQUENCIES_DESCRIPTION = """Calculate frequencies for all tokens in the selected corpora, grouped by the
@@ -85,6 +85,9 @@ data for that period; `0` means data exists but the query had no hits. Undated m
 Repeat the `subcqp` parameter to add subqueries over the final main-query result. `combined` and each entry in `corpora`
 are always arrays: the first item is the main query result and the following items are the subquery results, each with a
 `cqp` field.
+
+When `stream=true`, this route emits `progress` events. Each event reports the number of completed and total work items,
+along with the corpus whose processing just finished.
 """
 
 GroupByParam: TypeAlias = Annotated[
