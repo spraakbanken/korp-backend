@@ -55,7 +55,8 @@ main-query result. `combined` and each entry in `corpora` are always arrays: the
 and the following items are the subquery results, each with a `cqp` field.
 
 When `stream=true`, this route emits `progress` events. Each event reports the number of completed and total work items,
-along with the corpus whose processing just finished.
+along with the corpus whose processing just finished. With `relative_to_struct`, each corpus is queried twice, doubling
+the total work items.
 """
 
 CORPUS_FREQUENCIES_DESCRIPTION = """Calculate frequencies for all tokens in the selected corpora, grouped by the
@@ -738,7 +739,11 @@ async def perform_frequency_query(
         for _ in range(len(subcqp) + 1)
     ]
 
-    # If relative_to_struct is used, perform a separate frequency query to calculate relative numbers
+    progress_completed = 0
+    processing_corpora = [c for c in corpora if c not in zero_hits]
+    progress_total = len(processing_corpora)
+
+    # If relative_to_struct is specified, we need to run a separate query to get the counts for each structural value.
     relative_to_freqs = {}
     if relative_to_struct:
         relative_parameters = FrequencyParameters(
@@ -746,11 +751,26 @@ async def perform_frequency_query(
             corpora=corpora,
             group_by=relative_to_struct,  # Group by struct
             split=split,
+            simple=True,
         )
 
-        relative_to_result = await utils.async_generator_to_dict(
-            perform_frequency_query(relative_parameters, ctx, abort_signal)
-        )
+        relative_to_result = {}
+        async for fragment in perform_frequency_query(relative_parameters, ctx, abort_signal):
+            if isinstance(fragment, handler.ProgressEvent):
+                progress_total = fragment.total + len(processing_corpora)
+                progress_completed = fragment.completed
+                yield handler.ProgressEvent(
+                    completed=progress_completed,
+                    total=progress_total,
+                    corpus=fragment.corpus,
+                    corpora=corpora if fragment.corpora is not None else None,
+                )
+            else:
+                relative_to_result.update(fragment)
+
+        if abort_signal and abort_signal.is_set():
+            return
+
         relative_to_freqs = {"combined": {}, "corpora": defaultdict(dict)}
 
         for row in relative_to_result["combined"][0]["rows"]:
@@ -764,11 +784,9 @@ async def perform_frequency_query(
 
     frequency_worker = frequency_query_worker if not simple else simple_frequency_query_worker
 
-    progress_completed = 0
-    processing_corpora = [c for c in corpora if c not in zero_hits]
-    if stream:
+    if stream and not relative_to_struct:
         # Initial yield to indicate which corpora will be processed
-        yield handler.ProgressEvent(completed=0, total=len(processing_corpora), corpora=processing_corpora)
+        yield handler.ProgressEvent(completed=0, total=progress_total, corpora=processing_corpora)
 
     # Add zero-hit corpora to result
     for c in zero_hits:
@@ -882,7 +900,7 @@ async def perform_frequency_query(
                 progress_completed += 1
                 yield handler.ProgressEvent(
                     completed=progress_completed,
-                    total=len(processing_corpora),
+                    total=progress_total,
                     corpus=c,
                 )
 
