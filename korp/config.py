@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     MAX_KWIC_ROWS: int = 0
 
     # Suffix to remove from selected statistics attributes. Matches one suffix at a time.
-    STRIP_SUFFIX_PATTERN: str = r":[0-9]+(?:\.[0-9]+)?$"
+    STRIP_SUFFIX_PATTERN: str = r":-?[0-9]+(?:\.[0-9]+)?$"
 
     # Number of threads to use during parallel processing
     PARALLEL_THREADS: int = 3
