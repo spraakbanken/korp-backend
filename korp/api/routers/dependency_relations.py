@@ -2224,8 +2224,8 @@ async def _prepare_relation_sentence_request(
         Parsed relation sources and a concordance parameter template.
     """
     source_map = _parse_sources(sources)
-    concordance_params = await concordance.parse_parameters(
-        ctx=ctx,
+    await auth.check_authorization(source_map, ctx)
+    concordance_params = concordance.parse_parameters(
         corpora=list(source_map),
         cqp_query=["[]"],
         offset=0,

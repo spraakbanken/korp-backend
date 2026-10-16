@@ -17,7 +17,7 @@ from fastapi import APIRouter, Query
 from pydantic import BeforeValidator, Field
 from pydantic.json_schema import SkipJsonSchema
 
-from korp import auth, caching, cqp, handler, utils
+from korp import auth, caching, cqp, handler, query_translation, utils
 from korp.api import params, schemas
 from korp.api.requests import QueryRequestModel, RequestModel
 from korp.config import settings
@@ -360,8 +360,7 @@ class FrequencyParameters:
     cut: int | None = None
 
 
-async def parse_frequency_parameters(
-    ctx: CtxDep,
+def parse_frequency_parameters(
     corpora: list[str],
     cqp_query: list[str] | None,
     subcqp: list[str] | None,
@@ -380,7 +379,7 @@ async def parse_frequency_parameters(
     offset: int,
     limit: int | None,
 ) -> FrequencyParameters:
-    """Parse and validate parameters for a frequency query.
+    """Parse and validate frequency query parameters.
 
     Returns:
         A FrequencyParameters instance with parsed parameters.
@@ -388,8 +387,6 @@ async def parse_frequency_parameters(
     Raises:
         APIValidationError: If any parameter is invalid.
     """
-    await auth.check_authorization(corpora, ctx)
-
     group_by = sorted(set(group_by)) if group_by else []
     group_by_struct = sorted(set(group_by_struct)) if group_by_struct else []
 
@@ -933,13 +930,15 @@ async def perform_frequency_query(
     yield result
 
 
-class FrequenciesRequest(RequestModel):
+class FrequenciesRequest(query_translation.SearchQueryRequest):
     """Request for query frequency statistics."""
 
     json_array_fields = frozenset(
         {
             "corpora",
             "cqp_query",
+            "query",
+            "query_language",
             "subcqp",
             "group_by",
             "group_by_struct",
@@ -951,10 +950,9 @@ class FrequenciesRequest(RequestModel):
             "max_values_per_set",
         }
     )
-    json_array_fields_allowing_commas = frozenset({"cqp_query", "subcqp"})
+    json_array_fields_allowing_commas = frozenset({"cqp_query", "query", "query_language", "subcqp"})
 
     corpora: params.CorporaParam
-    cqp_query: params.CQPParam
     subcqp: SubCQPParam = None
     group_by: GroupByParam = None
     group_by_struct: GroupByStructParam = None
@@ -975,7 +973,7 @@ class FrequenciesRequest(RequestModel):
 class CorpusFrequenciesRequest(RequestModel):
     """Request for complete corpus frequency statistics."""
 
-    json_array_fields = FrequenciesRequest.json_array_fields - {"cqp_query", "subcqp"}
+    json_array_fields = FrequenciesRequest.json_array_fields - {"cqp_query", "query", "query_language", "subcqp"}
 
     corpora: params.CorporaParam
     group_by: GroupByParam = None
@@ -1062,8 +1060,10 @@ async def _frequencies(
     if not request.include_per_corpus and not request.include_combined:
         raise APIValidationError("At least one of `include_per_corpus` and `include_combined` must be true.")
 
-    frequency_params = await parse_frequency_parameters(
-        ctx=ctx,
+    await auth.check_authorization(request.corpora, ctx)
+    request = await query_translation.resolve_search_request(ctx, request)
+    assert request.cqp_query is not None
+    frequency_params = parse_frequency_parameters(
         corpora=request.corpora,
         cqp_query=request.cqp_query,
         subcqp=request.subcqp,
@@ -1148,8 +1148,8 @@ async def _corpus_frequencies(
     if not request.include_per_corpus and not request.include_combined:
         raise APIValidationError("At least one of `include_per_corpus` and `include_combined` must be true.")
 
-    frequency_params = await parse_frequency_parameters(
-        ctx=ctx,
+    await auth.check_authorization(request.corpora, ctx)
+    frequency_params = parse_frequency_parameters(
         corpora=request.corpora,
         cqp_query=["[]"],
         subcqp=None,
@@ -1228,14 +1228,13 @@ DateToParam: TypeAlias = Annotated[
 ]
 
 
-class FrequenciesTimeRequest(RequestModel):
+class FrequenciesTimeRequest(query_translation.SearchQueryRequest):
     """Request for query frequencies over time."""
 
-    json_array_fields = frozenset({"corpora", "cqp_query", "subcqp", "within"})
-    json_array_fields_allowing_commas = frozenset({"cqp_query", "subcqp"})
+    json_array_fields = frozenset({"corpora", "cqp_query", "query", "query_language", "subcqp", "within"})
+    json_array_fields_allowing_commas = frozenset({"cqp_query", "query", "query_language", "subcqp"})
 
     corpora: params.CorporaParam
-    cqp_query: params.CQPParam
     subcqp: SubCQPParam = None
     within: params.WithinParam = None
     default_within: params.DefaultWithinParam = None
@@ -1287,8 +1286,7 @@ async def _resolve_frequencies_time_request(
     Raises:
         APIValidationError: If a parameter rule is violated.
     """
-    frequency_params = await parse_frequency_parameters(
-        ctx=ctx,
+    frequency_params = parse_frequency_parameters(
         corpora=corpora,
         cqp_query=cqp_query,
         subcqp=subcqp,
@@ -1806,6 +1804,9 @@ async def _frequencies_time(
     Returns:
         An async iterator yielding count results as dictionaries.
     """
+    await auth.check_authorization(request.corpora, ctx)
+    request = await query_translation.resolve_search_request(ctx, request)
+    assert request.cqp_query is not None
     request_state = await _resolve_frequencies_time_request(
         ctx=ctx,
         corpora=request.corpora,

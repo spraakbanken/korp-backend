@@ -21,9 +21,9 @@ from fastapi import APIRouter, Query
 from pydantic import BeforeValidator, Field
 from pydantic.json_schema import SkipJsonSchema
 
-from korp import auth, caching, cqp, handler, utils
+from korp import auth, caching, cqp, handler, query_translation, utils
 from korp.api import params, schemas
-from korp.api.requests import QueryRequestModel, RequestModel
+from korp.api.requests import QueryRequestModel
 from korp.config import settings
 from korp.cwb import CWB
 from korp.dependencies import AbortDep, AbortSignal, CtxDep, QueryCtxDep
@@ -229,13 +229,15 @@ MaxHitsPerCorpusParam: TypeAlias = Annotated[
 ]
 
 
-class ConcordanceRequest(RequestModel):
+class ConcordanceRequest(query_translation.SearchQueryRequest):
     """Request for a concordance search."""
 
     json_array_fields = frozenset(
         {
             "corpora",
             "cqp_query",
+            "query",
+            "query_language",
             "attributes",
             "struct_attributes",
             "within",
@@ -244,10 +246,9 @@ class ConcordanceRequest(RequestModel):
             "right_context",
         }
     )
-    json_array_fields_allowing_commas = frozenset({"cqp_query"})
+    json_array_fields_allowing_commas = frozenset({"cqp_query", "query", "query_language"})
 
     corpora: params.CorporaParam
-    cqp_query: params.CQPParam
     offset: OffsetParam = 0
     limit: LimitParam = 10
     attributes: AttributesParam = ("word",)
@@ -266,13 +267,15 @@ class ConcordanceRequest(RequestModel):
     pagination_state: PaginationStateParam = None
 
 
-class ConcordanceSampleRequest(RequestModel):
+class ConcordanceSampleRequest(query_translation.SearchQueryRequest):
     """Request for a random concordance sample."""
 
     json_array_fields = frozenset(
         {
             "corpora",
             "cqp_query",
+            "query",
+            "query_language",
             "attributes",
             "struct_attributes",
             "within",
@@ -281,10 +284,9 @@ class ConcordanceSampleRequest(RequestModel):
             "right_context",
         }
     )
-    json_array_fields_allowing_commas = frozenset({"cqp_query"})
+    json_array_fields_allowing_commas = frozenset({"cqp_query", "query", "query_language"})
 
     corpora: params.CorporaParam
-    cqp_query: params.CQPParam
     attributes: AttributesParam = ("word",)
     struct_attributes: StructAttributesParam = ()
     random_seed: RandomSeedParam = None
@@ -455,8 +457,7 @@ def _end_from_offset_limit(offset: int, limit: int) -> int:
     return offset + limit - 1
 
 
-async def parse_parameters(
-    ctx: CtxDep,
+def parse_parameters(
     corpora: list[str],
     cqp_query: list[str],
     offset: int,
@@ -479,7 +480,6 @@ async def parse_parameters(
     """Parse and validate concordance parameters.
 
     Args:
-        ctx: The request context.
         corpora: List of corpora to query.
         cqp_query: List of CQP query strings.
         offset: Number of rows to skip.
@@ -507,7 +507,6 @@ async def parse_parameters(
         APIValidationError: If any of the parameters are invalid.
     """
     corpora = corpora or []
-    await auth.check_authorization(corpora, ctx)
 
     attributes_set = set(attributes)
     attributes_set.add("word")  # Always include word
@@ -974,8 +973,10 @@ async def _concordance_sample(
     Returns:
         An async iterator yielding a single KWIC result or an empty KWIC list.
     """
-    concordance_params = await parse_parameters(
-        ctx=ctx,
+    await auth.check_authorization(request.corpora, ctx)
+    request = await query_translation.resolve_search_request(ctx, request)
+    assert request.cqp_query is not None
+    concordance_params = parse_parameters(
         corpora=request.corpora,
         cqp_query=request.cqp_query,
         offset=0,
@@ -1053,8 +1054,10 @@ async def _concordance(
     Returns:
         An async iterator yielding KWIC results followed by hit counts and other metadata.
     """
-    concordance_params = await parse_parameters(
-        ctx=ctx,
+    await auth.check_authorization(request.corpora, ctx)
+    request = await query_translation.resolve_search_request(ctx, request)
+    assert request.cqp_query is not None
+    concordance_params = parse_parameters(
         corpora=request.corpora,
         cqp_query=request.cqp_query,
         offset=request.offset,

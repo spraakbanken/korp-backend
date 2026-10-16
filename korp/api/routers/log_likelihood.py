@@ -5,12 +5,13 @@ import dataclasses
 import math
 from collections import defaultdict
 from collections.abc import AsyncIterator
-from typing import Annotated, TypeAlias
+from typing import Annotated, Self, TypeAlias
 
 from fastapi import APIRouter, Query
-from pydantic import AfterValidator, BeforeValidator, Field
+from pydantic import AfterValidator, BeforeValidator, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
-from korp import utils
+from korp import auth, query_translation, utils
 from korp.api import params, schemas
 from korp.api.requests import QueryRequestModel, RequestModel
 from korp.dependencies import AbortDep, AbortSignal, CtxDep, QueryCtxDep
@@ -51,7 +52,7 @@ Compare nouns in two corpora and return up to ten values from each side:
 """
 
 Set1CQPParam: TypeAlias = Annotated[
-    str,
+    params.NonEmptyString | SkipJsonSchema[None],
     Query(
         description="CQP query for set 1.",
         examples=['[pos="NN"]'],
@@ -59,7 +60,7 @@ Set1CQPParam: TypeAlias = Annotated[
 ]
 
 Set2CQPParam: TypeAlias = Annotated[
-    str,
+    params.NonEmptyString | SkipJsonSchema[None],
     Query(
         description="CQP query for set 2.",
         examples=['[pos="NN"]'],
@@ -149,8 +150,12 @@ class LogLikelihoodRequest(RequestModel):
         }
     )
 
-    set1_cqp: Set1CQPParam
-    set2_cqp: Set2CQPParam
+    set1_cqp: Set1CQPParam = None
+    set2_cqp: Set2CQPParam = None
+    set1_query: params.TranslationQueryParam = None
+    set1_query_language: params.QueryLanguageParam = None
+    set2_query: params.TranslationQueryParam = None
+    set2_query_language: params.QueryLanguageParam = None
     set1_corpora: Set1CorporaParam
     set2_corpora: Set2CorporaParam
     max_results: MaxResultsParam = 15
@@ -164,6 +169,17 @@ class LogLikelihoodRequest(RequestModel):
     strip_suffix: frequencies.StripSuffixParam = None
     max_values_per_set: frequencies.MaxValuesPerSetParam = None
     expand_prequeries: params.ExpandPrequeriesParam = True
+
+    @model_validator(mode="after")
+    def validate_queries(self) -> Self:
+        """Validate each set's input selection.
+
+        Returns:
+            The validated request.
+        """
+        query_translation.validate_query_input(self.set1_cqp, self.set1_query, self.set1_query_language, prefix="set1_")
+        query_translation.validate_query_input(self.set2_cqp, self.set2_query, self.set2_query_language, prefix="set2_")
+        return self
 
 
 class LogLikelihoodQuery(QueryRequestModel, LogLikelihoodRequest):
@@ -184,8 +200,8 @@ class _LogLikelihoodRequestState:
 async def _log_likelihood_stream(
     ctx: CtxDep,
     request_state: _LogLikelihoodRequestState,
-    set1_cqp: Set1CQPParam,
-    set2_cqp: Set2CQPParam,
+    set1_cqp: str,
+    set2_cqp: str,
     max_results: int | None = None,
     abort_signal: AbortDep = None,
 ) -> AsyncIterator[dict]:
@@ -410,10 +426,24 @@ async def _log_likelihood(
         An async iterator yielding a dictionary with log-likelihood results.
     """
     corpora = set(request.set1_corpora).union(request.set2_corpora)
+    await auth.check_authorization(corpora, ctx)
 
-    # This also performs authorization for the selected corpora
-    frequency_params = await frequencies.parse_frequency_parameters(
-        ctx=ctx,
+    updates: dict[str, str | None] = {}
+    for prefix, query, language in (
+        ("set1", request.set1_query, request.set1_query_language),
+        ("set2", request.set2_query, request.set2_query_language),
+    ):
+        if query is None:
+            continue
+        assert language is not None
+        result = await query_translation.translate_query(ctx, language, query, prefix=f"{prefix}_")
+        updates.update({f"{prefix}_cqp": result, f"{prefix}_query": None, f"{prefix}_query_language": None})
+    if updates:
+        request = request.model_copy(update=updates)
+    assert request.set1_cqp is not None
+    assert request.set2_cqp is not None
+
+    frequency_params = frequencies.parse_frequency_parameters(
         corpora=list(corpora),
         cqp_query=[],
         subcqp=None,
