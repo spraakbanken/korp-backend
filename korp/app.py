@@ -15,7 +15,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 
-from korp import auth, caching, handler
+from korp import auth, caching, handler, query_translation
 from korp.api.routers import routers
 from korp.config import Settings, settings
 from korp.cwb import CWB
@@ -475,6 +475,7 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         app.include_router(router)
 
     # Load plugins
+    app.state.query_translators = {}
     authorizer_class: type[auth.Authorizer] | None = None
     authorizer_plugin: str | None = None
     for plugin in settings.PLUGINS:
@@ -488,6 +489,13 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
             value = getattr(module, name)
             if isinstance(value, APIRouter):
                 app.include_router(value)
+
+        if hasattr(module, "QUERY_TRANSLATOR_FACTORY"):
+            query_translation.register_provider(
+                app.state.query_translators,
+                module.QUERY_TRANSLATOR_FACTORY,
+                settings.PLUGINS_CONFIG.get(plugin, {}),
+            )
 
         if (plugin_authorizer := getattr(module, "AUTHORIZER_CLASS", None)) is None:
             continue

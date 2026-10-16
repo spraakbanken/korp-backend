@@ -4,7 +4,7 @@ from enum import StrEnum
 from typing import Annotated, TypeAlias
 
 from fastapi import Query
-from pydantic import AfterValidator, BeforeValidator, StringConstraints
+from pydantic import AfterValidator, BeforeValidator, Field, StringConstraints
 from pydantic.json_schema import SkipJsonSchema
 
 from korp import utils
@@ -33,6 +33,51 @@ CQPParam: TypeAlias = Annotated[
         explode=True,  # Document as a repeated query parameter rather than a CSV list.
         examples=[['[word="flower"]'], ['[word="flower"]', '[pos="NN"]']],
         min_length=1,
+    ),
+]
+
+OptionalCQPParam: TypeAlias = Annotated[
+    Annotated[list[NonEmptyString], Field(min_length=1)] | SkipJsonSchema[None],
+    Query(
+        alias="cqp",
+        explode=True,
+        description=(
+            "CQP query or queries to run. Repeat the `cqp` parameter to perform several queries in sequence; each "
+            "query is executed on the result of the previous query, in the order it appears in the request."
+        ),
+        examples=[['[word="flower"]'], ['[word="flower"]', '[pos="NN"]']],
+    ),
+]
+
+TranslationQueryParam: TypeAlias = Annotated[
+    NonEmptyString | SkipJsonSchema[None],
+    Query(description="One query in an explicitly selected alternative language. Mutually exclusive with CQP queries."),
+]
+
+QueryLanguageParam: TypeAlias = Annotated[
+    NonEmptyString | SkipJsonSchema[None],
+    Query(description="Query language for the alternative query. Required when an alternative query is supplied."),
+]
+
+TranslationQueriesParam: TypeAlias = Annotated[
+    Annotated[list[NonEmptyString], Field(min_length=1)] | SkipJsonSchema[None],
+    Query(
+        explode=True,
+        description=(
+            "One or more queries in explicitly selected alternative languages. Mutually exclusive with CQP queries. "
+            "Repeat for multiple values."
+        ),
+    ),
+]
+
+QueryLanguagesParam: TypeAlias = Annotated[
+    Annotated[list[NonEmptyString], Field(min_length=1)] | SkipJsonSchema[None],
+    Query(
+        explode=True,
+        description=(
+            "Query languages for the alternative query parameters. One value applies to all queries; otherwise supply "
+            "one per query in order. Repeat for multiple values."
+        ),
     ),
 ]
 
