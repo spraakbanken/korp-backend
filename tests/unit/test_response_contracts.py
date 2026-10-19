@@ -20,6 +20,7 @@ from korp.api.routers import (
     lexeme_counts,
     log_likelihood,
     misc,
+    query,
     routers,
     token_distribution,
 )
@@ -45,7 +46,7 @@ EXPECTED_SUCCESS_MODELS = {
     "/info": info.InfoResponse,
     "/lexeme-counts": lexeme_counts.LexemeCountResponse,
     "/log-likelihood": log_likelihood.LogLikelihoodResponse,
-    "/optimize": misc.OptimizeResponse,
+    "/query/optimize": query.OptimizeResponse,
     "/token-distribution": token_distribution.TokenDistributionResponse,
 }
 

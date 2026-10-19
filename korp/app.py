@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 
 from korp import auth, caching, handler, query_translation
+from korp.api.routers import query as query_routes
 from korp.api.routers import routers
 from korp.config import Settings, settings
 from korp.cwb import CWB
@@ -58,6 +59,11 @@ _API_DOCUMENTATION_STRUCTURE = [
             "/dependency-relations/sentences",
             "/dependency-relations/time/sentences",
         ],
+    },
+    {
+        "name": "Query",
+        "description": "Routes for translating and optimizing queries.",
+        "routes": ["/query/translate", "/query/optimize"],
     },
     {
         "name": "Administration",
@@ -460,7 +466,8 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
         routes_order = [r for t in _API_DOCUMENTATION_STRUCTURE for r in t.get("routes", [])]
         new_paths = {}
         for route in routes_order:
-            new_paths[route] = schema["paths"][route]
+            if route in schema["paths"]:  # Skip optional routes that are not present in this app instance
+                new_paths[route] = schema["paths"][route]
         for route, path_item in schema["paths"].items():
             if route not in new_paths:
                 new_paths[route] = path_item
@@ -511,6 +518,9 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
             )
         authorizer_class = plugin_authorizer
         authorizer_plugin = plugin
+
+    if app.state.query_translators:
+        app.include_router(query_routes.translation_router)
 
     app.state.authorizer_class = authorizer_class
     app.state.authorizer = None
