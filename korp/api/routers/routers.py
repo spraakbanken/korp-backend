@@ -11,6 +11,7 @@ from korp.api.routers import (
     lexeme_counts,
     log_likelihood,
     misc,
+    query,
     token_distribution,
 )
 
@@ -25,5 +26,6 @@ routers = [
     lexeme_counts.router,
     log_likelihood.router,
     misc.router,
+    query.router,
     token_distribution.router,
 ]
