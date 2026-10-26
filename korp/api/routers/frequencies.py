@@ -5,7 +5,7 @@ import itertools
 import re
 from collections import defaultdict
 from collections.abc import AsyncGenerator, AsyncIterator, Collection, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from functools import partial
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, cast
@@ -51,8 +51,11 @@ the value of a specific token in a multi-token query, mark that token as the CQP
 `[pos = "JJ"] @[pos = "NN"]`.
 
 Repeat the `cqp` parameter to run prequeries in sequence. Repeat the `subcqp` parameter to add subqueries over the final
-main-query result. `combined` and each entry in `corpora` are always arrays: the first item is the main query result
-and the following items are the subquery results, each with a `cqp` field.
+main-query result. `results` contains the main query first, followed by subquery results with a `cqp` field. Each result
+contains `rows` grouped by the specified attributes, with `combined` frequencies and sparse per-corpus `corpora`
+frequencies. Rows are sorted by combined absolute frequency descending, then grouped value, before applying `offset` and
+`limit`. The result's `combined` and `corpora` metadata contain full unsliced sums and distinct-value counts
+(`total_rows`). `include_combined` and `include_per_corpus` control those fields in both rows and metadata.
 
 When `stream=true`, this route emits `progress` events. Each event reports the number of completed and total work items,
 along with the corpus whose processing just finished. With `relative_to_struct`, each corpus is queried twice, doubling
@@ -66,7 +69,11 @@ This is the optimized variant to use when no CQP query is needed, for example wh
 all word forms in a corpus. It uses the same grouping and formatting parameters as `/frequencies`, except it does not
 accept `cqp` or `subcqp`.
 
-If neither `group_by` nor `group_by_struct` is supplied, the route groups by `word`.
+If neither `group_by` nor `group_by_struct` is supplied, the route groups by `word`. The `result` object contains `rows`
+grouped by the specified attributes and full unsliced `combined` and `corpora` metadata. Rows are sorted by combined
+absolute frequency descending, then grouped value, before pagination. Per-corpus row entries are sparse: a missing
+corpus means zero hits for that value. `include_combined` and `include_per_corpus` control those fields in both rows and
+metadata.
 """
 
 FREQUENCIES_TIME_DESCRIPTION = f"""Calculate the frequency of a query over time.
@@ -195,11 +202,11 @@ MaxValuesPerSetParam: TypeAlias = Annotated[
 ]
 
 
-class FrequencySums(schemas.ResponseModel):
-    """Frequency sums for a statistics result."""
+class FrequencyCounts(schemas.ResponseModel):
+    """Absolute and relative frequencies for a grouped value or result sum."""
 
-    absolute: int = Field(..., description="Absolute frequency sum.", examples=[598])
-    relative: float = Field(..., description="Relative frequency sum.", examples=[13.765536])
+    absolute: int = Field(..., description="Absolute frequency.", examples=[598])
+    relative: float = Field(..., description="Relative frequency per one million tokens.", examples=[13.765536])
 
 
 class FrequencyRow(schemas.ResponseModel):
@@ -213,55 +220,52 @@ class FrequencyRow(schemas.ResponseModel):
         ),
         examples=[{"word": ["run"], "pos": ["VB"]}, {"text_author": ["Söderberg, Hjalmar"]}],
     )
-    absolute: int = Field(..., description="Absolute frequency.", examples=[598])
-    relative: float = Field(..., description="Relative frequency per one million tokens.", examples=[13.765536])
+    combined: FrequencyCounts | SkipJsonSchema[None] = Field(
+        None, description="Combined frequencies. Omitted when `include_combined=false`."
+    )
+    corpora: dict[str, FrequencyCounts] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Frequencies per corpus. Corpora with zero hits for this value are omitted. "
+            "Omitted when `include_per_corpus=false`."
+        ),
+    )
+
+
+class FrequencyMetadata(schemas.ResponseModel):
+    """Summary of a full result before pagination."""
+
+    sums: FrequencyCounts = Field(..., description="Frequency sums over the full unsliced result.")
+    total_rows: int = Field(..., description="Number of distinct grouped values before pagination.", examples=[241])
 
 
 class FrequencyStatistics(schemas.ResponseModel):
-    """Frequency statistics for one query or subquery."""
+    """Statistics grouped by value for one query or subquery."""
 
-    rows: list[FrequencyRow] = Field(..., description="Grouped frequency rows.")
-    sums: FrequencySums = Field(
-        ..., description="Frequency sums over the full unsliced result, before applying `offset` and `limit`."
+    rows: list[FrequencyRow] = Field(
+        ..., description="Grouped values sorted by combined absolute frequency descending, then grouped value."
     )
-    total_rows: int = Field(
-        ...,
-        description="Total number of distinct grouped values before applying `offset` and `limit`.",
-        examples=[241],
+    combined: FrequencyMetadata | SkipJsonSchema[None] = Field(
+        None, description="Combined result metadata. Omitted when `include_combined=false`."
     )
-    cqp: str | SkipJsonSchema[None] = Field(
-        None, description="Subquery CQP string. Included only for `subcqp` results."
+    corpora: dict[str, FrequencyMetadata] | SkipJsonSchema[None] = Field(
+        None, description="Metadata for every selected corpus. Omitted when `include_per_corpus=false`."
     )
+    cqp: str | SkipJsonSchema[None] = Field(None, description="Subquery CQP string. Included only for subqueries.")
 
 
 class FrequenciesResponse(schemas.CommonResponse):
-    """Response model for `/frequencies` route."""
+    """Response model for `/frequencies`."""
 
-    corpora: dict[str, list[FrequencyStatistics]] | SkipJsonSchema[None] = Field(
-        None,
-        description=(
-            "Statistics per corpus, always as arrays. Omitted when `include_per_corpus=false`. The main query is "
-            "first, followed by `subcqp` results."
-        ),
-    )
-    combined: list[FrequencyStatistics] | SkipJsonSchema[None] = Field(
-        None,
-        description=(
-            "Combined statistics for all corpora, always as an array with the main query first. Omitted when "
-            "`include_combined=false`."
-        ),
+    results: list[FrequencyStatistics] = Field(
+        ..., description="Main-query statistics followed by subquery statistics, each with its CQP string."
     )
 
 
 class CorpusFrequenciesResponse(schemas.CommonResponse):
-    """Response model for `/frequencies/corpus` route."""
+    """Response model for `/frequencies/corpus`."""
 
-    corpora: dict[str, FrequencyStatistics] | SkipJsonSchema[None] = Field(
-        None, description="Statistics per corpus. Omitted when `include_per_corpus=false`."
-    )
-    combined: FrequencyStatistics | SkipJsonSchema[None] = Field(
-        None, description="Combined statistics for all corpora. Omitted when `include_combined=false`."
-    )
+    result: FrequencyStatistics = Field(..., description="Complete-corpus frequency statistics.")
 
 
 PeriodBoundary: TypeAlias = date | datetime
@@ -313,7 +317,7 @@ class TimeStatistics(schemas.ResponseModel):
             ]
         ],
     )
-    sums: FrequencySums = Field(..., description="Frequency sums over the time series.")
+    sums: FrequencyCounts = Field(..., description="Frequency sums over the time series.")
     cqp: str | SkipJsonSchema[None] = Field(
         None, description="Subquery CQP string. Included only for `subcqp` results."
     )
@@ -528,141 +532,117 @@ def _parse_ngram_groups(
     return all_ngrams
 
 
+Ngram: TypeAlias = tuple[tuple[str, ...], ...]
+
+
+@dataclass
+class _FrequencyRowCounts:
+    """Counts for one grouped value across all corpora."""
+
+    combined: FrequencyCounts = field(default_factory=lambda: FrequencyCounts(absolute=0, relative=0.0))
+    corpora: dict[str, FrequencyCounts] = field(default_factory=dict)
+
+
+_FrequencyAccumulator: TypeAlias = dict[Ngram, _FrequencyRowCounts]
+
+
 def _accumulate_ngram_stats(
-    cross: list[tuple],
+    cross: Iterable[Ngram],
     freq: int,
-    corpus_stats: list[dict],
-    total_stats: list[dict],
-    query_no: int,
+    statistics: _FrequencyAccumulator,
     corpus_size: int,
     relative_to_struct: list[tuple[str, bool]],
     relative_to_pos: list[int],
     relative_to_freqs: dict | None,
     corpus: str,
 ) -> None:
-    """Accumulate frequency statistics for ngrams.
-
-    Args:
-        cross: Cross product of ngram combinations.
-        freq: Frequency count for this line.
-        corpus_stats: Per-corpus statistics accumulator.
-        total_stats: Combined statistics accumulator.
-        query_no: Current query/subquery index.
-        corpus_size: Size of the corpus.
-        relative_to_struct: Structural attributes for relative calculation.
-        relative_to_pos: Positions of relative_to_struct in group_by.
-        relative_to_freqs: Pre-computed frequencies for relative calculation.
-        corpus: Current corpus name.
-    """
-    cs_rows = corpus_stats[query_no]["rows"]
-    cs_sums = corpus_stats[query_no]["sums"]
-    ts_rows = total_stats[query_no]["rows"]
-    ts_sums = total_stats[query_no]["sums"]
-
+    """Accumulate corpus and combined counts under each grouped value."""
     for ngram in cross:
-        cs_rows[ngram]["absolute"] += freq
-        cs_sums["absolute"] += freq
-        ts_rows[ngram]["absolute"] += freq
-        ts_sums["absolute"] += freq
+        if ngram not in statistics:
+            statistics[ngram] = _FrequencyRowCounts()
+        row = statistics[ngram]
+        if corpus not in row.corpora:
+            row.corpora[corpus] = FrequencyCounts(absolute=0, relative=0.0)
+        counts = row.corpora[corpus]
+        counts.absolute += freq
+        row.combined.absolute += freq
 
         if relative_to_struct and relative_to_freqs:
-            # Only use the first token of each relative_to_struct attribute
-            relativeto_ngram = tuple(ngram[pos][0:1] for pos in relative_to_pos)
-            corpus_rel = freq / relative_to_freqs["corpora"][corpus][relativeto_ngram] * RELATIVE_MULTIPLIER
-            cs_rows[ngram]["relative"] += corpus_rel
-            cs_sums["relative"] += corpus_rel
-            ts_rows[ngram]["relative"] += freq / relative_to_freqs["combined"][relativeto_ngram] * RELATIVE_MULTIPLIER
+            # Structural denominators use the first token of each selected attribute.
+            denominator_key = tuple(ngram[pos][0:1] for pos in relative_to_pos)
+            counts.relative += freq / relative_to_freqs["corpora"][corpus][denominator_key] * RELATIVE_MULTIPLIER
+            row.combined.relative += freq / relative_to_freqs["combined"][denominator_key] * RELATIVE_MULTIPLIER
         else:
-            rel = freq / corpus_size * RELATIVE_MULTIPLIER
-            cs_rows[ngram]["relative"] += rel
-            cs_sums["relative"] += rel
+            counts.relative += freq / corpus_size * RELATIVE_MULTIPLIER
 
 
-def _rows_to_list(rows: dict, group_by: list[tuple[str, bool]]) -> list[dict]:
-    """Convert ngram-keyed row dict to a list of result dicts.
-
-    Args:
-        rows: Dict mapping ngram tuples to stat dicts (absolute/relative).
-        group_by: List of (attribute, is_struct) tuples.
+def _grouped_value(ngram: Ngram, group_by: list[tuple[str, bool]]) -> dict[str, list[str | None]]:
+    """Serialize positional and structural grouped values as token arrays.
 
     Returns:
-        List of dicts with "value" key and stat values.
+        Attribute names mapped to token values, with undefined positional values represented as null.
     """
-    return [
-        {
-            "value": {
-                key[0]: [cqp.translate_undef(value) for value in ngram[i]] if not key[1] else list(ngram[i])
-                for i, key in enumerate(group_by)
-            },
-            **vals,
-        }
-        for ngram, vals in rows.items()
-    ]
+    return {
+        name: list(values) if is_struct else [cqp.translate_undef(value) for value in values]
+        for (name, is_struct), values in zip(group_by, ngram, strict=True)
+    }
 
 
 def _finalize_frequency_results(
-    result: dict[str, Any],
-    total_stats: list[dict],
+    statistics: _FrequencyAccumulator,
     corpora: list[str],
     group_by: list[tuple[str, bool]],
-    subcqp: list[str],
     relative_to_struct: list[tuple[str, bool]],
     total_size: int,
     start: int,
     end: int,
-) -> None:
-    """Finalize frequency results by calculating relative frequencies and formatting output.
+    *,
+    include_combined: bool = True,
+    include_per_corpus: bool = True,
+    subcqp: str | None = None,
+) -> FrequencyStatistics:
+    """Summarize all values and return a page sorted by combined count and grouped value.
 
-    Args:
-        result: Result dictionary to update in place.
-        total_stats: Combined statistics.
-        corpora: List of corpus names.
-        group_by: List of (attribute, is_struct) tuples.
-        subcqp: List of subqueries.
-        relative_to_struct: Structural attributes for relative calculation.
-        total_size: Total size across all corpora.
-        start: Start index for result slicing.
-        end: End index for result slicing. Use -1 for no upper bound.
+    Returns:
+        Sorted value rows with full unsliced metadata for the requested scopes.
     """
-    for query_no in range(len(subcqp) + 1):
-        total_stats[query_no]["total_rows"] = len(total_stats[query_no]["rows"])
-        for c in corpora:
-            corpus_stats = result["corpora"][c][query_no]
-            corpus_stats["total_rows"] = len(corpus_stats["rows"])
-
-        if start > 0 or (end > -1 and len(total_stats[query_no]["rows"]) > end - start + 1):
-            slice_end = None if end == -1 else end + 1
-            total_stats[query_no]["rows"] = dict(
-                sorted(total_stats[query_no]["rows"].items(), key=lambda item: (-item[1]["absolute"], item[0]))[
-                    start:slice_end
-                ]
-            )
-
-            for c in corpora:
-                corpus_rows = result["corpora"][c][query_no]["rows"]
-                result["corpora"][c][query_no]["rows"] = {
-                    ngram: corpus_rows[ngram] for ngram in total_stats[query_no]["rows"] if ngram in corpus_rows
-                }
-
+    corpus_metadata = {
+        corpus: FrequencyMetadata(sums=FrequencyCounts(absolute=0, relative=0.0), total_rows=0) for corpus in corpora
+    }
+    absolute_sum = 0
+    for row in statistics.values():
+        absolute_sum += row.combined.absolute
         if not relative_to_struct:
-            for ngram, vals in total_stats[query_no]["rows"].items():
-                total_stats[query_no]["rows"][ngram]["relative"] = (
-                    vals["absolute"] / float(total_size) * RELATIVE_MULTIPLIER
-                )
+            row.combined.relative = row.combined.absolute / total_size * RELATIVE_MULTIPLIER if total_size else 0.0
+        for corpus, counts in row.corpora.items():
+            metadata = corpus_metadata[corpus]
+            metadata.total_rows += 1
+            metadata.sums.absolute += counts.absolute
+            metadata.sums.relative += counts.relative
 
-        for c in corpora:
-            result["corpora"][c][query_no]["rows"] = _rows_to_list(result["corpora"][c][query_no]["rows"], group_by)
-
-        total_stats[query_no]["sums"]["relative"] = (
-            total_stats[query_no]["sums"]["absolute"] / float(total_size) * RELATIVE_MULTIPLIER
-            if total_size > 0
-            else 0.0
+    sorted_rows = sorted(statistics.items(), key=lambda item: (-item[1].combined.absolute, item[0]))
+    page = sorted_rows[start : None if end == -1 else end + 1]
+    return FrequencyStatistics(
+        rows=[
+            FrequencyRow(
+                value=_grouped_value(ngram, group_by),
+                combined=row.combined if include_combined else None,
+                corpora=row.corpora if include_per_corpus else None,
+            )
+            for ngram, row in page
+        ],
+        combined=FrequencyMetadata(
+            sums=FrequencyCounts(
+                absolute=absolute_sum,
+                relative=absolute_sum / total_size * RELATIVE_MULTIPLIER if total_size else 0.0,
+            ),
+            total_rows=len(statistics),
         )
-
-        if subcqp and query_no > 0:
-            total_stats[query_no]["cqp"] = subcqp[query_no - 1]
-
-        total_stats[query_no]["rows"] = _rows_to_list(total_stats[query_no]["rows"], group_by)
+        if include_combined
+        else None,
+        corpora=corpus_metadata if include_per_corpus else None,
+        cqp=subcqp,
+    )
 
 
 async def perform_frequency_query(
@@ -706,12 +686,11 @@ async def perform_frequency_query(
     start = frequency_params.start
     end = frequency_params.end
 
-    result: dict[str, Any] = {"corpora": {}}
+    result: dict[str, Any] = {}
     debug = {}
     zero_hits: set[str] = set()
     read_from_cache = 0
-    frequency_state = utils.Namespace()
-    frequency_state.total_size = 0
+    total_size = 0
 
     if ctx.common.cache:
         # Use cache to skip corpora with zero hits
@@ -729,15 +708,12 @@ async def perform_frequency_query(
             read_from_cache += 1
             if nr_hits == 0:
                 zero_hits.add(memcached_keys[key])
-                frequency_state.total_size += cached_size[key][1]
+                total_size += cached_size[key][1]
 
         if ctx.common.debug:
             debug["cache_coverage"] = f"{read_from_cache}/{len(corpora)}"
 
-    total_stats = [
-        {"rows": defaultdict(lambda: {"absolute": 0, "relative": 0.0}), "sums": {"absolute": 0, "relative": 0.0}}
-        for _ in range(len(subcqp) + 1)
-    ]
+    statistics = [_FrequencyAccumulator() for _ in range(len(subcqp) + 1)]
 
     progress_completed = 0
     processing_corpora = [c for c in corpora if c not in zero_hits]
@@ -773,26 +749,17 @@ async def perform_frequency_query(
 
         relative_to_freqs = {"combined": {}, "corpora": defaultdict(dict)}
 
-        for row in relative_to_result["combined"][0]["rows"]:
-            relative_to_freqs["combined"][tuple(tuple(v) for k, v in sorted(row["value"].items()))] = row["absolute"]
-
-        for c in relative_to_result["corpora"]:
-            for row in relative_to_result["corpora"][c][0]["rows"]:
-                relative_to_freqs["corpora"][c][tuple(tuple(v) for k, v in sorted(row["value"].items()))] = row[
-                    "absolute"
-                ]
+        for row in relative_to_result["results"][0]["rows"]:
+            key = tuple(tuple(values) for _, values in sorted(row["value"].items()))
+            relative_to_freqs["combined"][key] = row["combined"]["absolute"]
+            for corpus, counts in row["corpora"].items():
+                relative_to_freqs["corpora"][corpus][key] = counts["absolute"]
 
     frequency_worker = frequency_query_worker if not simple else simple_frequency_query_worker
 
     if stream and not relative_to_struct:
         # Initial yield to indicate which corpora will be processed
         yield handler.ProgressEvent(completed=0, total=progress_total, corpora=processing_corpora)
-
-    # Add zero-hit corpora to result
-    for c in zero_hits:
-        result["corpora"][c] = [{"rows": {}, "sums": {"absolute": 0, "relative": 0.0}} for _ in range(len(subcqp) + 1)]
-        for i in range(len(subcqp)):
-            result["corpora"][c][i + 1]["cqp"] = subcqp[i]
 
     if abort_signal and abort_signal.is_set():
         return
@@ -850,22 +817,12 @@ async def perform_frequency_query(
                 tg.cancel_scope.cancel()
                 return
 
-            frequency_state.total_size += corpus_size
-            corpus_stats = [
-                {
-                    "rows": defaultdict(lambda: {"absolute": 0, "relative": 0.0}),
-                    "sums": {"absolute": 0, "relative": 0.0},
-                }
-                for _ in range(len(subcqp) + 1)
-            ]
-
+            total_size += corpus_size
             query_no = 0
             for line in lines:
                 if line == cqp.END_OF_LINE:
                     # EOL means the start of a new subcqp result
                     query_no += 1
-                    if subcqp:
-                        corpus_stats[query_no]["cqp"] = subcqp[query_no - 1]
                     continue
                 freq, ngram = line.lstrip().split(" ", 1)
 
@@ -879,22 +836,18 @@ async def perform_frequency_query(
                     )
 
                 all_ngrams = _parse_ngram_groups(ngram_groups, group_by, split, strip_suffix, max_values_per_set)
-                cross = list(itertools.product(*all_ngrams))
+                cross = itertools.product(*all_ngrams)
 
                 _accumulate_ngram_stats(
                     cross=cross,
                     freq=int(freq),
-                    corpus_stats=corpus_stats,
-                    total_stats=total_stats,
-                    query_no=query_no,
+                    statistics=statistics[query_no],
                     corpus_size=corpus_size,
                     relative_to_struct=relative_to_struct,
                     relative_to_pos=relative_to_pos,
                     relative_to_freqs=relative_to_freqs if relative_to_struct else None,
                     corpus=c,
                 )
-
-            result["corpora"][c] = corpus_stats
 
             if stream:
                 progress_completed += 1
@@ -907,24 +860,21 @@ async def perform_frequency_query(
     if abort_signal and abort_signal.is_set():
         return
 
-    _finalize_frequency_results(
-        result=result,
-        total_stats=total_stats,
-        corpora=corpora,
-        group_by=group_by,
-        subcqp=subcqp,
-        relative_to_struct=relative_to_struct,
-        total_size=frequency_state.total_size,
-        start=start,
-        end=end,
-    )
-
-    result["combined"] = total_stats
-
-    if not include_per_corpus:
-        del result["corpora"]
-    if not include_combined:
-        del result["combined"]
+    result["results"] = [
+        _finalize_frequency_results(
+            statistics=query_statistics,
+            corpora=corpora,
+            group_by=group_by,
+            relative_to_struct=relative_to_struct,
+            total_size=total_size,
+            start=start,
+            end=end,
+            include_combined=include_combined,
+            include_per_corpus=include_per_corpus,
+            subcqp=subcqp[query_no - 1] if query_no else None,
+        ).model_dump(exclude_none=True)
+        for query_no, query_statistics in enumerate(statistics)
+    ]
 
     if ctx.common.debug:
         debug.update({"cqp": cqp_combined, "simple": simple})
@@ -1186,11 +1136,7 @@ async def _perform_corpus_frequency_query(
     include_combined: bool = True,
     include_per_corpus: bool = True,
 ) -> AsyncGenerator[handler.ResponseFragment]:
-    """Return single statistics objects for each corpus rather than arrays of one-element statistics.
-
-    Yields:
-        Progress events and a result with one statistics object rather than a one-element query array.
-    """
+    """Yield progress events and complete-corpus statistics in a single `result` object."""
     async for fragment in perform_frequency_query(
         frequency_params,
         ctx,
@@ -1199,10 +1145,7 @@ async def _perform_corpus_frequency_query(
         include_per_corpus=include_per_corpus,
     ):
         if isinstance(fragment, dict):
-            if include_per_corpus:
-                fragment["corpora"] = {corpus: statistics[0] for corpus, statistics in fragment["corpora"].items()}
-            if include_combined:
-                fragment["combined"] = fragment["combined"][0]
+            fragment["result"] = fragment.pop("results")[0]
         yield fragment
 
 
@@ -1494,7 +1437,7 @@ def _frequency_periods(
 def _frequency_period_sums(
     corpus_periods: list[token_distribution.TokenPeriodData],
     search_periods: list[token_distribution.TokenPeriodData],
-) -> FrequencySums:
+) -> FrequencyCounts:
     """Calculate sums using each internal query period once.
 
     Returns:
@@ -1508,7 +1451,7 @@ def _frequency_period_sums(
             continue
         absolute += search_period.tokens
         relative += search_period.tokens / corpus_period.tokens * RELATIVE_MULTIPLIER
-    return FrequencySums(absolute=absolute, relative=relative)
+    return FrequencyCounts(absolute=absolute, relative=relative)
 
 
 def _time_statistics(

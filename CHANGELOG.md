@@ -67,9 +67,11 @@ Version 9 is a breaking rewrite of the backend and its HTTP API.
 - Common response timing is now `elapsed` instead of `time`, and optional debug output is `debug` instead of `DEBUG`.
 - Concordance responses use `total_hits`, `hits_by_corpus`, `pagination_state`, and the `matches` field is now always an
   array.
-- Frequency responses always use arrays for the main query plus subqueries, put pre-pagination `total_rows` on each
-  statistics object, and represent all grouped attribute values as arrays. `/frequencies` and `/frequencies/corpus`
-  support `include_combined` and `include_per_corpus` for selecting their top-level result sections.
+- `/frequencies` returns a `results` array with the main query followed by subqueries; `/frequencies/corpus` returns
+  one `result` object. Each result contains rows organized by grouped value, with combined and sparse per-corpus
+  frequencies. Rows always sort by combined absolute frequency descending, then grouped value, before pagination.
+  Combined and per-corpus metadata contain full unsliced `sums` and `total_rows`. `include_combined` and
+  `include_per_corpus` select those fields in both rows and metadata. All grouped attribute values are arrays.
 - Renamed statistics `strip_pointer` to `strip_suffix`. Selected attributes now lose suffixes matched by the
   server's configurable `STRIP_SUFFIX_PATTERN`; the default handles integers, floats, and their combination.
 - Time-based responses use typed period arrays with inclusive ISO 8601 `start`/`end` boundaries instead of dynamic

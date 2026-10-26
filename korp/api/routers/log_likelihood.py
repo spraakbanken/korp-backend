@@ -312,16 +312,14 @@ async def _log_likelihood_stream(
             frequencies.perform_frequency_query(frequency_params, ctx, abort_signal)
         )
 
+        statistics = frequency_result["results"][0]
         sets = [{"total": 0, "freq": defaultdict(int)}, {"total": 0, "freq": defaultdict(int)}]
         for i, cset in enumerate((set1_corpora, set2_corpora)):
-            for corpus in cset:
-                corpus_statistics = frequency_result["corpora"][corpus][0]
-                sets[i]["total"] += corpus_statistics["sums"]["absolute"]
-                if len(cset) == 1:
-                    sets[i]["freq"] = {_make_freq_key(x["value"]): x["absolute"] for x in corpus_statistics["rows"]}
-                else:
-                    for x in corpus_statistics["rows"]:
-                        sets[i]["freq"][_make_freq_key(x["value"])] += x["absolute"]
+            sets[i]["total"] = sum(statistics["corpora"][corpus]["sums"]["absolute"] for corpus in cset)
+            for row in statistics["rows"]:
+                count = sum(row["corpora"][corpus]["absolute"] for corpus in cset if corpus in row["corpora"])
+                if count:
+                    sets[i]["freq"][_make_freq_key(row["value"])] = count
 
     else:
         frequency_params_2 = dataclasses.replace(frequency_params)
@@ -336,9 +334,9 @@ async def _log_likelihood_stream(
 
         sets = [{}, {}]
         for i, res in enumerate((frequency_result_1, frequency_result_2)):
-            combined_statistics = res["combined"][0]
-            sets[i]["total"] = combined_statistics["sums"]["absolute"]
-            sets[i]["freq"] = {_make_freq_key(row["value"]): row["absolute"] for row in combined_statistics["rows"]}
+            statistics = res["results"][0]
+            sets[i]["total"] = statistics["combined"]["sums"]["absolute"]
+            sets[i]["freq"] = {_make_freq_key(row["value"]): row["combined"]["absolute"] for row in statistics["rows"]}
 
     ll_list = compute_list(sets[0]["freq"], sets[0]["total"], sets[1]["freq"], sets[1]["total"])
     ws, avg = compute_ll_stats(ll_list, max_results, sets)
