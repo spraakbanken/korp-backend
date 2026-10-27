@@ -67,14 +67,14 @@ Set2CQPParam: TypeAlias = Annotated[
 ]
 
 Set1CorporaParam: TypeAlias = Annotated[
-    list[params.NonEmptyString],
+    list[params.CorpusId],
     Query(description="Corpora for set 1.", examples=[["romi", "suc3"]], min_length=1),
     BeforeValidator(utils.split_csv),
     AfterValidator(lambda v: sorted({utils.normalize_corpus_id(x) for x in v})),
 ]
 
 Set2CorporaParam: TypeAlias = Annotated[
-    list[params.NonEmptyString],
+    list[params.CorpusId],
     Query(description="Corpora for set 2.", examples=[["gp2012"]], min_length=1),
     BeforeValidator(utils.split_csv),
     AfterValidator(lambda v: sorted({utils.normalize_corpus_id(x) for x in v})),

@@ -10,9 +10,14 @@ from pydantic.json_schema import SkipJsonSchema
 from korp import utils
 
 NonEmptyString: TypeAlias = Annotated[str, StringConstraints(min_length=1)]
+CorpusId: TypeAlias = Annotated[
+    str,
+    StringConstraints(pattern=r"^[\w.-]+(?:\|[\w.-]+)*$"),
+    BeforeValidator(lambda value: value.strip() if isinstance(value, str) else value),
+]
 
 CorporaParam: TypeAlias = Annotated[
-    list[NonEmptyString],
+    list[CorpusId],
     Query(
         description=("Corpus ids to query. Corpus ids are case-insensitive and normalized to lowercase."),
         examples=[["romi", "suc3"]],
