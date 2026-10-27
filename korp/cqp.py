@@ -324,10 +324,10 @@ def optimize_query(
         # do a new non-optimized search within the results, and to be able to do that we first need to expand the rows.
         # Most of the time we only need to expand to the right, except for when leading wildcards are used.
         direction = "expand to" if leading_wildcards else "expand right to"
-        cmd.extend([f"{mu_cmd} {direction} {within};", "Last;", *fallback_query])
+        cmd.extend([*make_query(f"{mu_cmd} {direction} {within};"), "Last;", *fallback_query])
     elif expand or free_order:
-        cmd.append(f"{mu_cmd} expand to {within};")
+        cmd.extend(make_query(f"{mu_cmd} expand to {within};"))
     else:
-        cmd.append(f"{mu_cmd};")
+        cmd.extend(make_query(f"{mu_cmd};"))
 
     return QueryOptimizeResult.SUCCESS, cmd
