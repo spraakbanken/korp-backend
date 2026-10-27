@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import random
 import re
+import secrets
 from collections import defaultdict
 from collections.abc import Sequence
 from enum import Enum
@@ -180,7 +180,7 @@ def make_query(cqp: str | list[str]) -> list[str]:
     Returns:
         A list of CQP commands with query lock enabled.
     """
-    querylock = random.randrange(10**8, 10**9)
+    querylock = secrets.randbelow(9 * 10**8) + 10**8
     if isinstance(cqp, str):
         cqp = [cqp]
     return [f"set QueryLock {querylock};", *cqp, f"unlock {querylock};"]
