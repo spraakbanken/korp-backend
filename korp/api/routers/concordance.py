@@ -166,7 +166,7 @@ RandomSeedParam: TypeAlias = Annotated[
 ]
 
 AttributesParam: TypeAlias = Annotated[
-    Sequence[str],
+    Sequence[params.Attribute],
     Query(
         description=(
             "CWB attributes to include with each returned token. Positional attributes "
@@ -179,7 +179,7 @@ AttributesParam: TypeAlias = Annotated[
 ]
 
 StructAttributesParam: TypeAlias = Annotated[
-    Sequence[str] | SkipJsonSchema[None],
+    Sequence[params.Attribute] | SkipJsonSchema[None],
     Query(
         description=(
             "Structural CWB attributes (usually sentence or document annotations) to include "
@@ -191,7 +191,7 @@ StructAttributesParam: TypeAlias = Annotated[
 ]
 
 SortParam: TypeAlias = Annotated[
-    Literal["keyword", "left", "right", "random"] | str | SkipJsonSchema[None],
+    Literal["keyword", "left", "right", "random"] | params.Attribute | SkipJsonSchema[None],
     Query(
         description="Sorting method for returned rows. Sorting is per corpus, never across corpora.\n\n"
         "The available options are:\n\n"

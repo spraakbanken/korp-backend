@@ -6,7 +6,7 @@ from copy import deepcopy
 from functools import partial
 from typing import TYPE_CHECKING, Annotated, Any, TypeAlias
 
-from pydantic import BeforeValidator, Field, RootModel
+from pydantic import BeforeValidator, Field, RootModel, StringConstraints
 from pydantic.json_schema import SkipJsonSchema
 
 from korp.api import params, schemas
@@ -56,7 +56,7 @@ Get all authors and their titles with token counts:
 """
 
 AttrParam: TypeAlias = Annotated[
-    list[params.NonEmptyString],
+    list[Annotated[str, StringConstraints(pattern=r"^[\w.-]+(?:>[\w.-]+)*$")]],
     Query(
         description=(
             "CWB attribute names or attribute hierarchies. Use `>` to request nested values, "
@@ -69,7 +69,7 @@ AttrParam: TypeAlias = Annotated[
 ]
 
 AttrValuesSplitParam: TypeAlias = Annotated[
-    list[str] | SkipJsonSchema[None],
+    list[params.Attribute] | SkipJsonSchema[None],
     Query(
         description="Set-valued CWB attributes to split on `|` before collecting values.",
         examples=[["text_topic"], ["sense", "lemma"]],

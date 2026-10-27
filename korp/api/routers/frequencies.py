@@ -14,7 +14,7 @@ import anyio
 from anyio import CapacityLimiter
 from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Query
-from pydantic import BeforeValidator, Field
+from pydantic import BeforeValidator, Field, StringConstraints
 from pydantic.json_schema import SkipJsonSchema
 
 from korp import auth, caching, cqp, handler, utils
@@ -99,7 +99,7 @@ along with the corpus whose processing just finished.
 """
 
 GroupByParam: TypeAlias = Annotated[
-    list[str] | SkipJsonSchema[None],
+    list[params.Attribute] | SkipJsonSchema[None],
     Query(
         description=(
             "Positional CWB attributes (token annotations) to group results by. "
@@ -111,7 +111,7 @@ GroupByParam: TypeAlias = Annotated[
 ]
 
 GroupByStructParam: TypeAlias = Annotated[
-    list[str] | SkipJsonSchema[None],
+    list[params.Attribute] | SkipJsonSchema[None],
     Query(
         description=(
             "Structural CWB attributes (usually sentence or document annotations) to group "
@@ -143,7 +143,7 @@ LimitParam: TypeAlias = Annotated[
 ]
 
 IgnoreCaseParam: TypeAlias = Annotated[
-    list[str] | SkipJsonSchema[None],
+    list[params.Attribute] | SkipJsonSchema[None],
     Query(
         description="CWB attributes whose values should be lowercased before counting.",
         examples=[["word"], ["word", "lemma"]],
@@ -164,7 +164,7 @@ SubCQPParam: TypeAlias = Annotated[
 ]
 
 RelativeToStructParam: TypeAlias = Annotated[
-    list[str] | SkipJsonSchema[None],
+    list[params.Attribute] | SkipJsonSchema[None],
     Query(
         description=(
             "Structural CWB attributes to use as the denominator for relative frequencies instead of total corpus "
@@ -177,7 +177,7 @@ RelativeToStructParam: TypeAlias = Annotated[
 ]
 
 StripSuffixParam: TypeAlias = Annotated[
-    list[str] | SkipJsonSchema[None],
+    list[params.Attribute] | SkipJsonSchema[None],
     Query(
         description=(
             "CWB attributes whose annotation suffixes should be stripped before grouping. "
@@ -190,7 +190,7 @@ StripSuffixParam: TypeAlias = Annotated[
 ]
 
 MaxValuesPerSetParam: TypeAlias = Annotated[
-    list[str] | SkipJsonSchema[None],
+    list[Annotated[str, StringConstraints(pattern=r"^[\w.-]+(?:\:\d+)?$")]] | SkipJsonSchema[None],
     Query(
         description=(
             "CWB attributes for which only the first N values in a set should be counted. "

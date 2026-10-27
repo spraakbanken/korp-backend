@@ -10,6 +10,8 @@ from pydantic.json_schema import SkipJsonSchema
 from korp import utils
 
 NonEmptyString: TypeAlias = Annotated[str, StringConstraints(min_length=1)]
+Attribute: TypeAlias = Annotated[str, StringConstraints(pattern=r"^[\w.-]+$")]
+
 CorpusId: TypeAlias = Annotated[
     str,
     StringConstraints(pattern=r"^[\w.-]+(?:\|[\w.-]+)*$"),
