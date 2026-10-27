@@ -75,8 +75,10 @@ DefaultContextParam: TypeAlias = Annotated[
     ),
 ]
 
+CorpusContext: TypeAlias = Annotated[str, StringConstraints(pattern=r"^[\w.-]+(?:\|[\w.-]+)*:\d+\s+[\w_-]+$")]
+
 ContextParam: TypeAlias = Annotated[
-    list[str] | SkipJsonSchema[None],
+    list[CorpusContext] | SkipJsonSchema[None],
     Query(
         description=(
             "Per-corpus context to return around each match, overriding `default_context` for the specified corpora. "

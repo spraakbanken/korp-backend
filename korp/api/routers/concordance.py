@@ -109,7 +109,7 @@ with a hit, the result may be returned before every corpus is queried.
 """
 
 LeftContextParam: TypeAlias = Annotated[
-    list[str] | SkipJsonSchema[None],
+    list[params.CorpusContext] | SkipJsonSchema[None],
     Query(
         description=(
             "Left-side context to show for specific corpora, overriding `default_context` and `context`. "
@@ -121,7 +121,7 @@ LeftContextParam: TypeAlias = Annotated[
 ]
 
 RightContextParam: TypeAlias = Annotated[
-    list[str] | SkipJsonSchema[None],
+    list[params.CorpusContext] | SkipJsonSchema[None],
     Query(
         description=(
             "Right-side context to show for specific corpora, overriding `default_context` and `context`. "
@@ -532,13 +532,10 @@ async def parse_parameters(
         "context": context,
     }.items():
         if context_pairs:
-            for pair in context_pairs:
-                if ":" not in pair:
-                    raise APIValidationError(f"Malformed value for key '{context_type}'.")
-                contexts[context_type] = {
-                    utils.normalize_corpus_id(context_corpus): value
-                    for context_corpus, value in (pair.split(":", 1) for pair in context_pairs)
-                }
+            contexts[context_type] = {
+                utils.normalize_corpus_id(context_corpus): value
+                for context_corpus, value in (pair.split(":", 1) for pair in context_pairs)
+            }
         else:
             contexts[context_type] = {}
 
