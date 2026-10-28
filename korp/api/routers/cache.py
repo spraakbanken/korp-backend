@@ -1,6 +1,7 @@
 """Route handler for cache management."""
 
 import time
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -128,7 +129,7 @@ async def cache_handler(ctx: AdminCtxDep) -> dict:
     # Invalidate cache for updated corpora
     for corpus, corpus_mtime in corpora.items():
         if cached.get(f"{corpus}:last_update", 0) < corpus_mtime:
-            memcached_data[f"{corpus}:version"] = int(cached.get(f"{corpus}:version", 0)) + 1
+            memcached_data[f"{corpus}:version"] = int(cached.get(f"{corpus}:version") or uuid.uuid4().int) + 1
             memcached_data[f"{corpus}:last_update"] = corpus_mtime
             result["corpora_invalidated"] += 1
 
@@ -143,13 +144,15 @@ async def cache_handler(ctx: AdminCtxDep) -> dict:
 
         config_mtime = corpora_configs.get(corpus, 0)
         if cached.get(f"{corpus}:last_update_config", 0) < config_mtime:
-            memcached_data[f"{corpus}:version_config"] = int(cached.get(f"{corpus}:version_config", 0)) + 1
+            memcached_data[f"{corpus}:version_config"] = (
+                int(cached.get(f"{corpus}:version_config") or uuid.uuid4().int) + 1
+            )
             memcached_data[f"{corpus}:last_update_config"] = config_mtime
             result["configs_invalidated"] += 1
 
     # If any corpus has been updated, added or removed, increase version to invalidate all combined caches
     if result["corpora_invalidated"] or cached.get("multi:corpora", set()) != set(corpora):
-        memcached_data["multi:version"] = int(cached.get("multi:version", 0)) + 1
+        memcached_data["multi:version"] = int(cached.get("multi:version") or uuid.uuid4().int) + 1
         memcached_data["multi:corpora"] = set(corpora)
         result["multi_invalidated"] = True
 
@@ -165,7 +168,7 @@ async def cache_handler(ctx: AdminCtxDep) -> dict:
         or result["configs_invalidated"]
         or cached.get("multi:config_corpora", set()) != set(corpora_configs)
     ):
-        memcached_data["multi:version_config"] = int(cached.get("multi:version_config", 0)) + 1
+        memcached_data["multi:version_config"] = int(cached.get("multi:version_config") or uuid.uuid4().int) + 1
         memcached_data["multi:config_corpora"] = set(corpora_configs)
         memcached_data["multi:config_modes"] = config_modes
         memcached_data["multi:config_presets"] = config_presets

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, overload
 
@@ -86,17 +87,18 @@ async def setup_cache(cache: Memcached) -> bool:
     # Set up Memcached if needed
     if settings.MEMCACHED_SERVER and not await cache.get("multi:version"):
         memcached_data = {}
+        version = uuid.uuid4().int
         corpora = get_corpus_timestamps()
         corpora_configs, config_modes, config_presets = get_corpus_config_timestamps()
-        memcached_data["multi:version"] = 1
-        memcached_data["multi:version_config"] = 1
+        memcached_data["multi:version"] = version
+        memcached_data["multi:version_config"] = version
         memcached_data["multi:corpora"] = set(corpora.keys())
         memcached_data["multi:config_corpora"] = set(corpora_configs.keys())
         memcached_data["multi:config_modes"] = config_modes
         memcached_data["multi:config_presets"] = config_presets
         for corpus in corpora:
-            memcached_data[f"{corpus}:version"] = 1
-            memcached_data[f"{corpus}:version_config"] = 1
+            memcached_data[f"{corpus}:version"] = version
+            memcached_data[f"{corpus}:version_config"] = version
             memcached_data[f"{corpus}:last_update"] = corpora[corpus]
             memcached_data[f"{corpus}:last_update_config"] = corpora_configs.get(corpus, 0)
         action_needed = True
@@ -139,10 +141,18 @@ async def cache_prefix(
         corpus = [corpus]
     corpus_keys = {c: f"{c}:version{'_config' if config else ''}" for c in corpus}
     versions = await cache.get_many(corpus_keys.values())
+    # Evicted metadata must never make an old result namespace reachable again.
+    for key in corpus_keys.values():
+        if key not in versions:
+            version = uuid.uuid4().int
+            if await cache.add(key, version):
+                versions[key] = version
+            else:
+                versions[key] = await cache.get(key, version)
 
     if single:
-        return f"{corpus[0]}:{versions.get(corpus_keys[corpus[0]], 0)}"
-    return {c: f"{c}:{versions.get(corpus_keys[c], 0)}" for c in corpus}
+        return f"{corpus[0]}:{versions[corpus_keys[corpus[0]]]}"
+    return {c: f"{c}:{versions[corpus_keys[c]]}" for c in corpus}
 
 
 def cache_prefix_sync(
@@ -162,7 +172,14 @@ def cache_prefix_sync(
         corpus = [corpus]
     corpus_keys = {c: f"{c}:version{'_config' if config else ''}" for c in corpus}
     versions = cache.get_many(corpus_keys.values())
+    for key in corpus_keys.values():
+        if key not in versions:
+            version = uuid.uuid4().int
+            if cache.add(key, version):
+                versions[key] = version
+            else:
+                versions[key] = cache.get(key, version)
 
     if single:
-        return f"{corpus[0]}:{versions.get(corpus_keys[corpus[0]], 0)}"
-    return {c: f"{c}:{versions.get(corpus_keys[c], 0)}" for c in corpus}
+        return f"{corpus[0]}:{versions[corpus_keys[corpus[0]]]}"
+    return {c: f"{c}:{versions[corpus_keys[c]]}" for c in corpus}
