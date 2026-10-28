@@ -1147,7 +1147,7 @@ def query_corpus(
         cache_query_temp = cache_query + "_" + unique_id
 
         corpus_base = corpus.split("|", 1)[0]
-        cache_filename = cache_dir / f"{corpus_base}:concordance_data_{checksum}"
+        cache_filename = cache_dir / f"{corpus_base.upper()}:concordance_data_{checksum}"
         cache_filename_temp = cache_filename.with_name(cache_filename.name + "_" + unique_id)
 
         cache_size_key = f"{caching.cache_prefix_sync(mc, corpus_base)}:concordance_size_{checksum}"
@@ -1307,7 +1307,7 @@ def query_corpus(
     # Remove cache file if it exceeds max cache file size
     if cache and not cache.is_cached and cache_max_concordance_cache_size:
         assert cache_dir is not None
-        cache_file = cache_dir / f"{corpus}:{cache.query_temp}"
+        cache_file = cache.filename_temp
         try:
             if cache_file.is_file() and cache_file.stat().st_size > cache_max_concordance_cache_size:
                 cache_file.unlink()
