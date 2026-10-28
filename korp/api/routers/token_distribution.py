@@ -563,8 +563,7 @@ async def get_token_distribution(
         cache_prefix = await caching.cache_prefix(ctx.cache)
         cache_combined_key = f"{cache_prefix}:timespan_{combined_checksum}"
         result = await ctx.cache.get(cache_combined_key)
-        if result is not None:
-            assert isinstance(result, TokenDistributionData)
+        if isinstance(result, TokenDistributionData):
             if ctx.common.debug:
                 result.debug = {**(result.debug or {}), "cache_read": True}
             return result
