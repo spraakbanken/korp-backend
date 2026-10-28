@@ -188,27 +188,37 @@ def make_query(cqp: str | list[str]) -> list[str]:
     return [f"set QueryLock {querylock};", *cqp, f"unlock {querylock};"]
 
 
-# Pre-compiled patterns for wildcard/repetition parsing in query_optimize
-_RE_WILDCARD_RANGE = re.compile(r"\{\s*(\d+)\s*,\s*(\d*)\s*\}$")
-_RE_WILDCARD_EXACT = re.compile(r"\{\s*(\d*)\s*\}$")
-_RE_REPETITION = re.compile(r"\{.*?\}$")
-_WILDCARD_MAX = 9999  # Upper bound representing an unbounded wildcard range
+# Patterns for wildcard/repetition parsing in optimize_query
+_RE_WILDCARD = re.compile(r"\[\s*\]\s*(.*)", re.DOTALL)
+_RE_WILDCARD_RANGE = re.compile(r"\{\s*(\d*)\s*,\s*(\d*)\s*\}$")
+_RE_WILDCARD_EXACT = re.compile(r"\{\s*(\d+)\s*\}$")
+_RE_REPETITION = re.compile(r"(?:[?*+]|\{[^{}]*\})$")
 
 
-def _parse_wildcard_repeat(token: str) -> tuple[int, int] | None:
+def _parse_wildcard_repeat(token: str) -> tuple[int, int | None] | None:
     """Parse repetition counts from a wildcard token like `[]{2,5}`.
 
     Args:
-        token: A wildcard token string (must start with `[]`).
+        token: A wildcard token string, optionally followed by a repetition operator.
 
     Returns:
-        A (min, max) tuple, or None if the token has no parseable repetition.
+        A (min, max) tuple, with max=None for unbounded repetition, or None for an invalid token.
     """
-    if token == "[]":
+    match = _RE_WILDCARD.fullmatch(token)
+    if match is None:
+        return None
+    suffix = match.group(1)
+    if not suffix:
         return 1, 1
-    if m := _RE_WILDCARD_RANGE.search(token):
-        return int(m.group(1)), int(m.group(2)) if m.group(2) else _WILDCARD_MAX
-    if m := _RE_WILDCARD_EXACT.search(token):
+    if suffix in {"?", "*", "+"}:
+        return (1 if suffix == "+" else 0), (1 if suffix == "?" else None)
+    if m := _RE_WILDCARD_RANGE.fullmatch(suffix):
+        if not (m.group(1) or m.group(2)):
+            return None
+        lower = int(m.group(1) or 0)
+        upper = int(m.group(2)) if m.group(2) else None
+        return (lower, upper) if upper is None or lower <= upper else None
+    if m := _RE_WILDCARD_EXACT.fullmatch(suffix):
         n = int(m.group(1))
         return n, n
     return None
