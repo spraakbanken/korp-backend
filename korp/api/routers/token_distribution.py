@@ -674,8 +674,8 @@ async def get_token_distribution(
                 pass
 
         corpus_data = await _run_token_distribution_cpu_bound(_group_rows_by_corpus, rows, row_count=len(rows))
-        for corpus, data in corpus_data.items():
-            await save_cache(corpus, data)
+        for corpus in corpora_rest:
+            await save_cache(corpus, corpus_data[corpus])
         cache_write_duration = perf_counter() - cache_write_start
 
     calc_start = perf_counter()
