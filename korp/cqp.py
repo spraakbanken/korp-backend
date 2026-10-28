@@ -231,7 +231,7 @@ def _make_tab_query(tokens: list[str]) -> str | None:
     alternatives inside a token pattern are allowed. Wildcard repetitions can represent gaps, but TAB commits to the
     first matching intermediate token without backtracking. With variable gaps, this can miss matches that an ordinary
     CQP query would find. This function therefore accepts only fixed-size internal gaps, combines consecutive gaps, and
-    rejects leading and trailing wildcards. It requires at least two token patterns.
+    rejects leading and trailing wildcards. It requires at least one token pattern.
 
     TAB returns full match spans (unlike MU). It does not support labels, target markers, or different matching
     strategies. The caller must ensure that the parsed sequence contains no unsupported surrounding syntax.
@@ -256,7 +256,7 @@ def _make_tab_query(tokens: list[str]) -> str | None:
                 gap = 0
             parts.append(token)
             token_count += 1
-    if token_count <= 1 or _RE_WILDCARD.fullmatch(tokens[-1]):
+    if token_count == 0 or _RE_WILDCARD.fullmatch(tokens[-1]):
         return None
     return "TAB " + " ".join(parts)
 
@@ -268,7 +268,7 @@ class QueryOptimizeResult(Enum):
     """Optimization successful; the query was transformed into a TAB or MU query."""
 
     NOT_NEEDED = 1
-    """Optimization not needed; the query is too simple to benefit from optimization (e.g., single word search)."""
+    """Optimization not needed for the requested query and result mode."""
 
     NOT_POSSIBLE = 2
     """Optimization not possible; the query contains constructs that prevent optimization (e.g., repetition of
@@ -278,7 +278,7 @@ class QueryOptimizeResult(Enum):
 def optimize_query(
     cqp: str, cqp_params: dict, find_match: bool = True, expand: bool = True, free_order: bool = False
 ) -> tuple[QueryOptimizeResult, list[str]]:
-    """Optimize simple multi-token queries using TAB or MU queries.
+    """Optimize simple queries using TAB or MU queries.
 
     Ordered queries with fixed gaps use TAB when full match spans are requested, with or without `within`. Other
     supported queries use MU as a candidate filter followed by re-matching, or directly for free-order and first-token
