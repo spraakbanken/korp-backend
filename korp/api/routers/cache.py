@@ -134,7 +134,7 @@ async def cache_handler(ctx: AdminCtxDep) -> dict:
             result["corpora_invalidated"] += 1
 
             # Remove outdated concordance data
-            for cachefile in Path(settings.CACHE_DIR).glob(f"{corpus}:*"):
+            for cachefile in Path(settings.CACHE_DIR).glob(f"{corpus.upper()}:concordance_data_*"):
                 try:
                     if cachefile.stat().st_mtime < corpus_mtime:
                         cachefile.unlink()
