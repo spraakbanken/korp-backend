@@ -78,7 +78,6 @@ def parse_cqp(cqp: str) -> tuple[list[str], bool]:
     last_start = 0
     in_bracket = False
     in_quote = False
-    in_curly = False
     escaping = False
     quote_type = ""
 
@@ -100,7 +99,7 @@ def parse_cqp(cqp: str) -> tuple[list[str], bool]:
                     in_quote = False
                     if not in_bracket:
                         sections.append([last_start, i])
-            # Skip all bracket/curly checks when inside a quote
+            # Ignore syntax characters inside quotes
             continue
 
         # Outside quotes
@@ -111,39 +110,42 @@ def parse_cqp(cqp: str) -> tuple[list[str], bool]:
             if not in_bracket:
                 last_start = i
         elif c == "[":
-            if not in_bracket:
-                # Beginning of a token
-                last_start = i
-                in_bracket = True
-                if i + 1 < cqp_len and cqp[i + 1] == ":":
-                    # Zero-width assertion encountered, which cannot be handled by MU query
-                    return [], True
+            if in_bracket:
+                return [], True
+            # Beginning of a token
+            last_start = i
+            in_bracket = True
+            if i + 1 < cqp_len and cqp[i + 1] == ":":
+                # Zero-width assertions cannot be handled by MU queries.
+                return [], True
         elif c == "]":
             if in_bracket:
                 # End of a token
                 sections.append([last_start, i])
                 in_bracket = False
-        elif c == "{" and not in_bracket:
-            in_curly = True
-        elif c == "}" and not in_bracket and in_curly:
-            in_curly = False
-            sections[-1][1] = i
 
     # Build token list and detect non-token content ("rest") between sections
     sections.append([cqp_len, cqp_len])
     tokens: list[str] = []
-    rest = False
-    prev_end = 0
+    has_pending_content = in_quote or in_bracket
+    prev_end = -1
 
-    for start, end in sections:
-        if prev_end < start and cqp[prev_end + 1 : start].strip():
-            rest = True
+    for start, section_end in sections:
+        end = section_end
+        if cqp[prev_end + 1 : start].strip():
+            has_pending_content = True
+        if start == cqp_len:
+            break
+        # Include case/diacritic flags following quoted shorthand patterns, e.g. `"cat" %cd`.
+        if cqp[start] in "\"'" and (flags := re.match(r"\s*%[cdl]+", cqp[end + 1 :])):
+            end += flags.end()
+        # Include quantifiers following a token, e.g. `[]{2,5}` or `[pos="NN"]+`.
+        if suffix := re.match(r"\s*(?:[?*+]|\{\s*\d*\s*(?:,\s*\d*\s*)?\})", cqp[end + 1 :]):
+            end += suffix.end()
         prev_end = end
-        token = cqp[start : end + 1]
-        if token:
-            tokens.append(token)
+        tokens.append(cqp[start : end + 1])
 
-    return tokens, rest
+    return tokens, has_pending_content
 
 
 def make_cqp(cqp: str, within: str | None = None, cut: str | None = None, expand: str | None = None) -> str:
