@@ -105,7 +105,7 @@ async def cache_handler(ctx: AdminCtxDep) -> dict:
 
     # Fetch all needed cache keys at once
     per_corpus_keys: list[str] = []
-    for corpus in corpora:
+    for corpus in corpora.keys() | corpora_configs.keys():
         per_corpus_keys.extend(
             [
                 f"{corpus}:last_update",
@@ -128,7 +128,7 @@ async def cache_handler(ctx: AdminCtxDep) -> dict:
 
     # Invalidate cache for updated corpora
     for corpus, corpus_mtime in corpora.items():
-        if cached.get(f"{corpus}:last_update", 0) < corpus_mtime:
+        if cached.get(f"{corpus}:last_update") != corpus_mtime:
             memcached_data[f"{corpus}:version"] = int(cached.get(f"{corpus}:version") or uuid.uuid4().int) + 1
             memcached_data[f"{corpus}:last_update"] = corpus_mtime
             result["corpora_invalidated"] += 1
@@ -142,8 +142,8 @@ async def cache_handler(ctx: AdminCtxDep) -> dict:
                 except FileNotFoundError:
                     pass
 
-        config_mtime = corpora_configs.get(corpus, 0)
-        if cached.get(f"{corpus}:last_update_config", 0) < config_mtime:
+    for corpus, config_mtime in corpora_configs.items():
+        if cached.get(f"{corpus}:last_update_config") != config_mtime:
             memcached_data[f"{corpus}:version_config"] = (
                 int(cached.get(f"{corpus}:version_config") or uuid.uuid4().int) + 1
             )
@@ -157,8 +157,8 @@ async def cache_handler(ctx: AdminCtxDep) -> dict:
         result["multi_invalidated"] = True
 
     # Have any config modes or presets been updated?
-    configs_updated = config_modes > int(cached.get("multi:config_modes", 0)) or config_presets > int(
-        cached.get("multi:config_presets", 0)
+    configs_updated = config_modes != cached.get("multi:config_modes") or config_presets != cached.get(
+        "multi:config_presets"
     )
 
     # If modes or presets have been updated, or any corpus config has been updated, added or removed, increase

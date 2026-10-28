@@ -44,25 +44,23 @@ def get_corpus_timestamps() -> dict[str, float]:
     return corpora
 
 
-def get_corpus_config_timestamps() -> tuple[dict[str, float], float, float]:
+def get_corpus_config_timestamps() -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
     """Get modification time of corpus config files.
 
     Returns:
         A tuple containing:
         - A dictionary mapping corpus names to their config file modification timestamps.
-        - The latest modification timestamp among mode config files.
-        - The latest modification timestamp among preset config files.
+        - Mode config paths mapped to modification timestamps.
+        - Preset config paths mapped to modification timestamps.
     """
     if not settings.CORPUS_CONFIG_DIR:
-        return {}, 0, 0
+        return {}, {}, {}
     corpora = {
         utils.normalize_corpus_id(f.name[:-5]): f.stat().st_mtime
         for f in Path(settings.CORPUS_CONFIG_DIR, "corpora").glob("*.yaml")
     }
-    modes = max((f.stat().st_mtime for f in Path(settings.CORPUS_CONFIG_DIR, "modes").glob("*.yaml")), default=0)
-    presets = max(
-        (f.stat().st_mtime for f in Path(settings.CORPUS_CONFIG_DIR, "attributes").glob("*/*.yaml")), default=0
-    )
+    modes = {str(f): f.stat().st_mtime for f in Path(settings.CORPUS_CONFIG_DIR, "modes").glob("*.yaml")}
+    presets = {str(f): f.stat().st_mtime for f in Path(settings.CORPUS_CONFIG_DIR, "attributes").glob("*/*.yaml")}
     return corpora, modes, presets
 
 
@@ -98,9 +96,10 @@ async def setup_cache(cache: Memcached) -> bool:
         memcached_data["multi:config_presets"] = config_presets
         for corpus in corpora:
             memcached_data[f"{corpus}:version"] = version
-            memcached_data[f"{corpus}:version_config"] = version
             memcached_data[f"{corpus}:last_update"] = corpora[corpus]
-            memcached_data[f"{corpus}:last_update_config"] = corpora_configs.get(corpus, 0)
+        for corpus in corpora_configs:
+            memcached_data[f"{corpus}:version_config"] = version
+            memcached_data[f"{corpus}:last_update_config"] = corpora_configs[corpus]
         action_needed = True
 
         await cache.set_many(memcached_data)
