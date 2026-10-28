@@ -116,7 +116,7 @@ def parse_cqp(cqp: str) -> tuple[list[str], bool]:
             last_start = i
             in_bracket = True
             if i + 1 < cqp_len and cqp[i + 1] == ":":
-                # Zero-width assertions cannot be handled by MU queries.
+                # Zero-width assertions cannot be handled by TAB or MU queries.
                 return [], True
         elif c == "]":
             if in_bracket:
@@ -224,11 +224,48 @@ def _parse_wildcard_repeat(token: str) -> tuple[int, int | None] | None:
     return None
 
 
+def _make_tab_query(tokens: list[str]) -> str | None:
+    """Convert an ordered sequence with fixed internal gaps to a TAB query, if possible.
+
+    TAB supports individual token patterns, but not optional or repeated patterns or token-level alternatives. Boolean
+    alternatives inside a token pattern are allowed. Wildcard repetitions can represent gaps, but TAB commits to the
+    first matching intermediate token without backtracking. With variable gaps, this can miss matches that an ordinary
+    CQP query would find. This function therefore accepts only fixed-size internal gaps, combines consecutive gaps, and
+    rejects leading and trailing wildcards. It requires at least two token patterns.
+
+    TAB returns full match spans (unlike MU). It does not support labels, target markers, or different matching
+    strategies. The caller must ensure that the parsed sequence contains no unsupported surrounding syntax.
+
+    Returns:
+        A TAB query, or None if the sequence cannot be safely converted.
+    """
+    parts: list[str] = []
+    gap = 0
+    token_count = 0
+    for token in tokens:
+        if _RE_WILDCARD.fullmatch(token):
+            repeat = _parse_wildcard_repeat(token)
+            if token_count == 0 or repeat is None or repeat[0] != repeat[1]:
+                return None
+            gap += repeat[0]
+        elif _RE_REPETITION.search(token):
+            return None
+        else:
+            if gap:
+                parts.append(f"{{{gap}}}")
+                gap = 0
+            parts.append(token)
+            token_count += 1
+    if token_count <= 1 or _RE_WILDCARD.fullmatch(tokens[-1]):
+        return None
+    return "TAB " + " ".join(parts)
+
+
 class QueryOptimizeResult(Enum):
     """Result codes for query optimization."""
 
     SUCCESS = 0
-    """Optimization successful; the query was transformed into an optimized MU query."""
+    """Optimization successful; the query was transformed into a TAB or MU query."""
 
     NOT_NEEDED = 1
     """Optimization not needed; the query is too simple to benefit from optimization (e.g., single word search)."""
@@ -241,10 +278,11 @@ class QueryOptimizeResult(Enum):
 def optimize_query(
     cqp: str, cqp_params: dict, find_match: bool = True, expand: bool = True, free_order: bool = False
 ) -> tuple[QueryOptimizeResult, list[str]]:
-    """Optimize simple queries with multiple words by converting them to MU queries.
+    """Optimize simple multi-token queries using TAB or MU queries.
 
-    Optimization only works for queries with at least two tokens, or one token preceded by one or more wildcards. The
-    query also must use `within`.
+    Ordered queries with fixed gaps use TAB when full match spans are requested, with or without `within`. Other
+    supported queries use MU as a candidate filter followed by re-matching, or directly for free-order and first-token
+    searches. MU requires `within`. Leading and trailing wildcards are retained through re-matching.
 
     Args:
         cqp: The CQP query string.
@@ -265,11 +303,25 @@ def optimize_query(
     within = cqp_params.get("within")
     fallback_query = make_query(make_cqp(cqp, **cqp_params))
 
+    # TAB commits to intermediate matches without backtracking, so only fixed gaps are safe here.
+    # It returns full spans directly, but does not support inline cut or first-token results.
+    if (
+        find_match
+        and not free_order
+        and not rest
+        and not cqp_params.get("cut")
+        and (tab_query := _make_tab_query(tokens))
+    ):
+        return QueryOptimizeResult.SUCCESS, make_query(make_cqp(tab_query, **cqp_params))
+
+    if any(_RE_WILDCARD.fullmatch(token) and _parse_wildcard_repeat(token) is None for token in tokens):
+        return QueryOptimizeResult.NOT_POSSIBLE, fallback_query
+
     leading_wildcards = False
 
     if free_order:
         # Don't allow wildcards in free-order queries
-        if any(token.startswith("[]") for token in tokens):
+        if any(_RE_WILDCARD.fullmatch(token) for token in tokens):
             raise CQPError("Wildcards not allowed in free-order queries.")
 
         # Don't allow distance-based within values in free-order queries (e.g. "5 sentence")
@@ -278,11 +330,11 @@ def optimize_query(
     else:
         # Strip leading and trailing wildcards since they only slow things down
         start = 0
-        while start < len(tokens) and tokens[start].startswith("[]"):
+        while start < len(tokens) and _RE_WILDCARD.fullmatch(tokens[start]):
             leading_wildcards = True
             start += 1
         end = len(tokens)
-        while end > start and tokens[end - 1].startswith("[]"):
+        while end > start and _RE_WILDCARD.fullmatch(tokens[end - 1]):
             end -= 1
         tokens = tokens[start:end]
 
@@ -295,13 +347,14 @@ def optimize_query(
 
     # Build the MU command
     mu_parts: list[str] = ["MU"]
-    wildcards: dict[int, tuple[int, int]] = {}
+    wildcards: dict[int, tuple[int, int | None]] = {}
 
     for i, token in enumerate(tokens[:-1]):
-        if token.startswith("[]"):
+        if _RE_WILDCARD.fullmatch(token):
             repeat = _parse_wildcard_repeat(token)
-            if repeat is not None:
-                wildcards[i] = repeat
+            if repeat is None:
+                return QueryOptimizeResult.NOT_POSSIBLE, fallback_query
+            wildcards[i] = repeat
             continue
         if _RE_REPETITION.search(token):
             # Repetition for anything other than wildcards can't be optimized
@@ -314,14 +367,16 @@ def optimize_query(
     mu_parts.append(tokens[-1])
 
     # Build closing parts with distance constraints (reverse order)
-    wc_min = wc_max = 1
+    wc_min = 1
+    wc_max: int | None = 1
     for i in range(len(tokens) - 2, -1, -1):
         if i in wildcards:
-            wc_min += wildcards[i][0]
-            wc_max += wildcards[i][1]
+            lower, upper = wildcards[i]
+            wc_min += lower
+            wc_max = wc_max + upper if wc_max is not None and upper is not None else None
             continue
         if i + 1 in wildcards:
-            mu_parts.append(f"{within})" if wc_max >= _WILDCARD_MAX else f"{wc_min} {wc_max})")
+            mu_parts.append(f"{within})" if wc_max is None else f"{wc_min} {wc_max})")
             wc_min = wc_max = 1
         elif free_order:
             mu_parts.append(f"{within})")

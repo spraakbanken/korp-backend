@@ -25,9 +25,12 @@ or Memcached; it only confirms that the FastAPI application can accept and answe
 
 OPTIMIZE_DESCRIPTION = """Rewrite a CQP query into a more efficient form when possible.
 
-The optimizer targets simple multi-token searches that can be transformed into CQP's MU query form. The response
+The optimizer targets simple multi-token searches that can be transformed into CQP's TAB or MU query forms. The response
 contains the optimized query when optimization succeeds, or the original query when optimization is not needed or not
 possible.
+
+Fixed-gap ordered queries can use TAB. Other supported queries use MU to filter candidates before re-matching the
+original query.
 
 Use `within` to tell the optimizer which structural unit the query should stay inside. Set `free_order=true` for
 free-order searches, where the matched query tokens may occur in any order inside the structural unit.
