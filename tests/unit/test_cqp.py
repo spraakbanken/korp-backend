@@ -9,10 +9,10 @@ from korp import cqp
 def fixed_querylock(monkeypatch: pytest.MonkeyPatch) -> None:
     """Use deterministic query lock values in tests."""
 
-    def _fake_randrange(_start: int, _stop: int) -> int:
-        return 123456789
+    def _fake_randbelow(_upper: int) -> int:
+        return 23456789
 
-    monkeypatch.setattr(cqp.random, "randrange", _fake_randrange)
+    monkeypatch.setattr(cqp.secrets, "randbelow", _fake_randbelow)
 
 
 class TestParseCQP:
@@ -89,7 +89,7 @@ class TestQueryOptimize:
         )
 
         assert retcode == cqp.QueryOptimizeResult.SUCCESS
-        assert query == ['MU (meet [word="a"] [word="b"] 1 1);']
+        assert query == ["set QueryLock 123456789;", 'MU (meet [word="a"] [word="b"] 1 1);', "unlock 123456789;"]
 
     @staticmethod
     def test_optimize_query_builds_wildcard_distance_range() -> None:
@@ -102,7 +102,7 @@ class TestQueryOptimize:
         )
 
         assert retcode == cqp.QueryOptimizeResult.SUCCESS
-        assert query == ['MU (meet [word="a"] [word="b"] 3 5);']
+        assert query == ["set QueryLock 123456789;", 'MU (meet [word="a"] [word="b"] 3 5);', "unlock 123456789;"]
 
     @staticmethod
     def test_optimize_query_uses_within_distance_for_unbounded_wildcard() -> None:
@@ -115,7 +115,7 @@ class TestQueryOptimize:
         )
 
         assert retcode == cqp.QueryOptimizeResult.SUCCESS
-        assert query == ['MU (meet [word="a"] [word="b"] sentence);']
+        assert query == ["set QueryLock 123456789;", 'MU (meet [word="a"] [word="b"] sentence);', "unlock 123456789;"]
 
     @staticmethod
     def test_optimize_query_uses_full_expand_when_leading_wildcard_exists() -> None:
@@ -124,7 +124,9 @@ class TestQueryOptimize:
 
         assert retcode == cqp.QueryOptimizeResult.SUCCESS
         assert query == [
+            "set QueryLock 123456789;",
             'MU (meet [word="a"] [word="b"] 1 1) expand to sentence;',
+            "unlock 123456789;",
             "Last;",
             "set QueryLock 123456789;",
             '[] [word="a"] [word="b"] within sentence;',
@@ -143,4 +145,8 @@ class TestQueryOptimize:
         retcode, query = cqp.optimize_query('[word="a"] [word="b"]', {"within": "sentence"}, free_order=True)
 
         assert retcode == cqp.QueryOptimizeResult.SUCCESS
-        assert query == ['MU (meet [word="a"] [word="b"] sentence) expand to sentence;']
+        assert query == [
+            "set QueryLock 123456789;",
+            'MU (meet [word="a"] [word="b"] sentence) expand to sentence;',
+            "unlock 123456789;",
+        ]
