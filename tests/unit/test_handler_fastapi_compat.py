@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
@@ -27,5 +28,5 @@ def test_async_generator_route_not_marked_as_fastapi_json_stream() -> None:
     app = _make_test_app()
     route = next(route for route in app.routes if isinstance(route, APIRoute) and route.path == "/streamed")
 
-    assert route.dependant.is_async_gen_callable is False
+    assert not inspect.isasyncgenfunction(route.dependant.call)
     assert route.is_json_stream is False
