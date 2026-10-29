@@ -166,6 +166,23 @@ containing the same error object, followed by `complete` with `ok=false`.
 Tracebacks are excluded by default. A traceback is returned only when `ERROR_TRACEBACKS_ENABLED=true` on the server and
 the request also uses `debug=true`.
 
+## Alternative Query Languages
+
+If query translation plugins are enabled, you can search using languages other than CQP. To do this, provide `query` and
+`query_language` instead of `cqp`.
+
+This works with concordance, sample concordance, frequencies, frequency time, and log-likelihood searches.
+
+For searches with multiple query stages, you can specify one language for all queries or a separate language for each.
+Queries and languages are paired by their positions in the lists. In GET requests, repeat the parameters for multiple
+values. In POST requests, use arrays even when there is only one query.
+
+For log-likelihood searches, use `set1_query` and `set1_query_language` (or the corresponding `set2_` parameters). Each
+set can independently use either CQP or an alternative query language.
+
+Query translation only changes how the query is written. Search options such as `within` and `default_within` work as
+usual. Alternative queries do not support `free_order=true`, and `subcqp` still requires CQP.
+
 ## CQP Queries
 
 For many routes, Korp uses Corpus Workbench's CQP query language. For details about the query syntax, see the [CQP Query
