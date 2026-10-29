@@ -169,6 +169,7 @@ AUTHORIZED_PATHS = {
     "/attribute-values",
     "/concordance",
     "/concordance/sample",
+    "/corpora/config",
     "/dependency-relations",
     "/dependency-relations/time",
     "/dependency-relations/sentences",
