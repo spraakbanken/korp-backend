@@ -162,8 +162,8 @@ class Authorizer(ABC):
       Main helper; resolves protection metadata via cache + fetch fallback. This is the method plugin code should call.
     - `_get_cached_protection_info(corpora, auth_ctx)`:
       Read plugin-scoped per-corpus protection metadata from Memcached. Called by `_get_protection_info()`.
-    - `_store_protection_info(data, auth_ctx)`: Store plugin-scoped per-corpus protection metadata in Memcached. Called
-      by `_get_protection_info()` after fetching missing entries.
+    - `_store_protection_info(data, auth_ctx, prefixes)`: Store plugin-scoped per-corpus protection metadata in
+      Memcached. Called by `_get_protection_info()` after fetching missing entries.
 
     Recommended implementation pattern:
     - In `check_authorization`, call `_get_protection_info()` only for the requested corpora, then authorize only those
@@ -248,15 +248,17 @@ class Authorizer(ABC):
 
         return resolved, missing_corpora
 
-    async def _store_protection_info(self, data: dict[str, ProtectionInfo], auth_ctx: AuthContext) -> None:
+    async def _store_protection_info(
+        self, data: dict[str, ProtectionInfo], auth_ctx: AuthContext, prefixes: dict[str, str]
+    ) -> None:
         """Store per-corpus protection metadata in cache."""
         if not auth_ctx.cache_enabled or not data:
             return
 
-        prefixes = await caching.cache_prefix(self.cache, list(data.keys()))
         cache_data = {
             f"{prefixes[corpus]}:{self._protection_cache_key_suffix}": info.to_cache_value()
             for corpus, info in data.items()
+            if corpus in prefixes
         }
         await self.cache.set_many(cache_data)
 
@@ -275,11 +277,12 @@ class Authorizer(ABC):
         resolved, missing = await self._get_cached_protection_info(corpora, auth_ctx)
 
         if missing:
+            prefixes = await caching.cache_prefix(self.cache, missing) if auth_ctx.cache_enabled else {}
             fetched = await self._fetch_protection_info(missing, auth_ctx)
             # Missing keys from fetch are treated as "not protected"
             for corpus in missing:
                 fetched.setdefault(corpus, ProtectionInfo(protected=False))
-            await self._store_protection_info(fetched, auth_ctx)
+            await self._store_protection_info(fetched, auth_ctx, prefixes)
             resolved.update(fetched)
 
         return {corpus: resolved.get(corpus, ProtectionInfo(protected=False)) for corpus in corpora}
