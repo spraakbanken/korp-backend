@@ -639,11 +639,11 @@ async def perform_query(
     # If we have no usable pagination_state, try to get cached corpus hit counts from memcached instead
     if use_cache and not cached_hits_by_corpus:
         memcached_keys = {}
-        cache_prefixes = await caching.cache_prefix(ctx.cache, [corpus.split("|")[0] for corpus in corpora])
+        cache_prefixes = await caching.cache_prefix(
+            ctx.cache, [part for corpus in corpora for part in corpus.split("|")]
+        )
         for corpus in corpora:
-            corpus_checksum = utils.get_hash(
-                (cqp_query, within[corpus], max_hits_per_corpus, expand_prequeries, free_order)
-            )
+            corpus_checksum = _concordance_cache_checksum(concordance_parameters, corpus, cache_prefixes)
             memcached_keys[f"{cache_prefixes[corpus.split('|')[0]]}:concordance_size_{corpus_checksum}"] = corpus
 
         cached_hit_counts = await ctx.cache.get_many(memcached_keys.keys())
@@ -1075,6 +1075,28 @@ async def _concordance(
     return perform_query(concordance_params, ctx, abort_signal=abort_signal)
 
 
+def _concordance_cache_checksum(parameters: ConcordanceParameters, corpus: str, prefixes: dict[str, str]) -> str:
+    """Return a checksum for the concordance query parameters and corpus.
+
+    Cache prefixes include cache versions. We need them here for two reasons: saved CQP files do not include the cache
+    version, and cached hit counts for aligned queries only include the cache version for the first corpus.
+
+    Returns:
+        Checksum shared by saved CQP matches and cached hit counts.
+    """
+    return utils.get_hash(
+        (
+            corpus,
+            parameters.cqp_query,
+            parameters.within[corpus],
+            parameters.max_hits_per_corpus,
+            parameters.expand_prequeries,
+            parameters.free_order,
+            tuple(prefixes[part] for part in corpus.split("|")),
+        )
+    )
+
+
 def query_corpus(
     concordance_params: ConcordanceParameters,
     corpus: str,
@@ -1137,10 +1159,8 @@ def query_corpus(
     if use_cache:
         assert cache_dir is not None
 
-        # Calculate checksum (needs to contain all arguments that may influence the results)
-        checksum_data = (cqp_query, within, max_hits_per_corpus, expand_prequeries, free_order)
-
-        checksum = utils.get_hash(checksum_data)
+        prefixes = caching.cache_prefix_sync(mc, corpus.split("|"))
+        checksum = _concordance_cache_checksum(concordance_params, corpus, prefixes)
         unique_id = str(uuid.uuid4())
 
         cache_query = f"concordance_data_{checksum}"
@@ -1150,7 +1170,7 @@ def query_corpus(
         cache_filename = cache_dir / f"{corpus_base.upper()}:concordance_data_{checksum}"
         cache_filename_temp = cache_filename.with_name(cache_filename.name + "_" + unique_id)
 
-        cache_size_key = f"{caching.cache_prefix_sync(mc, corpus_base)}:concordance_size_{checksum}"
+        cache_size_key = f"{prefixes[corpus_base]}:concordance_size_{checksum}"
         cache_hits = mc.get(cache_size_key)
         is_cached = cache_hits is not None and cache_filename.is_file()
         cache = ConcordanceCache(
