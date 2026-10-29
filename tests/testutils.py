@@ -3,6 +3,7 @@
 The functions may contain assertions that are subject to rewriting.
 """
 
+from collections.abc import Iterable
 from typing import Any, cast
 
 from fastapi import FastAPI
@@ -124,3 +125,20 @@ def get_response_json(client: TestClient, *args: Any, expected_status_code: int 
 def make_liststr(arg: str | list[str]) -> str:
     """Return `arg` if it is a string, otherwise return a string joining the items of `arg` with `QUERY_DELIM`."""
     return arg if isinstance(arg, str) else QUERY_DELIM.join(arg)
+
+
+def get_info_value(key: str, lines: Iterable[str]) -> str | None:
+    """Return the value of `key` in `lines` of a corpus `.info` file or of the CQP `info` command output.
+
+    Args:
+        key: The key to look for, without the colon.
+        lines: The lines to search.
+
+    Returns:
+        The text after the colon in the first line that starts with `key` followed by a colon, stripped of leading and
+        trailing whitespace, or `None` if there is no such line.
+    """
+    for line in lines:
+        if line.strip().startswith(f"{key}:"):
+            return line.partition(":")[2].strip()
+    return None
