@@ -55,26 +55,26 @@ class TestQueryOptimize:
     """Tests for the `optimize_query` function."""
 
     @staticmethod
-    def test_optimize_query_returns_fallback_for_single_token() -> None:
-        """Return NOT_NEEDED and fallback query when optimization is unnecessary."""
+    def test_optimize_query_uses_tab_for_single_token() -> None:
+        """Return a TAB query for a single unrepeated token pattern."""
         retcode, query = cqp.optimize_query('[word="a"]', {"within": "sentence"})
 
-        assert retcode == cqp.QueryOptimizeResult.NOT_NEEDED
+        assert retcode == cqp.QueryOptimizeResult.SUCCESS
         assert query == [
             "set QueryLock 123456789;",
-            '[word="a"] within sentence;',
+            'TAB [word="a"] within sentence;',
             "unlock 123456789;",
         ]
 
     @staticmethod
-    def test_optimize_query_returns_fallback_when_within_is_missing() -> None:
-        """Return NOT_POSSIBLE when required `within` context is missing."""
+    def test_optimize_query_uses_tab_without_within() -> None:
+        """Use TAB query when no `within` context is specified."""
         retcode, query = cqp.optimize_query('[word="a"] [word="b"]', {})
 
-        assert retcode == cqp.QueryOptimizeResult.NOT_POSSIBLE
+        assert retcode == cqp.QueryOptimizeResult.SUCCESS
         assert query == [
             "set QueryLock 123456789;",
-            '[word="a"] [word="b"];',
+            'TAB [word="a"] [word="b"];',
             "unlock 123456789;",
         ]
 
