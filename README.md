@@ -451,7 +451,9 @@ should point to a directory having the following structure:
 ```
 
 - The **modes** directory contains one YAML file per mode in Korp.
-- The **corpora** directory contains one YAML file per corpus.
+- The **corpora** directory contains one YAML file per corpus. Files may be organized in subdirectories of any depth.
+  The subdirectory structure is only for organizational purposes and does not affect the resulting configuration.
+  Filenames must be unique across the entire tree.
 - The **attributes** directory contains two subdirectories: **positional** and **structural**, containing optional
   annotation presets referred to by the corpus configurations.
 

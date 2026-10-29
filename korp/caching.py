@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, overload
 
 from korp import utils
 from korp.config import settings
+from korp.corpus_config import get_corpus_config_files
 
 if TYPE_CHECKING:
     from korp.memcached import Memcached, MemcachedSyncClient
@@ -55,10 +56,7 @@ def get_corpus_config_timestamps() -> tuple[dict[str, float], dict[str, float], 
     """
     if not settings.CORPUS_CONFIG_DIR:
         return {}, {}, {}
-    corpora = {
-        utils.normalize_corpus_id(f.name[:-5]): f.stat().st_mtime
-        for f in Path(settings.CORPUS_CONFIG_DIR, "corpora").glob("*.yaml")
-    }
+    corpora = {name: path.stat().st_mtime for name, path in get_corpus_config_files().items()}
     modes = {str(f): f.stat().st_mtime for f in Path(settings.CORPUS_CONFIG_DIR, "modes").glob("*.yaml")}
     presets = {str(f): f.stat().st_mtime for f in Path(settings.CORPUS_CONFIG_DIR, "attributes").glob("*/*.yaml")}
     return corpora, modes, presets

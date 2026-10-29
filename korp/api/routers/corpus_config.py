@@ -15,6 +15,7 @@ from pydantic.json_schema import SkipJsonSchema
 from korp.api import schemas
 from korp.api.requests import QueryRequestModel, RequestModel
 from korp.config import settings
+from korp.corpus_config import get_corpus_config_files
 from korp.memcached import CacheError
 
 try:
@@ -467,17 +468,17 @@ async def get_mode(ctx: Ctx, mode_name: str, corpora: list[str] | None) -> dict 
         corpora = sorted(allowed)
 
     cache = ctx.cache if ctx.common.cache else None
-    corpus_dir = Path(settings.CORPUS_CONFIG_DIR, "corpora")
+    available_files = get_corpus_config_files()
     if corpora is not None:
         corpus_files = []
         for c in corpora:
-            file_path = corpus_dir / f"{utils.normalize_corpus_id(c)}.yaml"
-            if (not protected or file_path.parent == corpus_dir) and file_path.is_file():
+            file_path = available_files.get(utils.normalize_corpus_id(c))
+            if file_path is not None:
                 corpus_files.append(file_path)
             elif not protected:
                 warnings.add(f"The corpus {c!r} does not exist, or does not have a config file.")
     else:
-        corpus_files = list(corpus_dir.glob("*.yaml"))
+        corpus_files = list(available_files.values())
 
     cached_corpora: dict[Path, dict] | None = None
     cache_prefix = None
