@@ -154,6 +154,22 @@ async def cache_prefix(
     return {c: f"{c}:{versions[corpus_keys[c]]}" for c in corpus}
 
 
+@overload
+def cache_prefix_sync(
+    cache: MemcachedSyncClient,
+    corpus: str = "multi",
+    config: bool = False,
+) -> str: ...
+
+
+@overload
+def cache_prefix_sync(
+    cache: MemcachedSyncClient,
+    corpus: list[str],
+    config: bool = False,
+) -> dict[str, str]: ...
+
+
 def cache_prefix_sync(
     cache: MemcachedSyncClient, corpus: str | list[str] = "multi", config: bool = False
 ) -> str | dict[str, str]:
