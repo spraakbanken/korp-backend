@@ -317,8 +317,8 @@ class KorpDatabase:
         Create a Korp MySQL database using the pre-defined connection parameters, unless one has already been created
         (and not dropped) for self. Database name is generated in `_make_db_name`.
 
-        The database user must have the CREATE privilege. As the creator, they automatically have full access to the new
-        database.
+        Unless an existing database is specified with `--db-name` (in which case nothing is created), the database user
+        must have the CREATE privilege. As the creator, they automatically have full access to the new database.
         """
         if self.dbname is not None:
             # If a database has already been created, do not create
@@ -330,6 +330,11 @@ class KorpDatabase:
         try:
             with self._connection(include_database=False) as conn:
                 dbname = self._make_db_name(conn)
+                if self._use_existing_table:
+                    # The database named with --db-name already exists, so there is nothing to create
+                    self._set_db_name(dbname)
+                    self.create_error = None
+                    return
                 charset = korp_conf["DB_CHARSET"]
                 collate = self._db_options["collate"] or ""
                 collate_sql = f" COLLATE {collate}" if collate else ""
