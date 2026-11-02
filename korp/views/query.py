@@ -53,12 +53,12 @@ def query(args, abort_event=None):
     utils.assert_key("corpus", args, utils.IS_IDENT, True)
     utils.assert_key("start", args, utils.IS_NUMBER)
     utils.assert_key("end", args, utils.IS_NUMBER)
-    # utils.assert_key("context", args, r"^\d+ [\w-]+$")
     utils.assert_key("show", args, utils.IS_IDENT)
     utils.assert_key("show_struct", args, utils.IS_IDENT)
     # utils.assert_key("within", args, utils.IS_IDENT)
     utils.assert_key("cut", args, utils.IS_NUMBER)
-    utils.assert_key("sort", args, r"")
+    utils.assert_key("sort", args, r"[A-Za-z_][A-Za-z0-9_-]*\Z")
+    utils.assert_key("random_seed", args, r"[+-]?[0-9]+\Z")
     utils.assert_key("incremental", args, r"(true|false)")
 
     incremental = utils.parse_bool(args, "incremental", False)
@@ -91,6 +91,8 @@ def query(args, abort_event=None):
 
     # Parse "context"/"left_context"/"right_context"/"default_context"
     default_context = args.get("default_context") or "10 words"
+    context_pattern = r"(?:[0-9]+(?:[ \t]+[A-Za-z_][A-Za-z0-9_-]*)?|[A-Za-z_][A-Za-z0-9_-]*)\Z"
+    utils.assert_key("default_context", {"default_context": default_context}, context_pattern)
     context = defaultdict(lambda: (default_context,))
     contexts = {}
 
@@ -98,8 +100,14 @@ def query(args, abort_event=None):
         cv = args.get(c, "")
         if cv:
             if ":" not in cv:
-                raise ValueError("Malformed value for key '%s'." % c)
-            contexts[c] = {x.split(":")[0].upper(): x.split(":")[1] for x in cv.split(utils.QUERY_DELIM)}
+                raise ValueError(f"Malformed value for key '{c}'.")
+            contexts[c] = {}
+            for item in cv.split(utils.QUERY_DELIM):
+                corpus, separator, value = item.partition(":")
+                if not separator or not value:
+                    raise ValueError(f"Malformed value for key '{c}'.")
+                utils.assert_key(c, {c: value}, context_pattern)
+                contexts[c][corpus.upper()] = value
         else:
             contexts[c] = {}
 
