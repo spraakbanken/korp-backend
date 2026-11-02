@@ -179,6 +179,17 @@ ExcludeUndefinedCorporaParam: TypeAlias = Annotated[
         )
     ),
 ]
+ReportUndefinedCorporaParam: TypeAlias = Annotated[
+    bool,
+    Query(
+        description=(
+            "Whether to list undefined corpora in `undefined_corpora` and return information about the other "
+            "requested corpora, instead of returning an error if any requested corpus is undefined. A corpus is "
+            "undefined if it has no registry file, if Corpus Workbench cannot read its data or if its id is not valid "
+            "in CQP."
+        )
+    ),
+]
 
 IncludeCombinedParam: TypeAlias = Annotated[
     bool,

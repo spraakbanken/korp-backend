@@ -274,11 +274,17 @@ Once this file is in place, Korp will be able to access this information.
 
 ### Undefined corpora
 
-A corpus is undefined if it has no registry file, or if Corpus Workbench cannot read its data, for example because the
-data directory is missing. `/info` lists every corpus whose registry file CQP can parse, including those whose data
-cannot be read. With `exclude_undefined_corpora=true`, `/info` selects each corpus in CQP and leaves out the undefined
-ones, also from `protected_corpora`. This is slower when there are many corpora, so it is not the default, but the
-result is cached if caching is enabled.
+A corpus is undefined if it has no registry file, if Corpus Workbench cannot read its data, for example because the data
+directory is missing, or if its id is not valid in CQP. `/info` lists every corpus whose registry file CQP can parse,
+including those whose data cannot be read. With `exclude_undefined_corpora=true`, `/info` selects each corpus in CQP and
+leaves out the undefined ones, also from `protected_corpora` (protected corpora without a registry file are kept). This
+is slower when there are many corpora, so it is not the default, but the result is cached if caching is enabled. With
+`report_undefined_corpora=true`, `/corpora/info` lists the requested corpora that are undefined in `undefined_corpora`
+instead of returning an error.
+
+Like other cached corpus data, cached results that depend on whether a corpus is undefined are invalidated only when a
+registry file or a `.info` file changes. After installing, repairing or removing the data of a corpus without changing
+its registry file, touch the registry file and refresh the cache (see [Cache management](#cache-management)).
 
 ### Corpus structure requirements
 
