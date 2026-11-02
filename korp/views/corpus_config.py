@@ -1,4 +1,3 @@
-import glob
 import json
 import os
 from pathlib import Path
@@ -18,6 +17,17 @@ from korp.memcached import memcached
 bp = Blueprint("corpus_config", __name__)
 
 
+def _config_file(directory, name):
+    """Return a config file path confined to its configuration directory."""
+    if not isinstance(name, str) or not name or name in (".", "..") or "/" in name or "\\" in name:
+        raise ValueError("Invalid configuration name.")
+    base = (Path(app.config["CORPUS_CONFIG_DIR"]) / directory).resolve()
+    path = base / (name + ".yaml")
+    if path.resolve().parent != base:
+        raise ValueError("Invalid configuration name.")
+    return path
+
+
 @bp.route("/corpus_config", methods=["GET", "POST"])
 @utils.main_handler
 @utils.prevent_timeout
@@ -28,6 +38,9 @@ def corpus_config(args):
     """
     mode_name = args.get("mode", "default")
     corpora = utils.parse_corpora(args)
+    _config_file("modes", mode_name)
+    for corpus in corpora:
+        _config_file("corpora", corpus.lower())
     cache_checksum = utils.get_hash((mode_name, sorted(corpora), app.config["LAB_MODE"]))
 
     # Try to fetch config from cache
@@ -73,6 +86,10 @@ def get_modes(mode_name=None):
     """
     modes = []
     for mode_file in (Path(app.config["CORPUS_CONFIG_DIR"]) / "modes").glob("*.yaml"):
+        try:
+            _config_file("modes", mode_file.stem)
+        except ValueError:
+            continue
         with open(mode_file, "r", encoding="utf-8") as f:
             mode = yaml.load(f, Loader=SafeLoader)
             # Only include hidden modes when accessed directly
@@ -97,8 +114,7 @@ def get_mode(mode_name: str, corpora: list, cache: bool):
         cache: Whether to use cache.
     """
     try:
-        with open(os.path.join(app.config["CORPUS_CONFIG_DIR"], "modes", mode_name + ".yaml"), "r",
-                  encoding="utf-8") as fp:
+        with open(_config_file("modes", mode_name), "r", encoding="utf-8") as fp:
             mode = yaml.load(fp, Loader=SafeLoader)
     except FileNotFoundError:
         return
@@ -124,13 +140,18 @@ def get_mode(mode_name: str, corpora: list, cache: bool):
     if corpora:
         corpus_files = []
         for c in corpora:
-            file_path = Path(app.config["CORPUS_CONFIG_DIR"]) / "corpora" / f"{c.lower()}.yaml"
+            file_path = _config_file("corpora", c.lower())
             if file_path.is_file():
                 corpus_files.append(file_path)
             else:
                 warnings.add(f"The corpus {c!r} does not exist, or does not have a config file.")
     else:
-        corpus_files = glob.glob(os.path.join(app.config["CORPUS_CONFIG_DIR"], "corpora", "*.yaml"))
+        corpus_files = []
+        for path in (Path(app.config["CORPUS_CONFIG_DIR"]) / "corpora").glob("*.yaml"):
+            try:
+                corpus_files.append(_config_file("corpora", path.stem))
+            except ValueError:
+                continue
 
     # Go through all corpora to see if they are included in mode
     for corpus_file in corpus_files:
