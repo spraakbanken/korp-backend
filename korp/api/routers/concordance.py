@@ -35,6 +35,8 @@ if TYPE_CHECKING:
 
 router = APIRouter(tags=["Concordance"])
 
+MAX_PAGINATION_STATE_BYTES = 1024 * 1024
+
 CONCORDANCE_DESCRIPTION = """Search for concordance lines in one or more corpora.
 
 The route returns KWIC rows: each row contains the matching tokens, the requested left and right context, token
@@ -573,6 +575,36 @@ async def parse_parameters(
     )
 
 
+def _decode_pagination_state(value: str, corpora: list[str]) -> tuple[str, dict[str, int]]:
+    """Decode a pagination state string into its checksum and per-corpus hit counts.
+
+    Returns:
+        The saved query checksum and per-corpus hit counts.
+
+    Raises:
+        ValueError: If the state is oversized or contains invalid hit counts.
+    """
+    # Base64 adds ~33% overhead, so be generous with the limit at this stage. The decoded data is checked below.
+    if len(value) > 2 * MAX_PAGINATION_STATE_BYTES:
+        raise ValueError("Pagination state is too large")
+    encoded = "".join(value.replace("\\n", "\n").split())
+    compressed = base64.b64decode(encoded, altchars=b"-_", validate=True)
+    decompressor = zlib.decompressobj()
+    decoded = decompressor.decompress(compressed, MAX_PAGINATION_STATE_BYTES + 1)
+    if len(decoded) > MAX_PAGINATION_STATE_BYTES or not decompressor.eof or decompressor.unused_data:
+        raise ValueError("Invalid or oversized pagination state")
+
+    checksum, stats = decoded.decode("utf-8").split(";", 1)
+    allowed_corpora = set(corpora)
+    hits_by_corpus: dict[str, int] = {}
+    for pair in stats.split(";") if stats else []:
+        corpus, hits = pair.split(":")
+        if corpus not in allowed_corpora or corpus in hits_by_corpus or not hits.isascii() or not hits.isdecimal():
+            raise ValueError("Invalid pagination hit counts")
+        hits_by_corpus[corpus] = int(hits)
+    return checksum, hits_by_corpus
+
+
 async def perform_query(
     concordance_parameters: ConcordanceParameters, ctx: CtxDep, abort_signal: AbortSignal | None = None
 ) -> AsyncGenerator[handler.ResponseFragment]:
@@ -619,20 +651,15 @@ async def perform_query(
     # The pagination_state parameter contains previously saved info about corpus hit counts (cached_hits_by_corpus)
     if pagination_state:
         try:
-            pagination_state = zlib.decompress(
-                base64.b64decode(pagination_state.replace("\\n", "\n").replace("-", "+").replace("_", "/"))
-            ).decode("UTF-8")
-        except Exception:
+            saved_checksum, saved_hits = _decode_pagination_state(pagination_state, corpora)
+        except (ValueError, zlib.error):
             if ctx.common.debug:
                 debug["pagination_state_unparseable"] = True
         else:
             if ctx.common.debug:
                 debug["pagination_state_read"] = True
-            saved_checksum, stats_temp = pagination_state.split(";", 1)
             if saved_checksum == checksum:
-                for pair in stats_temp.split(";"):
-                    corpus, hits = pair.split(":")
-                    cached_hits_by_corpus[corpus] = int(hits)
+                cached_hits_by_corpus = saved_hits
             elif ctx.common.debug:
                 debug["pagination_state_checksum_mismatch"] = True
 
