@@ -13,7 +13,7 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal, TypeAlias, cast
 
 from fastapi import APIRouter, Query
-from pydantic import BeforeValidator, Field
+from pydantic import BeforeValidator, Field, StringConstraints
 from pydantic.json_schema import SkipJsonSchema
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -1657,7 +1657,7 @@ def _limit_rows_per_bucket(
 
 
 SourcesParam: TypeAlias = Annotated[
-    list[params.NonEmptyString],
+    list[Annotated[str, StringConstraints(pattern=r"^[\w.-]+:\d+$")]],
     Query(
         description="Source ids in the format `CORPUS:ID`.",
         examples=[["romi:253662", "romi:253663"]],
