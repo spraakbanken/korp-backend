@@ -11,6 +11,55 @@ from xml.sax.saxutils import escape
 
 import yaml
 
+# Id of a corpus that has a registry file but no data, so that CQP lists it in `show corpora` but reports it as
+# undefined when it is selected
+CORPUS_WITHOUT_DATA = "nodatacorpus"
+
+
+def write_registry_file_without_data(registry_dir: Path, corpus_id: str) -> None:
+    """Write to `registry_dir` a registry file for `corpus_id` whose data directory `HOME` does not exist.
+
+    Args:
+        registry_dir: The CWB registry directory to write to.
+        corpus_id: The (lowercase) id of the corpus.
+    """
+    # Outside the registry directory, as Korp reads every entry in it as a registry file, should a test create it
+    home = registry_dir.parent / "nonexistent" / corpus_id
+    (registry_dir / corpus_id).write_text(
+        f'NAME "Corpus without data"\nID {corpus_id}\nHOME {home}\nATTRIBUTE word\n', encoding="utf-8"
+    )
+
+
+def write_broken_registry_file(registry_dir: Path) -> None:
+    """Write to `registry_dir` a registry file `brokencorpus` that CQP cannot parse.
+
+    CQP prints a registry error for `brokencorpus` on every run, does not list it in `show corpora` and reports it as
+    undefined when it is selected.
+
+    Args:
+        registry_dir: The CWB registry directory to write to.
+    """
+    (registry_dir / "brokencorpus").write_text("syntax error\n", encoding="utf-8")
+
+
+def set_registry_fields(reg_content: str, values: dict[str, str]) -> str:
+    """Return the registry file content `reg_content` with the values of the fields in `values` replaced.
+
+    Args:
+        reg_content: The content of a CWB registry file.
+        values: The new values by field name (such as `HOME`), quoted if needed.
+
+    Returns:
+        The content with each line beginning with a field in `values` replaced with the field and its new value.
+    """
+    for field, value in values.items():
+        # Use a function to avoid backslashes in `value` being interpreted in the replacement. `line` is a default
+        # argument so that the function does not refer to the loop variables (ruff B023).
+        reg_content = re.sub(
+            rf"^{field}\b[^\n]*", lambda _match, line=f"{field} {value}": line, reg_content, flags=re.MULTILINE
+        )
+    return reg_content
+
 
 def is_feature_set_value(val: str) -> bool:
     """Return True if `val` is a CWB feature-set value."""
@@ -126,14 +175,7 @@ class CWBEncoder:
         data_dir = target.resolve() / "data" / corpus_id
         shutil.copytree(source / "data" / corpus_id, data_dir, symlinks=True, dirs_exist_ok=True)
         reg_content = (source / "registry" / corpus_id).read_text()
-        for field, path in (("HOME", data_dir), ("INFO", data_dir / ".info")):
-            reg_content = re.sub(
-                rf"^{field}\b[^\n]*",
-                # Use lambda to avoid potential backslash issues in replacement string
-                lambda _match: f'{field} "{path}"',  # ruff:ignore[function-uses-loop-variable]
-                reg_content,
-                flags=re.MULTILINE,
-            )
+        reg_content = set_registry_fields(reg_content, {"HOME": f'"{data_dir}"', "INFO": f'"{data_dir / ".info"}"'})
         (target / "registry" / corpus_id).write_text(reg_content)
 
     @staticmethod

@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.corpusutils import CORPUS_WITHOUT_DATA
+
 
 @pytest.fixture
 def corpus_info(get_json: Callable, corpora: list[str]) -> Callable[[list[str]], dict]:  # ruff: ignore[unused-function-argument]
@@ -51,6 +53,22 @@ class TestInfo:
         data = get_json("/info", params={"cache": "false"}, config={"CWB_REGISTRY": str(registry_with_broken_file)})
         assert set(data["corpora"]) == {corpus.lower() for corpus in corpora}
 
+    @staticmethod
+    def test_info_lists_undefined_corpus(
+        get_json: Callable, corpora: list[str], registry_with_corpus_without_data: Path
+    ) -> None:
+        """Test that `/info` lists a corpus that is in the registry but undefined in CQP."""
+        data = get_json(
+            "/info", params={"cache": "false"}, config={"CWB_REGISTRY": str(registry_with_corpus_without_data)}
+        )
+        assert set(data["corpora"]) == {corpus.lower() for corpus in corpora} | {CORPUS_WITHOUT_DATA}
+
+    @staticmethod
+    def test_info_unknown_parameter(get_json: Callable) -> None:
+        """Test that `/info` rejects an unknown parameter."""
+        data = get_json("/info", params={"no_such_param": "true"}, expected_status_code=422)
+        assert data["code"] == "invalid_request"
+
 
 class TestCorpusInfo:
     """Tests for the `/corpora/info` endpoint."""
@@ -83,6 +101,32 @@ class TestCorpusInfo:
         )
         assert data["code"] == "cqp_error"
         assert data["detail"] == "Corpus ``BROKENCORPUS'' is undefined"
+
+    @staticmethod
+    @pytest.mark.parametrize("undefined_corpus", [CORPUS_WITHOUT_DATA, "nosuchcorpus"])
+    def test_corpus_info_undefined_corpus(
+        get_json: Callable, registry_with_corpus_without_data: Path, undefined_corpus: str
+    ) -> None:
+        """Test that `/corpora/info` returns a CQP error for an undefined corpus.
+
+        `CORPUS_WITHOUT_DATA` has a registry file but no data; `nosuchcorpus` has no registry file.
+        """
+        data = get_json(
+            "/corpora/info",
+            params={"cache": "false", "corpora": f"testcorpus,{undefined_corpus}"},
+            config={"CWB_REGISTRY": str(registry_with_corpus_without_data)},
+            expected_status_code=400,
+        )
+        assert data["code"] == "cqp_error"
+        assert f"Corpus ``{undefined_corpus.upper()}'' is undefined" in data["detail"]
+
+    @staticmethod
+    def test_corpus_info_unknown_parameter(get_json: Callable) -> None:
+        """Test that `/corpora/info` rejects an unknown parameter."""
+        data = get_json(
+            "/corpora/info", params={"corpora": "testcorpus", "no_such_param": "true"}, expected_status_code=422
+        )
+        assert data["code"] == "invalid_request"
 
     @pytest.mark.parametrize(
         ("corpus", "attrs_p", "attrs_s", "attrs_a"),
