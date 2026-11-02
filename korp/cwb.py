@@ -127,11 +127,12 @@ class CWB:
 
         reply, error = result
         if error:
-            error = error.decode(self.encoding)
+            error = error.decode(self.encoding, errors="replace")
             # Normalize whitespace and keep only the first CQP error (the rest are consequences)
             error = re.sub(r"\s+", " ", error)
             error = re.sub(r"^CQP Error: *", "", error)
             error = re.sub(r" *CQP Error:.*$", "", error)
+            error = error.strip()
 
             ignore_error = (attr_ignore and "No such attribute:" in error) or any(
                 ignored in error for ignored in self._IGNORED_ERRORS
@@ -167,7 +168,7 @@ class CWB:
 
         reply, error = result
         if error:
-            error = re.sub(r"\s+", " ", error.decode())
+            error = re.sub(r"\s+", " ", error.decode(self.encoding, errors="replace")).strip()
             raise cqp.CQPError(error)
 
         yield from self._iter_lines(reply.decode(self.encoding, errors="ignore"), max_length=self.MAX_LINE_LENGTH)
