@@ -5,8 +5,8 @@ import hashlib
 import inspect
 import json
 import os
-import random
 import re
+import secrets
 import sys
 import time
 import traceback
@@ -519,7 +519,7 @@ def make_cqp(cqp, within=None, cut=None, expand=None):
 def make_query(cqp):
     """Create web-safe commands for a CQP query.
     """
-    querylock = random.randrange(10 ** 8, 10 ** 9)
+    querylock = secrets.randbelow(9 * 10**8) + 10**8
     return ["set QueryLock %s;" % querylock,
             "%s;" % cqp,
             "unlock %s;" % querylock]
