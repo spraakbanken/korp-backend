@@ -101,6 +101,10 @@ The following Pytest fixtures have been defined in [`conftest.py`](conftest.py):
 - `corpus_config_dir`: Return corpus configuration directory
 - `corpus_configs`: Copy corpus configurations in `data/corpora/config` to a temporary directory used in tests
 - `corpora`: Encode the corpora in `data/corpora/src` and return their ids
+- `registry_with_broken_file`: Return a copy of the test corpus registry with an added registry file `brokencorpus`
+  that CQP cannot parse
+- `registry_with_corpus_without_data`: Return a copy of the test corpus registry with an added corpus
+  `CORPUS_WITHOUT_DATA` (in `corpusutils.py`) whose data directory does not exist
 - `database`: Return a `KorpDatabase` object for a session
 - `database_tables`: Import database data for the specified corpora and table types
 - `app_factory`: Return a function to create and configure a Korp FastAPI app instance. The returned function optionally

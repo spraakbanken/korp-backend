@@ -15,7 +15,12 @@ from fastapi.testclient import TestClient
 pytest.register_assert_rewrite("tests.testutils")
 
 from korp.app import create_app
-from tests.corpusutils import CWBEncoder
+from tests.corpusutils import (
+    CORPUS_WITHOUT_DATA,
+    CWBEncoder,
+    write_broken_registry_file,
+    write_registry_file_without_data,
+)
 from tests.dbutils import KorpDatabase
 from tests.testutils import get_response_json
 
@@ -57,7 +62,7 @@ def registry_with_broken_file(corpora: list[str], corpus_registry_dir: Path, tmp
     """
     registry_dir = tmp_path / "registry"
     copytree(corpus_registry_dir, registry_dir)
-    (registry_dir / "brokencorpus").write_text("syntax error\n", encoding="utf-8")
+    write_broken_registry_file(registry_dir)
     return registry_dir
 
 
@@ -197,6 +202,27 @@ def corpora(corpus_data_root: Path) -> list[str]:
     corpus_source_dir = _datadir / "corpora" / "src"
     cwb_encoder = CWBEncoder(corpus_data_root)
     return cwb_encoder.encode_corpora(corpus_source_dir)
+
+
+@pytest.fixture
+def registry_with_corpus_without_data(
+    corpora: list[str],  # ruff: ignore[unused-function-argument]
+    corpus_registry_dir: Path,
+    tmp_path: Path,
+) -> Path:
+    """Return a copy of the test corpus registry with the corpus `CORPUS_WITHOUT_DATA` added.
+
+    CQP lists `CORPUS_WITHOUT_DATA` in `show corpora` but reports it as undefined when it is selected, as the data
+    directory in its registry file does not exist. The copy is used so that other tests do not see the corpus. The
+    fixture `corpora` is used so that the test corpora are encoded before the registry is copied.
+
+    Returns:
+        The path of the copied registry directory.
+    """
+    registry_dir = tmp_path / "registry"
+    copytree(corpus_registry_dir, registry_dir)
+    write_registry_file_without_data(registry_dir, CORPUS_WITHOUT_DATA)
+    return registry_dir
 
 
 @pytest.fixture
