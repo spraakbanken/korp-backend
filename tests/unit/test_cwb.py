@@ -18,6 +18,7 @@ from korp.config import Settings
 from korp.cqp import END_OF_LINE, CQPError
 from korp.cwb import CWB
 from korp.dependencies import AbortSignal
+from tests.corpusutils import CORPUS_WITHOUT_DATA, copy_corpus, write_broken_registry_file
 from tests.testutils import get_info_value
 
 RunCqp = Callable[..., list[str]]
@@ -128,6 +129,68 @@ class TestRunCqp:
         """A syntax error at a non-ASCII character raises `CQPError`, although CQP echoes only part of the character."""
         with pytest.raises(CQPError, match="CQP Syntax Error:"):
             run_cqp("[word='x'] ä;")
+
+
+class TestFindUndefinedCorpora:
+    """Tests for `CWB.find_undefined_corpora` with the real CQP."""
+
+    @staticmethod
+    @pytest.mark.parametrize(
+        ("select_in_cqp", "expected"),
+        [(True, [CORPUS_WITHOUT_DATA, "brokencorpus", "nosuchcorpus"]), (False, ["nosuchcorpus"])],
+        ids=["cqp", "registry"],
+    )
+    def test_find_undefined_corpora(
+        registry_with_corpus_without_data: Path, select_in_cqp: bool, expected: list[str]
+    ) -> None:
+        """Only the CQP check finds a corpus that has a registry file but no data, or one that CQP cannot parse.
+
+        A registry file that CQP cannot parse does not hide the other undefined corpora from the CQP check, although
+        CQP reports the registry error at the beginning of its error output for every command. The result keeps the
+        order of the argument.
+        """
+        write_broken_registry_file(registry_with_corpus_without_data)
+        cwb = _make_cwb(registry_with_corpus_without_data)
+
+        result = cwb.find_undefined_corpora(
+            [CORPUS_WITHOUT_DATA, TEST_CORPUS, "brokencorpus", "nosuchcorpus"], select_in_cqp=select_in_cqp
+        )
+
+        assert result == expected
+
+    @staticmethod
+    @pytest.mark.parametrize("select_in_cqp", [True, False])
+    def test_find_undefined_corpora_invalid_id(cwb: CWB, select_in_cqp: bool) -> None:
+        """Ids that CQP cannot select are undefined, also in the CQP check, where CQP would not report them.
+
+        `MU`, `TAB` and `NULL` are CQP keywords. `_a-b` is a valid id, undefined only because it has no registry file.
+        """
+        invalid = ["a.b", "1abc", "ä", "a|b", TEST_CORPUS + "|" + TEST_CORPUS, "mu", "Tab", "null"]
+
+        assert cwb.find_undefined_corpora([TEST_CORPUS, *invalid, "_a-b"], select_in_cqp=select_in_cqp) == [
+            *invalid,
+            "_a-b",
+        ]
+
+    @staticmethod
+    @pytest.mark.parametrize("select_in_cqp", [True, False])
+    def test_find_undefined_corpora_none(cwb: CWB, corpora: list[str], select_in_cqp: bool) -> None:
+        """All the test corpora are defined."""
+        assert cwb.find_undefined_corpora(corpora, select_in_cqp=select_in_cqp) == []
+
+    @staticmethod
+    def test_find_undefined_corpora_missing_word_data(registry_with_corpus_without_data: Path, tmp_path: Path) -> None:
+        """Only the CQP check finds a corpus whose data directory exists but lacks the files of `word`."""
+        data_dir = tmp_path / "partialcorpus"
+        copy_corpus(registry_with_corpus_without_data, TEST_CORPUS, "partialcorpus", data_dir)
+        word_files = list(data_dir.glob("word.*"))
+        assert word_files
+        for path in word_files:
+            path.unlink()
+        cwb = _make_cwb(registry_with_corpus_without_data)
+
+        assert cwb.find_undefined_corpora([TEST_CORPUS, "partialcorpus"]) == ["partialcorpus"]
+        assert cwb.find_undefined_corpora([TEST_CORPUS, "partialcorpus"], select_in_cqp=False) == []
 
 
 class FakePopen:
@@ -298,6 +361,50 @@ class TestRunCqpMocked:
         with pytest.raises(CQPError, match="No such attribute"):
             list(mock_cwb.run_cqp("x;"))
         assert list(mock_cwb.run_cqp("x;", attr_ignore=True)) == ["out"]
+
+    @staticmethod
+    def test_find_undefined_corpora_empty(mock_cwb: CWB, fake_popen: FakePopenFactory) -> None:
+        """No corpora to check does not run CQP."""
+        processes = fake_popen()
+
+        assert mock_cwb.find_undefined_corpora([]) == []
+        assert processes == []
+
+    @staticmethod
+    def test_find_undefined_corpora_other_error_output(mock_cwb: CWB, fake_popen: FakePopenFactory) -> None:
+        """Other error output before or after an undefined-corpus error does not hide the undefined corpus.
+
+        CWB prints its own error before the undefined-corpus error if the data of a corpus cannot be read. The command
+        ends with an end-of-line marker, which CQP outputs after selecting the corpora.
+        """
+        processes = fake_popen(
+            stdout=f"CQP version 3.5.1\n{END_OF_LINE}\n".encode(),
+            stderr=(
+                b"CL MemBlob:mmapfile(): Can't open file a/word.corpus ...\n\tReason: Permission denied\n"
+                b"CQP Error:\n\tCorpus ``A'' is undefined\nCL: extra output\nCQP Error:\n\tCorpus ``C'' is undefined\n"
+            ),
+        )
+
+        assert mock_cwb.find_undefined_corpora(["a", "b", "c"]) == ["a", "c"]
+        assert processes[0].input is not None
+        assert processes[0].input.decode().endswith("A;\nB;\nC;\n.EOL.;\nexit;")
+
+    @staticmethod
+    def test_find_undefined_corpora_cqp_terminated(mock_cwb: CWB, fake_popen: FakePopenFactory) -> None:
+        """If CQP terminates before the end-of-line marker, `CQPError` is raised with the other errors.
+
+        Otherwise, the corpora that CQP did not select would seem defined. Registry errors are left out of the message.
+        """
+        fake_popen(
+            stdout=b"CQP version 3.5.1\n",
+            stderr=(
+                b"REGISTRY ERROR (r/x): syntax error\nCQP Error:\n\tCorpus ``A'' is undefined\n"
+                b"CQP Error:\n\tOut of memory\n"
+            ),
+        )
+
+        with pytest.raises(CQPError, match=r"^CQP terminated before checking all the corpora\. Out of memory$"):
+            mock_cwb.find_undefined_corpora(["a", "b"])
 
     @staticmethod
     @pytest.mark.parametrize("checks_before_abort", [0, 2])
