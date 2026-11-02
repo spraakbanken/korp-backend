@@ -10,6 +10,14 @@ Workbench](https://cwb.sourceforge.io/).
 
 To see what has changed in recent versions, see the [CHANGELOG](CHANGELOG.md).
 
+> [!IMPORTANT]
+> **Security update: CQP injection fix**
+>
+> A security fix addresses CQP injection vulnerabilities that could allow an attacker to execute arbitrary commands with
+> the permissions of the backend process. We strongly recommend upgrading existing installations to the latest version
+> containing this fix. **For v8 installations, upgrade to the latest code on the [`maintenance/8.x`
+> branch](https://github.com/spraakbanken/korp-backend/tree/maintenance/8.x).**
+
 ## Requirements
 
 To use the basic features of the Korp backend you need the following:
