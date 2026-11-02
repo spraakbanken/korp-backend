@@ -1,5 +1,6 @@
 import itertools
 import math
+import re
 import time
 from collections import defaultdict
 from copy import deepcopy
@@ -11,6 +12,7 @@ from pymemcache.exceptions import MemcacheError
 from korp import utils
 from korp.db import mysql
 from korp.memcached import memcached
+
 from . import query
 
 bp = Blueprint("relations", __name__)
@@ -278,6 +280,8 @@ def relations_sentences(args):
         temp_source = temp_source.split(utils.QUERY_DELIM)
     source = defaultdict(set)
     for s in temp_source:
+        if not isinstance(s, str) or not re.fullmatch(r"[\w-]+:[0-9]+", s):
+            raise ValueError("Invalid source value; expected CORPUS:ID.")
         c, i = s.split(":")
         source[c].add(i)
 
