@@ -231,7 +231,7 @@ RelationsLimitParam: TypeAlias = Annotated[
 ]
 
 RelationsStructAttributesParam: TypeAlias = Annotated[
-    list[str],
+    list[params.Attribute],
     Query(
         description=(
             "Structural CWB attributes (usually sentence or document annotations) to include "
