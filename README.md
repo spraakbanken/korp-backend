@@ -10,7 +10,7 @@ The Korp backend is a Python 3 WSGI application, acting as a wrapper for Corpus 
 To see what has changed in recent versions, see the [CHANGELOG](CHANGELOG.md).
 
 > [!IMPORTANT]
-> **Security update: CQP injection fix**
+> **Security update – 2026-11-02: CQP injection fix**
 >
 > A security fix addresses CQP injection vulnerabilities that could allow an attacker to execute arbitrary commands with
 > the permissions of the backend process. We strongly recommend upgrading existing installations to the latest version
