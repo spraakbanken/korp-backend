@@ -37,6 +37,10 @@ snake_case, including `name`, `size`, `charset`, `protected`, `sentences`, `firs
 Installation-specific keys are preserved under `additional` with their original names.
 
 The `total_size` and `total_sentences` fields sum the corresponding values for the requested corpora.
+
+If a requested corpus is undefined, that is, it has no registry file, Corpus Workbench cannot read its data or its id
+is not valid in CQP, the response is an error, unless `report_undefined_corpora` is true. Then the response contains the
+other corpora, and the undefined ones are listed in `undefined_corpora`.
 """
 
 
@@ -152,6 +156,14 @@ class CorpusInfoResponse(schemas.CommonResponse):
         description="Total number of sentences in the requested corpora.",
         examples=[326556],
     )
+    undefined_corpora: list[str] | SkipJsonSchema[None] = Field(
+        None,
+        description=(
+            "Requested corpus ids that are undefined, not included in `corpora`, in alphabetical order. Included only "
+            "with `report_undefined_corpora`."
+        ),
+        examples=[["oldcorpus"]],
+    )
 
 
 _KNOWN_INFO_KEYS = {
@@ -203,6 +215,40 @@ def _normalize_cwb_info(raw_info: Mapping[str, Any]) -> dict[str, Any]:
 
     normalized["additional"] = additional
     return normalized
+
+
+async def _split_undefined_corpora(ctx: CtxDep, corpora: list[str], select_in_cqp: bool) -> tuple[list[str], list[str]]:
+    """Split corpora into defined and undefined ones, caching the result of the CQP check if caching is enabled.
+
+    Args:
+        ctx: The request context.
+        corpora: The ids of the corpora to check.
+        select_in_cqp: Whether to select each corpus in CQP instead of only checking that it has a registry file; see
+            `CWB.find_undefined_corpora`, which then raises `CQPError` if CQP terminates before it has selected every
+            corpus.
+
+    Returns:
+        The defined and the undefined corpora, both in the order of `corpora`.
+    """
+    # Checking only the registry files takes about as long as a cache lookup, so its result is not cached
+    use_cache = select_in_cqp and ctx.common.cache
+    cache_key = ""
+    undefined: list[str] | None = None
+    if use_cache:
+        cache_prefix = await caching.cache_prefix(ctx.cache)
+        cache_key = f"{cache_prefix}:undefined_corpora_{utils.get_hash(sorted(corpora))}"
+        undefined = await ctx.cache.get(cache_key)
+
+    if undefined is None:
+        undefined = await anyio.to_thread.run_sync(ctx.cwb.find_undefined_corpora, corpora, select_in_cqp)
+        if use_cache:
+            try:
+                await ctx.cache.add(cache_key, undefined)
+            except CacheError:
+                pass
+
+    undefined_set = set(undefined)
+    return [c for c in corpora if c not in undefined_set], [c for c in corpora if c in undefined_set]
 
 
 class InfoQuery(QueryRequestModel):
@@ -284,6 +330,7 @@ class CorpusInfoRequest(RequestModel):
     json_array_fields = frozenset({"corpora"})
 
     corpora: params.CorporaParam
+    report_undefined_corpora: params.ReportUndefinedCorporaParam = False
 
 
 class CorpusInfoQuery(QueryRequestModel, CorpusInfoRequest):
@@ -311,7 +358,7 @@ async def corpus_info_get(
     Yields:
         Information about the specified corpus or corpora.
     """
-    yield await get_corpus_info(ctx, query.corpora)
+    yield await _get_requested_corpus_info(ctx, query)
 
 
 @router.post(
@@ -330,7 +377,41 @@ async def corpus_info_post(ctx: CtxDep, request: CorpusInfoRequest) -> AsyncIter
     Yields:
         Information about the selected corpora.
     """
-    yield await get_corpus_info(ctx, request.corpora)
+    yield await _get_requested_corpus_info(ctx, request)
+
+
+async def _get_requested_corpus_info(ctx: CtxDep, request: CorpusInfoRequest) -> dict:
+    """Get information about the corpora in `request`, reporting undefined corpora if requested.
+
+    Args:
+        ctx: The request context.
+        request: The request for corpus information.
+
+    Returns:
+        Information about the requested corpora; with `report_undefined_corpora`, about the defined ones, and the
+        undefined ones in `undefined_corpora`.
+
+    Raises:
+        CQPError: If getting the information fails; with `report_undefined_corpora`, only if the failure is not
+            caused by an undefined corpus, or if CQP terminates while checking the corpora.
+    """
+    if not request.report_undefined_corpora:
+        return await get_corpus_info(ctx, request.corpora)
+    # First only check that the corpora have registry files, which is fast. Only if getting the information then
+    # fails, select each corpus in CQP to find also those whose data cannot be read.
+    corpora, undefined = await _split_undefined_corpora(ctx, request.corpora, select_in_cqp=False)
+    try:
+        corpus_info = await get_corpus_info(ctx, corpora)
+    except cqp.CQPError:
+        # The error message does not tell reliably whether the error is caused by an undefined corpus, as CWB may
+        # print other errors first, so select the corpora in CQP to find out. That also finds the corpora without a
+        # registry file.
+        defined, undefined = await _split_undefined_corpora(ctx, request.corpora, select_in_cqp=True)
+        if defined == corpora:
+            # No further undefined corpus, so the error has another cause
+            raise
+        corpus_info = await get_corpus_info(ctx, defined)
+    return {**corpus_info, "undefined_corpora": undefined}
 
 
 async def get_corpus_info(ctx: CtxDep, corpora: list[str], no_combined_cache: bool = False) -> dict:

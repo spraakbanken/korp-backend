@@ -1,7 +1,9 @@
 """Pytest tests for the Korp `/info` and `/corpora/info` endpoints."""
 
+import os
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
+from http import HTTPStatus
 from pathlib import Path
 from typing import cast
 
@@ -10,8 +12,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from korp.dependencies import AuthContext
-from tests.corpusutils import CORPUS_WITHOUT_DATA, write_broken_registry_file
-from tests.testutils import get_response_json
+from tests.corpusutils import CORPUS_WITHOUT_DATA, copy_corpus, write_broken_registry_file
+from tests.testutils import get_response_json, validate_response_contract
 
 
 @pytest.fixture
@@ -183,6 +185,83 @@ class TestCorpusInfo:
         assert f"Corpus ``{undefined_corpus.upper()}'' is undefined" in data["detail"]
 
     @staticmethod
+    @pytest.mark.parametrize("method", ["GET", "POST"])
+    @pytest.mark.parametrize(
+        ("expected_corpora", "expected_undefined"),
+        [
+            (["testcorpus"], [CORPUS_WITHOUT_DATA, "nosuchcorpus"]),
+            (["testcorpus"], ["nosuchcorpus"]),
+            (["testcorpus"], ["1abc", "a.b"]),
+            (["testcorpus"], ["brokencorpus"]),
+            ([], ["a.b", "nosuchcorpus"]),
+            (["testcorpus", "testcorpus5"], []),
+        ],
+        ids=["no_data", "no_registry_file", "invalid_id", "broken_registry_file", "all_undefined", "all_defined"],
+    )
+    def test_corpus_info_report_undefined_corpora(
+        client_factory: Callable[..., AbstractContextManager[TestClient]],
+        registry_with_corpus_without_data: Path,
+        method: str,
+        expected_corpora: list[str],
+        expected_undefined: list[str],
+    ) -> None:
+        """Test that `/corpora/info` with `report_undefined_corpora` lists the undefined corpora.
+
+        `CORPUS_WITHOUT_DATA` and `brokencorpus` (whose registry file CQP cannot parse) have a registry file, so they
+        are found only by selecting the corpora in CQP after getting the information fails. Ids that CQP cannot select
+        are undefined.
+        """
+        write_broken_registry_file(registry_with_corpus_without_data)
+        corpora = sorted(expected_corpora + expected_undefined)
+        config = {"CWB_REGISTRY": str(registry_with_corpus_without_data)}
+        with client_factory(config) as client:
+            if method == "GET":
+                response = client.get(
+                    "/corpora/info",
+                    params={"cache": "false", "corpora": ",".join(corpora), "report_undefined_corpora": "true"},
+                )
+            else:
+                response = client.post(
+                    "/corpora/info",
+                    params={"cache": "false"},
+                    json={"corpora": corpora, "report_undefined_corpora": True},
+                )
+            assert response.status_code == HTTPStatus.OK, response.text
+            validate_response_contract(client, response, "/corpora/info", method=method)
+        data = response.json()
+        assert sorted(data["corpora"]) == expected_corpora
+        assert data["undefined_corpora"] == expected_undefined
+        assert data["total_size"] == sum(corpus["info"]["size"] for corpus in data["corpora"].values())
+        assert data["total_sentences"] == sum(corpus["info"]["sentences"] for corpus in data["corpora"].values())
+
+    @staticmethod
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can read files without read permission")
+    def test_corpus_info_report_undefined_corpora_unreadable_data(
+        get_json: Callable, registry_with_corpus_without_data: Path, tmp_path: Path
+    ) -> None:
+        """Test that `/corpora/info` with `report_undefined_corpora` reports a corpus whose data file cannot be read.
+
+        CWB prints its own error before CQP reports the corpus as undefined.
+        """
+        data_dir = tmp_path / "unreadablecorpus"
+        copy_corpus(registry_with_corpus_without_data, "testcorpus", "unreadablecorpus", data_dir)
+        (data_dir / "word.corpus").chmod(0)
+        data = get_json(
+            "/corpora/info",
+            params={"cache": "false", "corpora": "testcorpus,unreadablecorpus", "report_undefined_corpora": "true"},
+            config={"CWB_REGISTRY": str(registry_with_corpus_without_data)},
+        )
+        assert list(data["corpora"]) == ["testcorpus"]
+        assert data["undefined_corpora"] == ["unreadablecorpus"]
+
+    @staticmethod
+    @pytest.mark.usefixtures("corpora")
+    def test_corpus_info_report_undefined_corpora_not_requested(get_json: Callable) -> None:
+        """Test that `/corpora/info` has no `undefined_corpora` by default."""
+        data = get_json("/corpora/info", params={"cache": "false", "corpora": "testcorpus"})
+        assert "undefined_corpora" not in data
+
+    @staticmethod
     def test_corpus_info_unknown_parameter(get_json: Callable) -> None:
         """Test that `/corpora/info` rejects an unknown parameter."""
         data = get_json(
@@ -284,3 +363,74 @@ class TestUndefinedCorporaCached:
         assert CORPUS_WITHOUT_DATA not in excluded_again["corpora"]
         assert CORPUS_WITHOUT_DATA in included["corpora"]
         assert CORPUS_WITHOUT_DATA in included_again["corpora"]
+
+    @staticmethod
+    def test_corpus_info_report_undefined_corpora_cached(cached_client: TestClient) -> None:
+        """Test that `undefined_corpora` is not added to the cached result of `/corpora/info` for the defined corpora.
+
+        Both requests read the result for `testcorpus` from the cache.
+        """
+        params = {"corpora": f"testcorpus,{CORPUS_WITHOUT_DATA}", "report_undefined_corpora": "true", "debug": "true"}
+        reported = get_response_json(cached_client, "/corpora/info", params=params)
+        reported_again = get_response_json(cached_client, "/corpora/info", params=params)
+        plain = get_response_json(cached_client, "/corpora/info", params={"corpora": "testcorpus", "debug": "true"})
+
+        assert reported["undefined_corpora"] == reported_again["undefined_corpora"] == [CORPUS_WITHOUT_DATA]
+        assert reported_again["debug"].get("cache_read")
+        assert plain["debug"].get("cache_read")
+        assert "undefined_corpora" not in plain
+        assert list(plain["corpora"]) == list(reported["corpora"]) == ["testcorpus"]
+
+    @staticmethod
+    def test_added_corpus_defined(
+        cached_client: TestClient, registry_with_corpus_without_data: Path, tmp_path: Path
+    ) -> None:
+        """Test that `/corpora/info` reports a corpus added to the registry as defined at once.
+
+        The result of checking the registry files is not cached.
+        """
+        params = {"corpora": "testcorpus,newcorpus", "report_undefined_corpora": "true"}
+        assert get_response_json(cached_client, "/corpora/info", params=params)["undefined_corpora"] == ["newcorpus"]
+
+        copy_corpus(registry_with_corpus_without_data, "testcorpus", "newcorpus", tmp_path / "newcorpus")
+        corpus_info = get_response_json(cached_client, "/corpora/info", params=params)
+        assert corpus_info["undefined_corpora"] == []
+        assert sorted(corpus_info["corpora"]) == ["newcorpus", "testcorpus"]
+
+    @staticmethod
+    def test_repaired_corpus_defined(
+        cached_client: TestClient, registry_with_corpus_without_data: Path, tmp_path: Path
+    ) -> None:
+        """Test that a repaired corpus is defined in `/corpora/info` at once, but in `/info` after a cache refresh.
+
+        `/corpora/info` selects the corpora in CQP, and uses the cached result, only if getting the information fails,
+        whereas `/info` caches its whole result. The refresh invalidates the cached result only because `copy_corpus`
+        rewrites the registry file of the repaired corpus.
+        """
+        corpus_info_params = {"corpora": f"testcorpus,{CORPUS_WITHOUT_DATA}", "report_undefined_corpora": "true"}
+        info_params = {"exclude_undefined_corpora": "true"}
+
+        def get_corpus_info_and_info() -> tuple[dict, dict]:
+            return (
+                get_response_json(cached_client, "/corpora/info", params=corpus_info_params),
+                get_response_json(cached_client, "/info", params=info_params),
+            )
+
+        corpus_info, info = get_corpus_info_and_info()
+        assert corpus_info["undefined_corpora"] == [CORPUS_WITHOUT_DATA]
+        assert CORPUS_WITHOUT_DATA not in info["corpora"]
+
+        # Repair the corpus by making it a copy of testcorpus
+        copy_corpus(
+            registry_with_corpus_without_data, "testcorpus", CORPUS_WITHOUT_DATA, tmp_path / CORPUS_WITHOUT_DATA
+        )
+        corpus_info, info = get_corpus_info_and_info()
+        assert corpus_info["undefined_corpora"] == []
+        assert sorted(corpus_info["corpora"]) == sorted(["testcorpus", CORPUS_WITHOUT_DATA])
+        assert CORPUS_WITHOUT_DATA not in info["corpora"]
+
+        response = cached_client.post("/admin/cache/refresh")
+        assert response.status_code == HTTPStatus.OK, response.text
+        assert response.json()["corpora_invalidated"] == 1
+        _corpus_info, info = get_corpus_info_and_info()
+        assert CORPUS_WITHOUT_DATA in info["corpora"]
