@@ -94,21 +94,39 @@ class CWB:
             if line and (max_length is None or len(line) < max_length):
                 yield line
 
-    def run_cqp(
-        self, command: str | list[str], attr_ignore: bool = False, abort_signal: AbortSignal | None = None
-    ) -> Iterator[str]:
-        """Call the cqp binary with the given command(s).
+    @staticmethod
+    def _iter_error_messages(error: str) -> Iterator[str]:
+        """Iterate over the error messages in CQP error output.
+
+        A message extends to the next `CQP Error:`, so it may also contain other error output, such as a `CL:` message.
+        Output before the first `CQP Error:` is a message of its own.
+
+        Args:
+            error: The error output of CQP.
+
+        Yields:
+            The error messages without the `CQP Error:` prefix, with whitespace, including newlines, normalized to
+            single spaces.
+        """
+        error = re.sub(r"\s+", " ", error).strip()
+        for message in re.split(r" *CQP Error: *", error):
+            if message:
+                yield message
+
+    def _run_cqp_process(
+        self, command: str | list[str], abort_signal: AbortSignal | None = None
+    ) -> tuple[str, str] | None:
+        """Run the cqp binary in child mode (`-c`) with the given command(s), after `set PrettyPrint off;`.
+
+        In child mode, CQP continues after an error, which `find_undefined_corpora` relies on.
 
         Args:
             command: The CQP command(s) to execute.
-            attr_ignore: Whether to ignore attribute-related errors.
             abort_signal: An optional abort event to stop the process.
 
-        Yields:
-            Lines of output from the CQP command. Empty lines are ignored.
-
-        Raises:
-            CQPError: If an error occurs during execution of the command. Registry errors are ignored.
+        Returns:
+            The output and the error output of CQP, or None if the process was aborted. The output is decoded ignoring
+            invalid bytes, the error output replacing them.
         """
         env = os.environ.copy()
         env["LC_COLLATE"] = self.locale
@@ -126,11 +144,32 @@ class CWB:
 
         result = self._communicate_with_abort(process, command_bytes, abort_signal)
         if result is None:
+            return None
+        reply, error = result
+        return reply.decode(self.encoding, errors="ignore"), error.decode(self.encoding, errors="replace")
+
+    def run_cqp(
+        self, command: str | list[str], attr_ignore: bool = False, abort_signal: AbortSignal | None = None
+    ) -> Iterator[str]:
+        """Call the cqp binary with the given command(s).
+
+        Args:
+            command: The CQP command(s) to execute.
+            attr_ignore: Whether to ignore attribute-related errors.
+            abort_signal: An optional abort event to stop the process.
+
+        Yields:
+            Lines of output from the CQP command. Empty lines are ignored.
+
+        Raises:
+            CQPError: If an error occurs during execution of the command. Registry errors are ignored.
+        """
+        result = self._run_cqp_process(command, abort_signal)
+        if result is None:
             return
 
         reply, error = result
         if error:
-            error = error.decode(self.encoding, errors="replace")
             # A registry file that CQP cannot parse makes CQP print a registry error on every run, whatever the
             # command. Selecting that corpus is a separate error, so registry errors can be ignored here.
             error = self._REGISTRY_ERROR_LINE.sub("", error)
@@ -146,7 +185,7 @@ class CWB:
             if error and not ignore_error:
                 raise cqp.CQPError(error)
 
-        yield from self._iter_lines(reply.decode(self.encoding, errors="ignore"))
+        yield from self._iter_lines(reply)
 
     def run_cwb_scan(self, corpus: str, attrs: list[str], abort_signal: AbortSignal | None = None) -> Iterator[str]:
         """Call the cwb-scan-corpus binary with the given arguments.
