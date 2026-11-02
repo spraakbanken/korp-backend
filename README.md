@@ -272,6 +272,14 @@ LastDate: 2001-01-30 23:59:59
 
 Once this file is in place, Korp will be able to access this information.
 
+### Undefined corpora
+
+A corpus is undefined if it has no registry file, or if Corpus Workbench cannot read its data, for example because the
+data directory is missing. `/info` lists every corpus whose registry file CQP can parse, including those whose data
+cannot be read. With `exclude_undefined_corpora=true`, `/info` selects each corpus in CQP and leaves out the undefined
+ones, also from `protected_corpora`. This is slower when there are many corpora, so it is not the default, but the
+result is cached if caching is enabled.
+
 ### Corpus structure requirements
 
 To use the basic concordance features of Korp there are no particular requirements regarding the markup or annotations

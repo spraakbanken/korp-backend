@@ -6,6 +6,7 @@ from collections.abc import Callable, Generator, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from shutil import copytree
+from typing import cast
 
 import pytest
 from fastapi import FastAPI
@@ -15,6 +16,7 @@ from fastapi.testclient import TestClient
 pytest.register_assert_rewrite("tests.testutils")
 
 from korp.app import create_app
+from tests.cacheutils import FakeAiomcacheClient
 from tests.corpusutils import (
     CORPUS_WITHOUT_DATA,
     CWBEncoder,
@@ -173,6 +175,27 @@ def client_factory(app_factory: Callable[..., FastAPI]) -> Callable[..., Abstrac
             yield test_client
 
     return _client_factory
+
+
+@pytest.fixture
+def cached_client_factory(
+    client_factory: Callable[..., AbstractContextManager[TestClient]], monkeypatch: pytest.MonkeyPatch
+) -> Callable[..., AbstractContextManager[TestClient]]:
+    """Return a context manager creating a TestClient for custom config, with caching enabled.
+
+    Instead of a Memcached server, the app uses a `FakeAiomcacheClient`, so each app instance has a separate, empty
+    cache. As `MEMCACHED_SERVER` is set, it is also the default storage for rate limiting, which is not faked, so
+    rate limiting should not be enabled.
+    """
+    monkeypatch.setattr("korp.memcached.aiomcache.Client", FakeAiomcacheClient)
+
+    @contextmanager
+    def _cached_client_factory(config: dict | None = None) -> Generator[TestClient]:
+        with client_factory({"MEMCACHED_SERVER": "localhost:11211", **(config or {})}) as test_client:
+            assert cast(FastAPI, test_client.app).state.cache_enabled
+            yield test_client
+
+    return _cached_client_factory
 
 
 @pytest.fixture

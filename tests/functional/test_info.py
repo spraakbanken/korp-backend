@@ -1,11 +1,17 @@
 """Pytest tests for the Korp `/info` and `/corpora/info` endpoints."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from pathlib import Path
+from typing import cast
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
-from tests.corpusutils import CORPUS_WITHOUT_DATA
+from korp.dependencies import AuthContext
+from tests.corpusutils import CORPUS_WITHOUT_DATA, write_broken_registry_file
+from tests.testutils import get_response_json
 
 
 @pytest.fixture
@@ -36,6 +42,18 @@ def corpus_info_single(corpus_info: Callable[[list[str]], dict]) -> Callable[[st
     return _corpus_info_single
 
 
+class FakeAuthorizer:
+    """A stand-in for an `Authorizer` that only lists protected corpora."""
+
+    def __init__(self, protected: list[str]) -> None:
+        """Initialize with the protected corpora."""
+        self.protected = protected
+
+    async def get_protected_corpora(self, auth_ctx: AuthContext) -> list[str]:  # ruff: ignore[unused-method-argument]
+        """Return the protected corpora."""
+        return self.protected
+
+
 class TestInfo:
     """Tests for the `/info` endpoint."""
 
@@ -54,14 +72,58 @@ class TestInfo:
         assert set(data["corpora"]) == {corpus.lower() for corpus in corpora}
 
     @staticmethod
-    def test_info_lists_undefined_corpus(
-        get_json: Callable, corpora: list[str], registry_with_corpus_without_data: Path
+    @pytest.mark.parametrize("broken_file", [False, True], ids=["", "broken_file"])
+    @pytest.mark.parametrize("exclude_undefined_corpora", [False, True], ids=["no_exclude", "exclude"])
+    def test_info_undefined_corpus(
+        get_json: Callable,
+        corpora: list[str],
+        registry_with_corpus_without_data: Path,
+        exclude_undefined_corpora: bool,
+        broken_file: bool,
     ) -> None:
-        """Test that `/info` lists a corpus that is in the registry but undefined in CQP."""
+        """Test that `/info` lists a corpus that is in the registry but undefined in CQP, unless excluded.
+
+        With `exclude_undefined_corpora`, the corpus is left out, also if the registry has a file that CQP cannot
+        parse.
+        """
+        if broken_file:
+            write_broken_registry_file(registry_with_corpus_without_data)
         data = get_json(
-            "/info", params={"cache": "false"}, config={"CWB_REGISTRY": str(registry_with_corpus_without_data)}
+            "/info",
+            params={"cache": "false", "exclude_undefined_corpora": str(exclude_undefined_corpora).lower()},
+            config={"CWB_REGISTRY": str(registry_with_corpus_without_data)},
         )
-        assert set(data["corpora"]) == {corpus.lower() for corpus in corpora} | {CORPUS_WITHOUT_DATA}
+        expected = {corpus.lower() for corpus in corpora}
+        if not exclude_undefined_corpora:
+            expected.add(CORPUS_WITHOUT_DATA)
+        assert set(data["corpora"]) == expected
+
+    @staticmethod
+    @pytest.mark.parametrize(
+        ("exclude_undefined_corpora", "expected_protected"),
+        [(True, ["notinregistry", "testcorpus"]), (False, [CORPUS_WITHOUT_DATA, "notinregistry", "testcorpus"])],
+        ids=["exclude", "no_exclude"],
+    )
+    def test_info_exclude_undefined_corpora_protected(
+        client_factory: Callable[..., AbstractContextManager[TestClient]],
+        registry_with_corpus_without_data: Path,
+        exclude_undefined_corpora: bool,
+        expected_protected: list[str],
+    ) -> None:
+        """Test that `/info` with `exclude_undefined_corpora` leaves out an undefined corpus from `protected_corpora`.
+
+        A protected corpus that is not in the registry at all is listed in both cases.
+        """
+        with client_factory({"CWB_REGISTRY": str(registry_with_corpus_without_data)}) as client:
+            cast(FastAPI, client.app).state.authorizer = FakeAuthorizer(
+                ["testcorpus", CORPUS_WITHOUT_DATA, "notinregistry"]
+            )
+            data = get_response_json(
+                client,
+                "/info",
+                params={"cache": "false", "exclude_undefined_corpora": str(exclude_undefined_corpora).lower()},
+            )
+        assert data["protected_corpora"] == expected_protected
 
     @staticmethod
     def test_info_unknown_parameter(get_json: Callable) -> None:
@@ -191,3 +253,34 @@ class TestCorpusInfo:
         assert attrs["structural"] == attrs_s
         assert attrs["alignment"] == attrs_a
         assert data["info"]["name"] == corpus.lower()
+
+
+@pytest.fixture
+def cached_client(
+    cached_client_factory: Callable[..., AbstractContextManager[TestClient]], registry_with_corpus_without_data: Path
+) -> Iterator[TestClient]:
+    """Yield a TestClient with caching enabled, using the registry `registry_with_corpus_without_data`."""
+    with cached_client_factory({"CWB_REGISTRY": str(registry_with_corpus_without_data)}) as client:
+        yield client
+
+
+class TestUndefinedCorporaCached:
+    """Tests for checking undefined corpora in `/info` and `/corpora/info` with caching enabled."""
+
+    @staticmethod
+    def test_info_exclude_undefined_corpora_cached_separately(cached_client: TestClient) -> None:
+        """Test that `/info` with and without `exclude_undefined_corpora` are cached separately."""
+        excluding_params = {"exclude_undefined_corpora": "true", "debug": "true"}
+        excluded = get_response_json(cached_client, "/info", params=excluding_params)
+        included = get_response_json(cached_client, "/info", params={"debug": "true"})
+        excluded_again = get_response_json(cached_client, "/info", params=excluding_params)
+        included_again = get_response_json(cached_client, "/info", params={"debug": "true"})
+
+        assert excluded["debug"].get("cache_saved")
+        assert included["debug"].get("cache_saved")
+        assert excluded_again["debug"].get("cache_read")
+        assert included_again["debug"].get("cache_read")
+        assert CORPUS_WITHOUT_DATA not in excluded["corpora"]
+        assert CORPUS_WITHOUT_DATA not in excluded_again["corpora"]
+        assert CORPUS_WITHOUT_DATA in included["corpora"]
+        assert CORPUS_WITHOUT_DATA in included_again["corpora"]

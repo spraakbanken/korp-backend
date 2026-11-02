@@ -61,6 +61,30 @@ def set_registry_fields(reg_content: str, values: dict[str, str]) -> str:
     return reg_content
 
 
+def copy_corpus(registry_dir: Path, source_id: str, target_id: str, data_dir: Path) -> None:
+    """Copy corpus `source_id` in `registry_dir` as `target_id`, with its data in `data_dir`.
+
+    Args:
+        registry_dir: The CWB registry directory containing `source_id`, to which to write the registry file of
+            `target_id`, overwriting any existing one.
+        source_id: The (lowercase) id of the corpus to copy.
+        target_id: The (lowercase) id of the copy.
+        data_dir: The data directory of the copy; must not exist.
+
+    Raises:
+        ValueError: If the registry file of `source_id` has no `HOME`.
+    """
+    reg_content = (registry_dir / source_id).read_text(encoding="utf-8")
+    home = re.search(r'^HOME\s+"?([^"\n]*)"?', reg_content, re.MULTILINE)
+    if home is None:
+        raise ValueError(f"No HOME in the registry file of {source_id}")
+    shutil.copytree(home.group(1), data_dir, symlinks=True)
+    reg_content = set_registry_fields(
+        reg_content, {"ID": target_id, "HOME": f'"{data_dir}"', "INFO": f'"{data_dir / ".info"}"'}
+    )
+    (registry_dir / target_id).write_text(reg_content, encoding="utf-8")
+
+
 def is_feature_set_value(val: str) -> bool:
     """Return True if `val` is a CWB feature-set value."""
     return bool(val and val[0] == val[-1] == "|")

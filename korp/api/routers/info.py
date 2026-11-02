@@ -4,6 +4,7 @@ import importlib.metadata
 from collections.abc import AsyncIterator, Mapping
 from typing import Annotated, Any
 
+import anyio.to_thread
 from fastapi import APIRouter, Query
 from pydantic import Field
 from pydantic.json_schema import SkipJsonSchema
@@ -21,6 +22,10 @@ INFO_DESCRIPTION = """Get general information about the Korp backend.
 
 The response contains the backend version, the CQP version reported by Corpus Workbench, all corpora available on the
 server, and the subset of those corpora that require authorization.
+
+By default, the corpora are those in the Corpus Workbench registry, including any whose data cannot be read. With
+`exclude_undefined_corpora`, those corpora are left out, also from the protected corpora, but the request is slower
+when there are many corpora.
 """
 
 CORPUS_INFO_DESCRIPTION = """Fetch Corpus Workbench metadata for one or more corpora.
@@ -44,12 +49,15 @@ class InfoResponse(schemas.CommonResponse):
     cqp_version: str = Field(..., description="CQP version reported by Corpus Workbench.", examples=["3.4.12"])
     corpora: list[str] = Field(
         ...,
-        description="Corpus ids available on this backend.",
+        description=(
+            "Corpus ids in the Corpus Workbench registry of this backend; with `exclude_undefined_corpora`, without "
+            "those whose data cannot be read."
+        ),
         examples=[["romi", "parole"]],
     )
     protected_corpora: list[str] = Field(
         ...,
-        description="Corpus ids from `corpora` that require authorization.",
+        description="Corpus ids that require authorization, also those not in `corpora`.",
         examples=[["classified", "mydiary"]],
     )
 
@@ -197,6 +205,12 @@ def _normalize_cwb_info(raw_info: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+class InfoQuery(QueryRequestModel):
+    """GET query for general information about the Korp backend."""
+
+    exclude_undefined_corpora: params.ExcludeUndefinedCorporaParam = False
+
+
 # The "/" alias is just for convenience and is not documented. API clients should use "/info" instead.
 @router.get("/", response_model=None, include_in_schema=False)
 @router.get(
@@ -210,7 +224,8 @@ def _normalize_cwb_info(raw_info: Mapping[str, Any]) -> dict[str, Any]:
 )
 @api_handler
 async def info(
-    ctx: CtxDep,
+    ctx: QueryCtxDep,
+    query: Annotated[InfoQuery, Query()],
 ) -> AsyncIterator[dict]:
     """Get general information about the Korp backend and available corpora.
 
@@ -218,10 +233,11 @@ async def info(
         Info about the Korp backend and available corpora.
     """
     cache = ctx.cache
-    cache_prefix = ""
+    cache_key = ""
     if ctx.common.cache:
         cache_prefix = await caching.cache_prefix(cache)
-        result = await cache.get(f"{cache_prefix}:info")
+        cache_key = f"{cache_prefix}:info{'_exclude_undefined_corpora' if query.exclude_undefined_corpora else ''}"
+        result = await cache.get(cache_key)
         if result:
             if ctx.common.debug:
                 result.setdefault("debug", {})
@@ -232,8 +248,16 @@ async def info(
     cwb_corpora = ctx.cwb.run_cqp("show corpora;")
     version = next(cwb_corpora)
     corpora = [utils.normalize_corpus_id(corpus) for corpus in cwb_corpora]
-
     protected = await auth.get_protected_corpora(ctx)
+    if query.exclude_undefined_corpora:
+        # `show corpora` lists every corpus in the registry, also those whose data CQP cannot read. All of them have a
+        # registry file, so only the CQP check can find undefined ones. Its result is not cached separately, as the
+        # result of `/info` is cached.
+        undefined = set(await anyio.to_thread.run_sync(ctx.cwb.find_undefined_corpora, corpora))
+        corpora = [corpus for corpus in corpora if corpus not in undefined]
+        # Leave out the undefined corpora also from the protected ones. Protected corpora not in the registry at all are
+        # kept, as without `exclude_undefined_corpora`.
+        protected = [corpus for corpus in protected if corpus not in undefined]
 
     result = {
         "version": importlib.metadata.version("korp-backend"),
@@ -244,7 +268,7 @@ async def info(
 
     if ctx.common.cache:
         try:
-            added = await cache.add(f"{cache_prefix}:info", result)
+            added = await cache.add(cache_key, result)
         except CacheError:
             added = False
         if added and ctx.common.debug:

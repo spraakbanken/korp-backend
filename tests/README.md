@@ -79,6 +79,8 @@ This directory `tests/` contains:
   - [`data/db`](data/db): Korp MySQL database data
   - [`data/db/tableinfo`](data/db/tableinfo): YAML files with information for creating Korp MySQL database tables
 - [`conftest.py`](conftest.py): Pytest configuration; in particular, fixtures to be used by individual tests
+- [`cacheutils.py`](cacheutils.py): `FakeAiomcacheClient` class, an in-memory stand-in for a Memcached client for
+  testing with caching enabled
 - [`configutils.py`](configutils.py): utility functions for processing the Korp configuration
 - [`corpusutils.py`](corpusutils.py): utility functions for setting up CWB corpus data
 - [`dbutils.py`](dbutils.py): `KorpDatabase` class for setting up and using Korp MySQL test database
@@ -111,6 +113,8 @@ The following Pytest fixtures have been defined in [`conftest.py`](conftest.py):
   takes as its argument a `dict` for overriding default Korp configuration values
 - `client`: Return a default `TestClient` created with `with TestClient(app)`
 - `client_factory`: Return a context manager function for creating a `TestClient` with optional config overrides
+- `cached_client_factory`: Like `client_factory`, but with caching enabled, using a separate, empty in-memory cache for
+  each app instance instead of a Memcached server
 - `get_json`: Return a function for sending a request with `client` and getting the response JSON data
 
 ### Functional tests

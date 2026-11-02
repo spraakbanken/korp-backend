@@ -21,6 +21,8 @@ Version 9 is a breaking rewrite of the backend and its HTTP API.
 - Added request and database slow-operation logging, database connection/read/pool timeouts, and configurable error
   traceback exposure.
 - Added extensive unit, contract, plugin, and functional tests (thanks to @janiemi for the original test contribution).
+- Added `exclude_undefined_corpora` to `/info`, to leave out corpora that have a registry file but whose data Corpus
+  Workbench cannot read.
 
 ### Changed
 

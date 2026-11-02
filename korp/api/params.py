@@ -167,6 +167,19 @@ StrategyParam: TypeAlias = Annotated[
     ),
 ]
 
+ExcludeUndefinedCorporaParam: TypeAlias = Annotated[
+    bool,
+    Query(
+        description=(
+            "Whether to leave out of `corpora` and `protected_corpora` the corpora that have a registry file but "
+            "whose data Corpus Workbench cannot read. Protected corpora without a registry file are kept. The check "
+            "selects every corpus in CQP, which makes the request slower when there are many corpora, so it is "
+            "disabled by default. The result is cached if caching is enabled, and the cached result is updated only "
+            "when the cache is refreshed after a registry or `.info` file has changed."
+        )
+    ),
+]
+
 IncludeCombinedParam: TypeAlias = Annotated[
     bool,
     Query(description="Whether to include results merged across all selected corpora in the `combined` field."),
