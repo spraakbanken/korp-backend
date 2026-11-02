@@ -392,7 +392,7 @@ def query_optimize(cqp, cqpparams, find_match=True, expand=True, free_search=Fal
     else:
         cmd[0] += ";"
 
-    return 0, cmd
+    return 0, make_query(cmd[0].rstrip(";")) + cmd[1:]
 
 
 ################################################################################
