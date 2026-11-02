@@ -9,7 +9,7 @@ from typing import Annotated, Any, TypeAlias
 
 import anyio
 import yaml
-from pydantic import AfterValidator, BeforeValidator, ConfigDict, Field
+from pydantic import AfterValidator, BeforeValidator, ConfigDict, Field, StringConstraints
 from pydantic.json_schema import SkipJsonSchema
 
 from korp.api import schemas
@@ -134,6 +134,7 @@ class CorpusConfigRequest(RequestModel):
 
     mode: Annotated[
         str,
+        StringConstraints(pattern=r"^[\w.-]+$"),
         Query(description="Mode to build configuration for. Defaults to `default`.", examples=["default"]),
     ] = "default"
     corpora: CorporaParam = None
