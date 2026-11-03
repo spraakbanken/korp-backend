@@ -92,8 +92,10 @@ class TestRunCqp:
     @staticmethod
     def test_run_cqp_no_such_attribute(run_cqp: RunCqp) -> None:
         """Showing a non-existent attribute raises `CQPError`."""
-        with pytest.raises(CQPError, match="No such attribute"):
+        with pytest.raises(CQPError) as excinfo:
             run_cqp("show +_zzz;")
+
+        assert str(excinfo.value) == "No such attribute: _zzz"
 
     @staticmethod
     def test_run_cqp_attr_ignore(run_cqp: RunCqp) -> None:
@@ -108,6 +110,12 @@ class TestRunCqp:
         """A syntax error raises `CQPError`."""
         with pytest.raises(CQPError, match="CQP Syntax Error:"):
             run_cqp("---;")
+
+    @staticmethod
+    def test_run_cqp_syntax_error_non_ascii(run_cqp: RunCqp) -> None:
+        """A syntax error at a non-ASCII character raises `CQPError`, although CQP echoes only part of the character."""
+        with pytest.raises(CQPError, match="CQP Syntax Error:"):
+            run_cqp("[word='x'] ä;")
 
 
 class FakePopen:
@@ -311,3 +319,39 @@ class TestRunCqpMocked:
         assert not process.killed
         assert process.input == b"set PrettyPrint off;\nx;"
         process_class.assert_not_called()
+
+    @staticmethod
+    def test_error_whitespace_stripped(mock_cwb: CWB, fake_popen: FakePopenFactory) -> None:
+        """The newline that ends the CQP error message is not left as a trailing space."""
+        fake_popen(stderr=b"CQP Error:\n\tNo such attribute: zzz\n")
+
+        with pytest.raises(CQPError) as excinfo:
+            list(mock_cwb.run_cqp("x;"))
+
+        assert str(excinfo.value) == "No such attribute: zzz"
+
+    @staticmethod
+    def test_error_invalid_encoding(mock_cwb: CWB, fake_popen: FakePopenFactory) -> None:
+        """Stderr invalid in the configured encoding raises `CQPError`, with invalid bytes replaced by U+FFFD.
+
+        CQP echoes only the first byte of a multibyte character outside a string in a syntax error.
+        """
+        fake_popen(stderr=b"CQP Error:\n\tCQP Syntax Error: syntax error\n\t\n[word='x'] \xc3 <--\n")
+
+        with pytest.raises(CQPError) as excinfo:
+            list(mock_cwb.run_cqp("x;"))
+
+        assert str(excinfo.value) == "CQP Syntax Error: syntax error [word='x'] \ufffd <--"
+
+    @staticmethod
+    def test_ignored_error_invalid_encoding(mock_cwb: CWB, fake_popen: FakePopenFactory) -> None:
+        """An ignored error is ignored even if stderr is invalid in the configured encoding."""
+        fake_popen(
+            stdout=b"out\n",
+            stderr=(
+                b"CQP Error:\n\t``zzz'' is neither a positional/structural attribute nor a label reference\n"
+                b"CQP Error:\n\tCQP Syntax Error: syntax error\n\t\n[zzz='x' & \xc3 <--\n"
+            ),
+        )
+
+        assert list(mock_cwb.run_cqp("x;")) == ["out"]
