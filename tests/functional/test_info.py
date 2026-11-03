@@ -1,6 +1,7 @@
 """Pytest tests for the Korp `/info` and `/corpora/info` endpoints."""
 
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -44,6 +45,12 @@ class TestInfo:
         assert set(data["corpora"]) == {corpus.lower() for corpus in corpora}
         assert all(corpus == corpus.lower() for corpus in data["protected_corpora"])
 
+    @staticmethod
+    def test_info_broken_registry_file(get_json: Callable, corpora: list[str], registry_with_broken_file: Path) -> None:
+        """Test that `/info` leaves out a corpus whose registry file CQP cannot parse, instead of failing."""
+        data = get_json("/info", params={"cache": "false"}, config={"CWB_REGISTRY": str(registry_with_broken_file)})
+        assert set(data["corpora"]) == {corpus.lower() for corpus in corpora}
+
 
 class TestCorpusInfo:
     """Tests for the `/corpora/info` endpoint."""
@@ -60,6 +67,22 @@ class TestCorpusInfo:
         assert set(data["corpora"].keys()) == {corpus.lower() for corpus in corpora}
         assert data["total_size"] == self._get_corpora_info_sum(data, "size")
         assert data["total_sentences"] == self._get_corpora_info_sum(data, "sentences")
+
+    @staticmethod
+    def test_corpus_info_broken_registry_file(get_json: Callable, registry_with_broken_file: Path) -> None:
+        """Test that a registry file that CQP cannot parse makes `/corpora/info` fail only for that corpus."""
+        config = {"CWB_REGISTRY": str(registry_with_broken_file)}
+        data = get_json("/corpora/info", params={"cache": "false", "corpora": "testcorpus"}, config=config)
+        assert list(data["corpora"]) == ["testcorpus"]
+
+        data = get_json(
+            "/corpora/info",
+            params={"cache": "false", "corpora": "testcorpus,brokencorpus"},
+            config=config,
+            expected_status_code=400,
+        )
+        assert data["code"] == "cqp_error"
+        assert data["detail"] == "Corpus ``BROKENCORPUS'' is undefined"
 
     @pytest.mark.parametrize(
         ("corpus", "attrs_p", "attrs_s", "attrs_a"),

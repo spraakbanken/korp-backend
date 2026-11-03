@@ -93,6 +93,7 @@ Version 9 is a breaking rewrite of the backend and its HTTP API.
 - Fixed frequency calculations using `relative_to_struct`, including multi-token queries.
 - Fixed log-likelihood grouping by multiple positional or structural attributes.
 - Fixed unannotated tokens disappearing from statistics when splitting by structural attributes.
+- Fixed a registry file that Corpus Workbench cannot parse making every CQP request fail.
 
 ### Removed
 
