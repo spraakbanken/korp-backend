@@ -26,6 +26,9 @@ class CWB:
         "CL: major error, cannot compose string: invalid UTF8 string passed to cl_string_canonical...",
     )
 
+    # A line of the errors that CQP prints at startup, for every command, for each registry file it cannot parse
+    _REGISTRY_ERROR_LINE = re.compile(r"^REGISTRY ERROR \(.*(?:\n|$)", re.MULTILINE)
+
     def __init__(self, executable: Path, scan_executable: Path, registry: Path, locale: str, encoding: str) -> None:
         """Initialize CWB interface.
 
@@ -105,7 +108,7 @@ class CWB:
             Lines of output from the CQP command. Empty lines are ignored.
 
         Raises:
-            CQPError: If an error occurs during execution of the command.
+            CQPError: If an error occurs during execution of the command. Registry errors are ignored.
         """
         env = os.environ.copy()
         env["LC_COLLATE"] = self.locale
@@ -128,6 +131,9 @@ class CWB:
         reply, error = result
         if error:
             error = error.decode(self.encoding, errors="replace")
+            # A registry file that CQP cannot parse makes CQP print a registry error on every run, whatever the
+            # command. Selecting that corpus is a separate error, so registry errors can be ignored here.
+            error = self._REGISTRY_ERROR_LINE.sub("", error)
             # Normalize whitespace and keep only the first CQP error (the rest are consequences)
             error = re.sub(r"\s+", " ", error)
             error = re.sub(r"^CQP Error: *", "", error)
@@ -137,7 +143,7 @@ class CWB:
             ignore_error = (attr_ignore and "No such attribute:" in error) or any(
                 ignored in error for ignored in self._IGNORED_ERRORS
             )
-            if not ignore_error:
+            if error and not ignore_error:
                 raise cqp.CQPError(error)
 
         yield from self._iter_lines(reply.decode(self.encoding, errors="ignore"))

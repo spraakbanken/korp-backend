@@ -46,6 +46,22 @@ def corpus_registry_dir(corpus_data_root: Path) -> Path:
 
 
 @pytest.fixture
+def registry_with_broken_file(corpora: list[str], corpus_registry_dir: Path, tmp_path: Path) -> Path:  # ruff: ignore[unused-function-argument]
+    """Return a copy of the test corpus registry with a registry file `brokencorpus` that CQP cannot parse.
+
+    CQP prints a registry error for `brokencorpus` on every run, does not list it in `show corpora` and reports it as
+    undefined when it is selected. The copy is used so that other tests do not see the file.
+
+    Returns:
+        The path of the copied registry directory.
+    """
+    registry_dir = tmp_path / "registry"
+    copytree(corpus_registry_dir, registry_dir)
+    (registry_dir / "brokencorpus").write_text("syntax error\n", encoding="utf-8")
+    return registry_dir
+
+
+@pytest.fixture
 def cache_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Return a cache directory."""
     return tmp_path_factory.mktemp("cache")

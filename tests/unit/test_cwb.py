@@ -106,6 +106,18 @@ class TestRunCqp:
         assert result[0].startswith("CQP version")
 
     @staticmethod
+    def test_run_cqp_broken_registry_file(registry_with_broken_file: Path, corpora: list[str]) -> None:
+        """A registry file that CQP cannot parse makes only selecting that corpus fail; CQP does not list it."""
+        cwb = _make_cwb(registry_with_broken_file)
+
+        lines = list(cwb.run_cqp("show corpora;"))
+
+        assert lines[0].startswith("CQP version")
+        assert set(lines[1:]) == {corpus.upper() for corpus in corpora}
+        with pytest.raises(CQPError, match="Corpus ``BROKENCORPUS'' is undefined"):
+            list(cwb.run_cqp("BROKENCORPUS;"))
+
+    @staticmethod
     def test_run_cqp_syntax_error(run_cqp: RunCqp) -> None:
         """A syntax error raises `CQPError`."""
         with pytest.raises(CQPError, match="CQP Syntax Error:"):
@@ -263,6 +275,20 @@ class TestRunCqpMocked:
         fake_popen(stdout=b"out\n", stderr=message.encode())
 
         assert list(mock_cwb.run_cqp("x;")) == ["out"]
+
+    @staticmethod
+    def test_registry_errors_ignored(mock_cwb: CWB, fake_popen: FakePopenFactory) -> None:
+        """Registry errors are not raised, and the first CQP error after them is."""
+        registry_errors = b"REGISTRY ERROR (r/x): syntax error\nREGISTRY ERROR (r/x): Error parsing the main Registry\n"
+        fake_popen(stdout=b"out\n", stderr=registry_errors)
+
+        assert list(mock_cwb.run_cqp("x;")) == ["out"]
+
+        fake_popen(stderr=registry_errors + b"CQP Error:\n\tCorpus ``X'' is undefined\n")
+
+        with pytest.raises(CQPError) as excinfo:
+            list(mock_cwb.run_cqp("x;"))
+        assert str(excinfo.value) == "Corpus ``X'' is undefined"
 
     @staticmethod
     def test_attr_ignore(mock_cwb: CWB, fake_popen: FakePopenFactory) -> None:
