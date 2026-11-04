@@ -1,5 +1,20 @@
 # Changelog
 
+## [8.3.0] - 2026-11-04
+
+### Changed
+
+- The `plugins.auth` authorization plugin now reads corpus protection from `Protected: true` in CWB `.info` files
+  instead of `PROTECTED_FILE`. Migrate every corpus listed in the old file and invalidate cached corpus metadata before
+  removing the setting. See the README for upgrade instructions.
+
+### Fixed
+
+- Fixed CQP injection vulnerabilities that could allow attackers to execute arbitrary commands with the permissions of
+  the backend process.
+- Added a check for structural attributes containing tab characters.
+- Fixed frequency calculations using `relative_to_struct`, including multi-token queries.
+
 ## [8.2.0] - 2024-05-16
 
 ### Added
