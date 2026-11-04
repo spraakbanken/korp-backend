@@ -32,6 +32,16 @@ def create_app():
     else:
         print(f"Configure Korp by copying config.py to '{app.instance_path}' and modifying that copy")
 
+    if app.config["PLUGINS_CONFIG"].get("plugins.auth", {}).get("PROTECTED_FILE"):
+        raise RuntimeError(
+            "PROTECTED_FILE is no longer supported. Korp now determines corpus protection "
+            "from CWB .info files. Before restarting, add 'Protected: true' to the .info "
+            "file of every corpus listed in your old protected file, invalidate cached "
+            "corpus metadata, and then remove PROTECTED_FILE from "
+            "PLUGINS_CONFIG['plugins.auth']. Removing the setting alone does not protect "
+            "those corpora. See the README for upgrade instructions."
+        )
+
     cwb.init(
         executable=app.config["CQP_EXECUTABLE"],
         scan_executable=app.config["CWB_SCAN_EXECUTABLE"],

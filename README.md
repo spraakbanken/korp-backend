@@ -17,6 +17,26 @@ To see what has changed in recent versions, see the [CHANGELOG](CHANGELOG.md).
 > containing this fix. **For v8 installations, upgrade to the latest code on the [`maintenance/8.x`
 > branch](https://github.com/spraakbanken/korp-backend/tree/maintenance/8.x).**
 
+> [!IMPORTANT]
+> **Upgrade: corpus protection configuration**
+>
+> The `plugins.auth` plugin now determines which corpora are protected from `Protected: true` in each corpus's
+> CWB `.info` file. It no longer reads the file configured by `PLUGINS_CONFIG["plugins.auth"]["PROTECTED_FILE"]`.
+> Korp refuses to start if that setting has a non-empty value, even if the plugin is disabled.
+>
+> If you are using `plugins.auth`, you must migrate your protected corpora to the new system before bringing an upgraded
+> installation online.
+>
+> 1. Add `Protected: true` to the `.info` file in the CWB data directory of **every corpus listed in the old protected
+>    file**. End each `.info` file with a blank line.
+> 2. If caching is enabled, clear Korp's cached corpus metadata in Memcached so old metadata without the protection
+>    flag cannot be reused. Restarting Korp alone does not clear Memcached.
+> 3. Remove `PROTECTED_FILE` from `PLUGINS_CONFIG["plugins.auth"]`, start Korp with `plugins.auth` enabled, and verify
+>    that unauthenticated requests for those corpora are denied before restoring public access.
+>
+> **Removing the setting alone does not protect those corpora.** Corpora without `Protected: true` are treated as public
+> by the bundled authorization plugins. The `plugins.auth_jwt` plugin also uses this `.info` protection flag.
+
 ## Requirements
 
 To use the basic features of the Korp backend you need the following:
