@@ -489,6 +489,10 @@ def create_app(config_override: dict[str, Any] | None = None) -> FastAPI:
             if isinstance(value, APIRouter):
                 app.include_router(value)
 
+        # If the plugin has a setup() function, call it with the app instance
+        if (setup := getattr(module, "setup", None)) is not None:
+            setup(app)
+
         if (plugin_authorizer := getattr(module, "AUTHORIZER_CLASS", None)) is None:
             continue
         if not inspect.isclass(plugin_authorizer) or not issubclass(plugin_authorizer, auth.Authorizer):
