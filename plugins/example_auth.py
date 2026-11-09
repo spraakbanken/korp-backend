@@ -1,17 +1,19 @@
 """Example authorization plugin using the generic protection helpers.
 
-Enable by setting:
+Enable and configure in `.env`:
 
 PLUGINS = ["plugins.example_auth"]
-
-Example plugin config (YAML or PLUGINS_CONFIG):
-
-plugins.example_auth:
-  protected_corpora: ["corpus1", "corpus2"]
-  protection_details:
-    corpus1:
-      license: "restricted"
-  required_header: "X-Authorized-Corpora"
+PLUGINS_CONFIG = '{
+  "plugins.example_auth": {
+    "protected_corpora": ["corpus1", "corpus2"],
+    "protection_details": {
+      "corpus1": {
+        "license": "restricted"
+      }
+    },
+    "required_header": "X-Authorized-Corpora"
+  }
+}'
 
 The header specified in `required_header` should contain a comma-separated list of corpora the caller may access (for
 demo purposes only).

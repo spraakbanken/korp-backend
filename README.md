@@ -164,30 +164,29 @@ Optional route-level rate limiting can be enabled with:
 Rate limiting requires Korp to be installed with the `rate-limiting` extra dependencies, i.e. `uv sync --extra
 rate-limiting` or `pip install '.[rate-limiting]'`.
 
-Enable plugins by listing their importable module names in `PLUGINS`. Plugin-specific settings can be stored in a YAML
-file referenced by `PLUGINS_CONFIG_FILE`:
+Enable plugins by listing their importable module names in `PLUGINS`. Provide plugin-specific settings through
+`PLUGINS_CONFIG`, a JSON object keyed by module name. In `.env`, enclose the JSON in single quotes to span multiple
+lines:
 
 ```dotenv
 PLUGINS=["plugins.example", "plugins.example_auth"]
-PLUGINS_CONFIG_FILE="plugins.yaml"
+PLUGINS_CONFIG='{
+  "plugins.example": {
+    "greeting": "Hello!"
+  },
+  "plugins.example_auth": {
+    "protected_corpora": ["corpus1", "corpus2"],
+    "protection_details": {
+      "corpus1": {
+        "license": "restricted"
+      }
+    },
+    "required_header": "X-Authorized-Corpora"
+  }
+}'
 ```
 
-Example `plugins.yaml`:
-
-```yaml
-plugins.example:
-  greeting: "Hello!"
-
-plugins.example_auth:
-  protected_corpora: ["corpus1", "corpus2"]
-  protection_details:
-    corpus1:
-      license: "restricted"
-  required_header: "X-Authorized-Corpora"
-```
-
-At most one enabled plugin may provide an authorization class. If `PLUGINS_CONFIG` is also set in `.env`, its values
-override matching top-level plugin entries from the YAML file.
+At most one enabled plugin may provide an authorization class.
 
 ## Running the backend
 

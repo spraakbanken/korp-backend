@@ -1,13 +1,14 @@
 """An example plugin for Korp.
 
-Enable and configure by updating the Korp configuration as follows:
+Enable and configure in `.env`:
 
 PLUGINS = ["plugins.example"]
+PLUGINS_CONFIG = '{
+  "plugins.example": {
+    "greeting": "Hello!"
+  }
+}'
 
-Add the following to the plugin configuration file specified by PLUGINS_CONFIG_FILE (default: plugins.yaml):
-
-plugins.example:
-    greeting: "Hello!"
 """
 
 from korp import plugin

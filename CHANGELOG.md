@@ -42,7 +42,7 @@ Version 9 is a breaking rewrite of the backend and its HTTP API.
 - Memcached configuration now accepts a host and port, not a Unix socket. Caching is active only when Memcached is
   configured and `CACHE_DIR` exists.
 - Plugins now export FastAPI `APIRouter` instances. An authorization plugin may additionally export one
-  `AUTHORIZER_CLASS`; plugin configuration can be loaded from YAML and overridden from `.env`.
+  `AUTHORIZER_CLASS`; plugin configuration is provided through `PLUGINS_CONFIG` in environment variables or `.env`.
 - Built-in authorization plugins read the `Protected` value from CWB corpus metadata.
 - Route and parameter names now use descriptive kebab-case/plural vocabulary. The main mappings are `/query` to
   `/concordance`, `/count*` to `/frequencies*`, `/timespan` to `/token-distribution`, `/loglike` to `/log-likelihood`,

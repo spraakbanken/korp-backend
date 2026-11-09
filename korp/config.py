@@ -7,9 +7,8 @@ the server.
 import re
 from pathlib import Path
 from types import UnionType
-from typing import Any, Literal, get_args, get_origin
+from typing import Literal, get_args, get_origin
 
-import yaml
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -178,10 +177,7 @@ class Settings(BaseSettings):
     # Plugins to load
     PLUGINS: list = []
 
-    # Plugin configuration file
-    PLUGINS_CONFIG_FILE: Path = Path("plugins.yaml")
-
-    # Optional inline plugin configuration overrides
+    # Plugin configuration keyed by module name
     PLUGINS_CONFIG: dict = {}
 
     # This is set to True automatically when the app is run in test mode, and can be used by plugins and other code to
@@ -249,66 +245,6 @@ class Settings(BaseSettings):
             raise ValueError(msg)
 
         return self
-
-    @staticmethod
-    def _load_plugins_config_file(file_path: Path | str) -> dict[str, Any]:
-        """Load plugin configuration from YAML file.
-
-        Args:
-            file_path: Path to YAML file.
-
-        Returns:
-            A plugin configuration mapping.
-
-        Raises:
-            ValueError: If the YAML root is not a mapping.
-        """
-        path = Path(file_path).expanduser()
-        if not path.is_file():
-            return {}
-
-        with path.open(encoding="utf-8") as file:
-            loaded = yaml.safe_load(file) or {}
-
-        if not isinstance(loaded, dict):
-            msg = f"PLUGINS_CONFIG_FILE must contain a YAML mapping, got {type(loaded).__name__}"
-            raise ValueError(msg)
-
-        return loaded
-
-    @model_validator(mode="before")
-    @classmethod
-    def _merge_plugins_config_file(cls, data: Any) -> Any:
-        """Merge plugin config from YAML file with explicitly provided plugin config.
-
-        Args:
-            data: Raw settings data before model validation.
-
-        Returns:
-            Updated settings data with merged plugin configuration.
-
-        Raises:
-            ValueError: If the plugin config file cannot be read or parsed.
-        """
-        if not isinstance(data, dict):
-            return data
-
-        plugins_config_file = data.get("PLUGINS_CONFIG_FILE", cls.model_fields["PLUGINS_CONFIG_FILE"].default)
-        if not plugins_config_file:
-            return data
-
-        try:
-            file_config = cls._load_plugins_config_file(plugins_config_file)
-        except (OSError, yaml.YAMLError) as error:
-            msg = f"Could not read PLUGINS_CONFIG_FILE '{plugins_config_file}': {error}"
-            raise ValueError(msg) from error
-
-        explicit_config = data.get("PLUGINS_CONFIG") or {}
-        if not isinstance(explicit_config, dict):
-            return data
-
-        data["PLUGINS_CONFIG"] = {**file_config, **explicit_config}
-        return data
 
 
 settings = Settings()

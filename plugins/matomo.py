@@ -1,7 +1,7 @@
 """Optional Matomo request tracking.
 
 Install the `matomo` extra and enable `plugins.matomo` in `PLUGINS`. Configure middleware options in the
-`plugins.matomo` entry of `PLUGINS_CONFIG` or the YAML file referenced by `PLUGINS_CONFIG_FILE`.
+`plugins.matomo` entry of `PLUGINS_CONFIG`.
 """
 
 from asgi_matomo import MatomoMiddleware
