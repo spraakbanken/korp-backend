@@ -35,6 +35,9 @@ server = [
 jwt = [
     "pyjwt[crypto]"  # For JWT support in authentication plugin
 ]
+matomo = [
+    "asgi-matomo"  # For request tracking through the Matomo plugin
+]
 
 [dependency-groups]
 dev = [

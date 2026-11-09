@@ -84,6 +84,7 @@ Korp provides the following optional dependency groups:
 - `rate-limiting`: support for per-route rate limiting.
 - `server`: [Gunicorn](https://gunicorn.org/) for running Korp in production.
 - `jwt`: JWT support for authentication plugins.
+- `matomo`: request tracking through the Matomo plugin.
 
 If you want to install the optional dependencies, use the `--extra` option with `uv sync`:
 
