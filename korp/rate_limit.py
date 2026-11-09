@@ -159,9 +159,8 @@ class RequestRateLimiter:
         """
         items = self._get_limit_items(limit)
         route = self._route_identifier(request)
-        method = request.method
         client = self._client_identifier(request)
-        identifiers = ("korp", route, method, client)
+        identifiers = ("korp", route, client)
 
         for item in items:
             allowed = await self._strategy.hit(item, *identifiers)
