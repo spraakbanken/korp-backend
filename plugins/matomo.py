@@ -5,6 +5,7 @@ Install the `matomo` extra and enable `plugins.matomo` in `PLUGINS`. Configure m
 """
 
 from asgi_matomo import MatomoMiddleware
+from asgi_matomo.background import BackgroundTaskMiddleware
 from fastapi import FastAPI
 
 from korp.config import settings
@@ -17,3 +18,4 @@ def setup(app: FastAPI) -> None:
         app: Application being configured.
     """
     app.add_middleware(MatomoMiddleware, **settings.PLUGINS_CONFIG[__name__])
+    app.add_middleware(BackgroundTaskMiddleware)

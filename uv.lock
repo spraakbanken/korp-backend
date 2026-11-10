@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.12' and sys_platform == 'emscripten'",
@@ -10,6 +10,9 @@ resolution-markers = [
 [options]
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
+
+[options.exclude-newer-package]
+asgi-matomo = false
 
 [[package]]
 name = "aiomcache"
@@ -49,6 +52,56 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a9/d2/f4d173e22df740bc37b1db102b386ba719b66e95b0f0d751f556b387e6d2/anyio-4.15.1.tar.gz", hash = "sha256:9f28306018cbd6d329e64a36d58256edff76dd996fe423bc957326e578b82a94", size = 276966, upload-time = "2026-09-05T10:42:39.44Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/12/b8/4bd346e22b28902df4d651910f5242c28d84e4a5c2435ca5c3f797ed7e2e/anyio-4.15.1-py3-none-any.whl", hash = "sha256:6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101", size = 132079, upload-time = "2026-09-05T10:42:37.923Z" },
+]
+
+[[package]]
+name = "asgi-background"
+version = "0.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "asgi-lifespan-middleware" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4f/a6/972a433cf7329307e23db2b5f5b6b7ae82a18152e0e83de5fd56857bc240/asgi_background-0.2.2.tar.gz", hash = "sha256:5046aa0c54690ac980bfe8049b9d3288b352c29d35720397f83be7e825c0f598", size = 4918, upload-time = "2022-10-27T03:17:31.714Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c6/c8/302c68d5b00a15eaa6599634d742df392a834af3337c62d0cb0f7440adb2/asgi_background-0.2.2-py3-none-any.whl", hash = "sha256:3d928d74b313fd45ddeeb77272fd7f6edb239cbeee5d0359c4684dca4990ca23", size = 5279, upload-time = "2022-10-27T03:17:30.207Z" },
+]
+
+[[package]]
+name = "asgi-lifespan-middleware"
+version = "0.1.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/af/14/e413ef0ed1878a6c84296dd9103653eb9a838a6196acb98d21ec52b059ce/asgi_lifespan_middleware-0.1.3.tar.gz", hash = "sha256:88adb5932e90e47f8a1ac075ce974c39e39def90b99edb43801732102ae5d132", size = 4672, upload-time = "2022-10-27T03:16:28.497Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/65/0c/8776c4453a002bf9476c5aafac520c14c5046288190ff34b58f68857138c/asgi_lifespan_middleware-0.1.3-py3-none-any.whl", hash = "sha256:c36734c0bc33f416621ed050c092391b89f0c312b462976d7536e2be941d780d", size = 5033, upload-time = "2022-10-27T03:16:26.905Z" },
+]
+
+[[package]]
+name = "asgi-matomo"
+version = "0.9.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "asgiref" },
+    { name = "httpx2", extra = ["http2"] },
+    { name = "matomo-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/85/70/a31233cfc8dedf01389ffdd611e57da09c493f67cd82f3f4dc8eb0ea1469/asgi_matomo-0.9.0.tar.gz", hash = "sha256:2bb2675f2f611e8874127dc6f8c30d553a6b0b7774643a8bb15a23c5777f4c75", size = 8199, upload-time = "2026-11-05T13:43:35.338Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/e9/fbb053dd7cedc982d76924009bced2d7340b48eaaca3978c68cf0b2eed7f/asgi_matomo-0.9.0-py3-none-any.whl", hash = "sha256:6b7cffcc733692a0439ae5530770dd0e910807b0942e63653ee1211a9f63b336", size = 9245, upload-time = "2026-11-05T13:43:33.882Z" },
+]
+
+[package.optional-dependencies]
+background = [
+    { name = "asgi-background" },
+]
+
+[[package]]
+name = "asgiref"
+version = "3.13.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/90/f5fce14e95fccf53b58e8e2c47cd84d40d105d64073ae1ac75166db150e0/asgiref-3.13.0.tar.gz", hash = "sha256:034cc8cbf72d00553b4be256703ac545120b4e50af13b49dec99da899aeeecb4", size = 52941, upload-time = "2026-10-23T08:13:14.715Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/b0/ec211e1f7966247cb6469158d856bac9aa4c2fe13621bd6a352e4f850453/asgiref-3.13.0-py3-none-any.whl", hash = "sha256:f9596a2434512686473d50f96ff6207fbba49ae1a785dfac614df4aeb085674d", size = 27593, upload-time = "2026-10-23T08:13:13.394Z" },
 ]
 
 [[package]]
@@ -300,7 +353,7 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 dependencies = [
-    { name = "wrapt", marker = "python_full_version < '3.12'" },
+    { name = "wrapt" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/49/85/12f0a49a7c4ffb70572b6c2ef13c90c88fd190debda93b23f026b25f9634/deprecated-1.3.1.tar.gz", hash = "sha256:b1b50e0ff0c1fddaa5708a2c6b0a6588bb09b892825ab2b214ac9ea9d92a5223", size = 2932523, upload-time = "2025-10-30T08:19:02.757Z" }
 wheels = [
@@ -316,7 +369,7 @@ resolution-markers = [
     "python_full_version >= '3.12' and sys_platform != 'emscripten'",
 ]
 dependencies = [
-    { name = "wrapt", marker = "python_full_version >= '3.12'" },
+    { name = "wrapt" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f7/9c/16649913bf14c73e0a9453782e148362ff2657067deff6aa9c7ebcddcc31/deprecated-3.0.0.tar.gz", hash = "sha256:16850204d3a1e6bb0acd06bff48d96e8b0a0d25d1c52f71705405a0f4894192d", size = 166912, upload-time = "2026-09-26T13:58:10.675Z" }
 wheels = [
@@ -455,12 +508,34 @@ wheels = [
 ]
 
 [[package]]
+name = "h2"
+version = "4.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "hpack" },
+    { name = "hyperframe" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e7/85/7c366e69d84c17bb778fe41419e1fbcce3033d5b7ce29bbffff0a98b859f/h2-4.4.1.tar.gz", hash = "sha256:4e866ffb1a869ae14dd9b5e6beb5c24a13da0495ad72b65925ded182521c1516", size = 2157281, upload-time = "2026-08-03T11:45:09.509Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7e/22/e85faf23bd72a92d1921e37d674ca56eb298a3c8be31fdecef0ff2b3aaac/h2-4.4.1-py3-none-any.whl", hash = "sha256:0e25f1462b23c9cb82d9eb02e28bc706dac2a68cb457c6a0d74d63c8a2a5d0e6", size = 62636, upload-time = "2026-08-03T11:44:59.164Z" },
+]
+
+[[package]]
+name = "hpack"
+version = "4.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/5b/fcabf6028144a8723726318b07a32c2f3314acdff6265743cf08a344b18e/hpack-4.2.0.tar.gz", hash = "sha256:0895cfa3b5531fc65fe439c05eb65144f123bf7a394fcaa56aa423548d8e45c0", size = 51300, upload-time = "2026-06-23T18:34:46.667Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/b4/4a9fcfb2aef6ba44d9073ecd301443aa00b3dac95de5619f2a7de7ec8a91/hpack-4.2.0-py3-none-any.whl", hash = "sha256:858ac0b02280fa582b5080d68db0899c62a80375e0e5413a74970c5e518b6986", size = 34246, upload-time = "2026-06-23T18:34:45.472Z" },
+]
+
+[[package]]
 name = "httpcore2"
 version = "2.13.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
-    { name = "truststore", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
+    { name = "h11" },
+    { name = "truststore" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/cb/f3/1db7aa2bc2524062192bb0e0323969492d1883152a232fe36eea65f4e35c/httpcore2-2.13.1.tar.gz", hash = "sha256:e0aa977abe17e69a3b820a24542a6fa88702676d83880b8d194dcd18408e5103", size = 68071, upload-time = "2026-09-23T07:47:22.372Z" }
 wheels = [
@@ -527,6 +602,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/d8/9c/6fe8931fd9f381042a9e4c7d5a7b4cbf7016b252bec0c99a49fce42c3326/httpx2-2.13.1-py3-none-any.whl", hash = "sha256:6dff50fabc270ee5fd25d845d0b078ed20564579744d6d962850975996d2f9a4", size = 95597, upload-time = "2026-09-23T07:47:20.995Z" },
 ]
 
+[package.optional-dependencies]
+http2 = [
+    { name = "h2" },
+]
+
 [[package]]
 name = "httpx2-jsfetch"
 version = "1.0"
@@ -534,6 +614,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/cd/c4/0e5636363151a2a1795e0a77617168b9ca438e1748ec05fc9b5687f93d64/httpx2_jsfetch-1.0.tar.gz", hash = "sha256:70a0e3eabfef7cce5ad9c629f7d01ca05e418f586646f4ddf14782e4c1454c60", size = 6872, upload-time = "2026-08-07T00:13:07.492Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9b/43/832f631d32e4f1211caa2ba368317739fe71f0b8530e4c9d15dc454bac2a/httpx2_jsfetch-1.0-py3-none-any.whl", hash = "sha256:cb916b707601e69a07721aabc8f3f6659be3a6893bc1ff5c6f9e02241df2da32", size = 6382, upload-time = "2026-08-07T00:13:06.567Z" },
+]
+
+[[package]]
+name = "hyperframe"
+version = "6.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/02/e7/94f8232d4a74cc99514c13a9f995811485a6903d48e5d952771ef6322e30/hyperframe-6.1.0.tar.gz", hash = "sha256:f630908a00854a7adeabd6382b43923a4c4cd4b821fcb527e6ab9e15382a3b08", size = 26566, upload-time = "2025-01-22T21:41:49.302Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/48/30/47d0bf6072f7252e6521f3447ccfa40b421b6824517f82854703d0f5a98b/hyperframe-6.1.0-py3-none-any.whl", hash = "sha256:b03380493a519fce58ea5af42e4a42317bf9bd425596f7a0835ffce80f1a42e5", size = 13007, upload-time = "2025-01-22T21:41:47.295Z" },
 ]
 
 [[package]]
@@ -573,6 +662,9 @@ dependencies = [
 jwt = [
     { name = "pyjwt", extra = ["crypto"] },
 ]
+matomo = [
+    { name = "asgi-matomo", extra = ["background"] },
+]
 rate-limiting = [
     { name = "limits", extra = ["async-memcached"] },
 ]
@@ -601,6 +693,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "aiomcache", specifier = "~=0.8.2" },
+    { name = "asgi-matomo", extras = ["background"], marker = "extra == 'matomo'", specifier = "~=0.9.0" },
     { name = "asyncmy", specifier = "~=0.2.14" },
     { name = "fastapi", specifier = "==0.142.2" },
     { name = "gunicorn", marker = "extra == 'server'", specifier = ">=26.2" },
@@ -613,7 +706,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = "~=2.0" },
     { name = "uvloop", marker = "extra == 'server'" },
 ]
-provides-extras = ["rate-limiting", "server", "jwt"]
+provides-extras = ["rate-limiting", "server", "jwt", "matomo"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -662,6 +755,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/06/ff/7841249c247aa650a76b9ee4bbaeae59370dc8bfd2f6c01f3630c35eb134/markdown_it_py-4.2.0.tar.gz", hash = "sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49", size = 82454, upload-time = "2026-05-07T12:08:28.36Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/81/4da04ced5a082363ecfa159c010d200ecbd959ae410c10c0264a38cac0f5/markdown_it_py-4.2.0-py3-none-any.whl", hash = "sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a", size = 91687, upload-time = "2026-05-07T12:08:27.182Z" },
+]
+
+[[package]]
+name = "matomo-core"
+version = "0.3.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e1/b6/40cb900418a13b57408647df900ab3deae9941226b8edd4d91a33630401f/matomo_core-0.3.4.tar.gz", hash = "sha256:943744d84cd123e35a94131513d4de0498ad74d315046f7999e262f90273755b", size = 4522, upload-time = "2026-06-12T13:56:43.771Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/24/45/e948d35c2d13aecdee26db81dc33c73199387c4a69e3b56c3e5168a0ebbe/matomo_core-0.3.4-py3-none-any.whl", hash = "sha256:3edc831e7f277e86015856319a183d695f45e8c8f0d004c39a43761e06df844d", size = 5876, upload-time = "2026-06-12T13:56:42.677Z" },
 ]
 
 [[package]]
