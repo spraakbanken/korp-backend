@@ -43,7 +43,6 @@ Version 9 is a breaking rewrite of the backend and its HTTP API.
   configured and `CACHE_DIR` exists.
 - Plugins now export FastAPI `APIRouter` instances. An authorization plugin may additionally export one
   `AUTHORIZER_CLASS`; plugin configuration is provided through `PLUGINS_CONFIG` in environment variables or `.env`.
-- Built-in authorization plugins read the `Protected` value from CWB corpus metadata.
 - Route and parameter names now use descriptive kebab-case/plural vocabulary. The main mappings are `/query` to
   `/concordance`, `/count*` to `/frequencies*`, `/timespan` to `/token-distribution`, `/loglike` to `/log-likelihood`,
   `/lemgram_count` to `/lexeme-counts`, `/attr_values` to `/attribute-values`, `/corpus_*` to `/corpora/*`, and the
@@ -89,8 +88,6 @@ Version 9 is a breaking rewrite of the backend and its HTTP API.
 ### Fixed
 
 - Fixed free-order concordance queries returning results beyond the requested page.
-- Added a check for structural attributes containing tab characters.
-- Fixed frequency calculations using `relative_to_struct`, including multi-token queries.
 - Fixed log-likelihood grouping by multiple positional or structural attributes.
 - Fixed unannotated tokens disappearing from statistics when splitting by structural attributes.
 - Fixed a registry file that Corpus Workbench cannot parse making every CQP request fail.
@@ -100,6 +97,21 @@ Version 9 is a breaking rewrite of the backend and its HTTP API.
 - Removed `/struct_values`; use `/attribute-values` with the `attributes` parameter.
 - Removed the `/` alias for `/info`.
 - Removed form-encoded POST requests. POST operations now accept strict `application/json` bodies.
+
+## [8.3.0] - 2026-11-04
+
+### Changed
+
+- The `plugins.auth` authorization plugin now reads corpus protection from `Protected: true` in CWB `.info` files
+  instead of `PROTECTED_FILE`. Migrate every corpus listed in the old file and invalidate cached corpus metadata before
+  removing the setting. See the README for upgrade instructions.
+
+### Fixed
+
+- Fixed CQP injection vulnerabilities that could allow attackers to execute arbitrary commands with the permissions of
+  the backend process.
+- Added a check for structural attributes containing tab characters.
+- Fixed frequency calculations using `relative_to_struct`, including multi-token queries.
 
 ## [8.2.0] - 2024-05-16
 
