@@ -206,6 +206,28 @@ class Settings(BaseSettings):
             raise ValueError(f"Invalid STRIP_SUFFIX_PATTERN: {exc}") from exc
         return pattern
 
+    @field_validator("PLUGINS_CONFIG")
+    @classmethod
+    def _validate_plugins_config(cls, config: dict) -> dict:
+        """Reject unsupported corpus protection configuration.
+
+        Returns:
+            The validated plugin configuration.
+
+        Raises:
+            ValueError: If the old protected-corpus file is configured.
+        """
+        auth_config = config.get("plugins.auth", {})
+        if isinstance(auth_config, dict) and auth_config.get("PROTECTED_FILE"):
+            msg = (
+                "PROTECTED_FILE is no longer supported. Add 'Protected: true' to the CWB .info file of every "
+                "corpus listed in the old protected file, invalidate cached corpus metadata, and then remove "
+                "PROTECTED_FILE from PLUGINS_CONFIG['plugins.auth']. Removing the setting alone does not "
+                "protect those corpora."
+            )
+            raise ValueError(msg)
+        return config
+
     @model_validator(mode="after")
     def _expand_paths(self) -> "Settings":
         """Expand `~` in all Path fields.
