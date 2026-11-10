@@ -20,3 +20,6 @@ venv/
 
 # Pytest
 cwb-cache/
+
+# Deployment configuration
+gunicorn.conf.py
