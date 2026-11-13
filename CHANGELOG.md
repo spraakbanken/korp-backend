@@ -24,6 +24,7 @@ Version 9 is a breaking rewrite of the backend and its HTTP API.
 - Added `exclude_undefined_corpora` to `/info`, to leave out corpora that have a registry file but whose data Corpus
   Workbench cannot read, and `report_undefined_corpora` to `/corpora/info`, to list undefined corpora in
   `undefined_corpora` instead of returning an error.
+- Added `ALLOW_CACHE_BYPASS` (default `false`) to control whether requests can bypass server caching with `cache=false`.
 
 ### Changed
 

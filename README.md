@@ -237,6 +237,10 @@ in the `server` extra dependencies if you use `uv sync --extra server`).
 
 ## Cache management
 
+Requests use server caching whenever it is enabled. The `cache=false` query parameter is accepted but only takes effect
+when `ALLOW_CACHE_BYPASS=true` is configured on the server. This setting defaults to `false`; enable it for development
+or troubleshooting. It does not enable caching if caching is unavailable or disabled on the server.
+
 Most caching is done using Memcached, except for concordance query data, which is temporarily saved to disk to speed up
 pagination. Memcached removes expired entries itself, but Korp must still invalidate cached data when corpora or corpus
 configuration files change. A bodyless `POST /admin/cache/refresh` performs that invalidation and removes expired disk

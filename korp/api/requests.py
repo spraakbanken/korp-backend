@@ -65,7 +65,13 @@ class CommonQueryControls(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    cache: bool = Field(True, description="Whether to use caching for the request.")
+    cache: bool = Field(
+        True,
+        description=(
+            "Whether to use server caching for the request. Setting this to false bypasses caching only when "
+            "ALLOW_CACHE_BYPASS is enabled on the server (disabled by default)."
+        ),
+    )
     debug: bool = Field(False, description="Whether to include debug information in responses.")
     indent: Annotated[int, Field(ge=0, le=16)] = Field(0, description="Number of spaces to indent JSON output.")
     stream: bool = Field(

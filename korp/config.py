@@ -138,6 +138,9 @@ class Settings(BaseSettings):
     # Cache path (optional). Script must have read and write access.
     CACHE_DIR: Path | None = None
 
+    # Allow requests to bypass server caching with cache=false (for development and troubleshooting)
+    ALLOW_CACHE_BYPASS: bool = False
+
     # Disk cache lifespan in minutes
     CACHE_LIFESPAN: int = 20
 

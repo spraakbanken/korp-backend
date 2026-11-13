@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Annotated
 from fastapi import Depends, Query, Request
 
 from korp.api.requests import CommonQueryControls
+from korp.config import settings
 
 if TYPE_CHECKING:
     from korp.cwb import CWB
@@ -40,7 +41,7 @@ def build_common_params(request: Request, controls: CommonQueryControls) -> Comm
     Returns:
         Common parameters with application-level caching applied.
     """
-    effective_cache = request.app.state.cache_enabled and controls.cache
+    effective_cache = request.app.state.cache_enabled and (controls.cache or not settings.ALLOW_CACHE_BYPASS)
 
     return CommonParams(
         debug=controls.debug,
