@@ -39,6 +39,8 @@ By default, up to 15 values are returned from each side of the comparison. Use `
 example, `max_results=10` can return up to ten set-1-prominent values and ten set-2-prominent values. Use
 `max_results=0` for no limit.
 
+The results are sorted by absolute log-likelihood score, so the most prominent values from each set are returned first.
+
 Most grouping and value-normalization parameters are shared with `/frequencies`, including `group_by`,
 `group_by_struct`, `ignore_case`, `split`, `strip_suffix`, `max_values_per_set`, `within`, and
 `default_within`.
