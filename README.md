@@ -286,6 +286,11 @@ is slower when there are many corpora, so it is not the default, but the result 
 `report_undefined_corpora=true`, `/corpora/info` lists the requested corpora that are undefined in `undefined_corpora`
 instead of returning an error.
 
+The bundled authorization plugins `plugins.auth` and `plugins.auth_jwt` read the protection status of a corpus with
+CQP, so they cannot read it for undefined corpora. `/info` lists undefined corpora as protected (unless
+`exclude_undefined_corpora=true` leaves them out), and checking the authorization for an undefined corpus fails with
+a CQP error.
+
 Like other cached corpus data, cached results that depend on whether a corpus is undefined are invalidated only when a
 registry file or a `.info` file changes. After installing, repairing or removing the data of a corpus without changing
 its registry file, touch the registry file and refresh the cache (see [Cache management](#cache-management)).

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import TYPE_CHECKING, Any
+
+import anyio.to_thread
 
 from korp import auth, caching, cqp, utils
 
@@ -18,6 +20,43 @@ def list_corpora(cwb: CWB) -> list[str]:
     corpora_lines = cwb.run_cqp("show corpora;")
     next(corpora_lines, None)  # Skip CQP version
     return [utils.normalize_corpus_id(corpus) for corpus in corpora_lines]
+
+
+async def get_protected_corpora(
+    cwb: CWB, get_protection_info: Callable[[list[str]], Awaitable[dict[str, auth.ProtectionInfo]]]
+) -> list[str]:
+    """Return the protected corpora among all corpora reported by CQP.
+
+    Undefined corpora, which CQP cannot select, are listed as protected, as their protection status cannot be read;
+    only a status cached before a corpus became undefined may be used instead. `/info` caches its result, so listing
+    them as public could show a protected corpus as public after its data is repaired without changing its registry
+    file; this way, a repaired public corpus is instead listed as protected until the cache is invalidated.
+
+    Args:
+        cwb: CWB interface.
+        get_protection_info: Function returning protection metadata keyed by corpus for the given corpora, such as
+            `Authorizer._get_protection_info` with the authentication context bound. It should raise `CQPError` if a
+            corpus is undefined; it is then called again without the undefined corpora.
+
+    Returns:
+        Lowercase ids of the protected corpora.
+
+    Raises:
+        CQPError: If CQP reports an error that is not caused by an undefined corpus.
+    """
+    corpora = list_corpora(cwb)
+    try:
+        protection_info = await get_protection_info(corpora)
+    except cqp.CQPError:
+        # The error message names at most one undefined corpus, and it may not even show that the error is caused by
+        # one, as CWB may print its own error first, so check all the corpora
+        undefined = set(await anyio.to_thread.run_sync(cwb.find_undefined_corpora, corpora))
+        if not undefined:
+            raise
+        protection_info = await get_protection_info([corpus for corpus in corpora if corpus not in undefined])
+        # Not stored in the protection cache, so that the corpora are checked again once their data is repaired
+        protection_info.update(dict.fromkeys(undefined, auth.ProtectionInfo(protected=True)))
+    return [corpus for corpus in corpora if protection_info[corpus].protected]
 
 
 def _normalize_detail_keys(detail_keys: Iterable[str] | None) -> set[str]:
