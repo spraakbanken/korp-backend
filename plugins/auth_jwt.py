@@ -85,11 +85,11 @@ class AuthJWT(auth.Authorizer):
         """Get list of corpora with restricted access.
 
         Returns:
-            Lowercase corpus ids marked as protected.
+            Lowercase corpus ids marked as protected. Undefined corpora are listed as protected.
         """
-        corpora = protection_cwb.list_corpora(self.cwb)
-        protection_info = await self._get_protection_info(corpora, auth_ctx)
-        return [corpus for corpus in corpora if protection_info[corpus].protected]
+        return await protection_cwb.get_protected_corpora(
+            self.cwb, lambda corpora: self._get_protection_info(corpora, auth_ctx)
+        )
 
     async def check_authorization(
         self, corpora: list[str], auth_ctx: AuthContext

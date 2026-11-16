@@ -128,6 +128,52 @@ class TestInfo:
         assert data["protected_corpora"] == expected_protected
 
     @staticmethod
+    @pytest.mark.parametrize("exclude_undefined_corpora", [True, False], ids=["exclude", "no_exclude"])
+    @pytest.mark.parametrize(
+        "undefined_corpus",
+        [
+            CORPUS_WITHOUT_DATA,
+            pytest.param(
+                "unreadablecorpus",
+                marks=pytest.mark.skipif(os.geteuid() == 0, reason="root can read files without read permission"),
+            ),
+        ],
+    )
+    def test_info_auth_plugin_undefined_corpus(
+        client_factory: Callable[..., AbstractContextManager[TestClient]],
+        registry_with_corpus_without_data: Path,
+        tmp_path: Path,
+        undefined_corpus: str,
+        exclude_undefined_corpora: bool,
+    ) -> None:
+        """Test that `/info` with the authorizer of `plugins.auth` works with an undefined corpus in the registry.
+
+        The registry contains the undefined corpus `CORPUS_WITHOUT_DATA` and, in one case, also a corpus whose data
+        file cannot be read. Undefined corpora are listed as protected, as their protection cannot be read, unless
+        `exclude_undefined_corpora` leaves them out, and the protection of the other corpora is still read.
+        """
+        protected_dir = tmp_path / "protectedcorpus"
+        copy_corpus(registry_with_corpus_without_data, "testcorpus", "protectedcorpus", protected_dir)
+        with (protected_dir / ".info").open("a", encoding="utf-8") as info_file:
+            info_file.write("Protected: true\n")
+        if undefined_corpus == "unreadablecorpus":
+            unreadable_dir = tmp_path / "unreadablecorpus"
+            copy_corpus(registry_with_corpus_without_data, "testcorpus", "unreadablecorpus", unreadable_dir)
+            (unreadable_dir / "word.corpus").chmod(0)
+        with client_factory(
+            {"CWB_REGISTRY": str(registry_with_corpus_without_data), "PLUGINS": ["plugins.auth"]}
+        ) as client:
+            data = get_response_json(
+                client,
+                "/info",
+                params={"cache": "false", "exclude_undefined_corpora": str(exclude_undefined_corpora).lower()},
+            )
+        assert (undefined_corpus in data["corpora"]) != exclude_undefined_corpora
+        assert "protectedcorpus" in data["corpora"]
+        undefined_corpora = [] if exclude_undefined_corpora else [CORPUS_WITHOUT_DATA, undefined_corpus]
+        assert data["protected_corpora"] == sorted({"protectedcorpus", *undefined_corpora})
+
+    @staticmethod
     def test_info_unknown_parameter(get_json: Callable) -> None:
         """Test that `/info` rejects an unknown parameter."""
         data = get_json("/info", params={"no_such_param": "true"}, expected_status_code=422)
