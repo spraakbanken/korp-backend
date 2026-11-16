@@ -33,6 +33,12 @@ class CWB:
     # the beginning of a message, as other error output that CQP prints before the next error is appended to it
     _UNDEFINED_CORPUS_MESSAGE = re.compile(r"Corpus ``(.+?)'' is undefined")
 
+    # CQP error message for selecting a system (registry) corpus that is undefined: the uppercase form of
+    # `_VALID_CORPUS_ID`. Korp passes corpus ids to CQP in uppercase, whereas the names of its named queries, such as
+    # `Last`, contain lowercase letters; an undefined named query is usually a consequence of an earlier error. Match
+    # only the beginning of a message, as above.
+    _UNDEFINED_SYSTEM_CORPUS_MESSAGE = re.compile(r"Corpus ``[A-Z_][A-Z0-9_-]*'' is undefined")
+
     # A (normalized) corpus id that CQP can select, unless it is one of `_CQP_KEYWORDS`
     _VALID_CORPUS_ID = re.compile(r"[a-z_][a-z0-9_-]*")
 
@@ -173,7 +179,10 @@ class CWB:
             Lines of output from the CQP command. Empty lines are ignored.
 
         Raises:
-            CQPError: If an error occurs during execution of the command. Registry errors are ignored.
+            CQPError: If an error occurs during execution of the command. Only the first error is raised, unless it is
+                an ignored error, as the rest are usually its consequences. If the first error is ignored, the error
+                for an undefined system corpus (an id without lowercase letters) is still raised. Registry errors are
+                ignored.
         """
         result = self._run_cqp_process(command, abort_signal)
         if result is None:
@@ -183,18 +192,20 @@ class CWB:
         if error:
             # A registry file that CQP cannot parse makes CQP print a registry error on every run, whatever the
             # command. Selecting that corpus is a separate error, so registry errors can be ignored here.
-            error = self._REGISTRY_ERROR_LINE.sub("", error)
-            # Normalize whitespace and keep only the first CQP error (the rest are consequences)
-            error = re.sub(r"\s+", " ", error)
-            error = re.sub(r"^CQP Error: *", "", error)
-            error = re.sub(r" *CQP Error:.*$", "", error)
-            error = error.strip()
-
-            ignore_error = (attr_ignore and "No such attribute:" in error) or any(
-                ignored in error for ignored in self._IGNORED_ERRORS
-            )
-            if error and not ignore_error:
-                raise cqp.CQPError(error)
+            messages = list(self._iter_error_messages(self._REGISTRY_ERROR_LINE.sub("", error)))
+            if messages:
+                ignore_error = (attr_ignore and "No such attribute:" in messages[0]) or any(
+                    ignored in messages[0] for ignored in self._IGNORED_ERRORS
+                )
+                if not ignore_error:
+                    raise cqp.CQPError(messages[0])
+            # The errors after the first one are usually its consequences, such as `Corpus ``Last'' is undefined`
+            # after a query that failed. An undefined corpus is not, and if its error were ignored, CQP would output
+            # the information of the previously selected corpus in its place. This includes the first message, which
+            # may have been ignored only because of other error output appended to it.
+            for message in messages:
+                if self._UNDEFINED_SYSTEM_CORPUS_MESSAGE.match(message):
+                    raise cqp.CQPError(message)
 
         yield from self._iter_lines(reply)
 

@@ -130,6 +130,35 @@ class TestRunCqp:
         with pytest.raises(CQPError, match="CQP Syntax Error:"):
             run_cqp("[word='x'] ä;")
 
+    @staticmethod
+    @pytest.mark.parametrize(
+        ("command", "attr_ignore"),
+        [
+            ('[zzz="x"];', False),
+            ('[word="x"] :: match.zzz="a";', False),
+            ("[] within zzz;", False),
+            ("show +zzz;", True),
+        ],
+        ids=["no_attribute", "attribute_not_defined", "structure_not_defined", "attr_ignore"],
+    )
+    def test_run_cqp_undefined_corpus_after_ignored_error(run_cqp: RunCqp, command: str, attr_ignore: bool) -> None:
+        """An undefined corpus raises `CQPError` also after an ignored error.
+
+        Otherwise, `info` would output the information of the previously selected corpus for the undefined corpus.
+        """
+        with pytest.raises(CQPError) as excinfo:
+            run_cqp([command, "NOSUCHCORPUS;", "info;"], attr_ignore=attr_ignore)
+
+        assert str(excinfo.value) == "Corpus ``NOSUCHCORPUS'' is undefined"
+
+    @staticmethod
+    def test_run_cqp_ignored_error_consequences(run_cqp: RunCqp) -> None:
+        """The errors for the undefined `Last` after a query failing with an ignored error are also ignored."""
+        result = run_cqp(['[zzz="x"];', "size Last;", "cat Last;"])
+
+        assert result[0].startswith("CQP version")
+        assert result[1:] == ["0"]
+
 
 class TestFindUndefinedCorpora:
     """Tests for `CWB.find_undefined_corpora` with the real CQP."""
@@ -324,6 +353,16 @@ class TestRunCqpMocked:
         assert str(excinfo.value) == "first problem"
 
     @staticmethod
+    def test_first_error_raised_before_undefined_corpus(mock_cwb: CWB, fake_popen: FakePopenFactory) -> None:
+        """A first error that is not ignored is raised instead of the error for a later undefined corpus."""
+        fake_popen(stderr=b"CQP Error:\n\tfirst\nCQP Error:\n\tCorpus ``A'' is undefined\n")
+
+        with pytest.raises(CQPError) as excinfo:
+            list(mock_cwb.run_cqp("x;"))
+
+        assert str(excinfo.value) == "first"
+
+    @staticmethod
     @pytest.mark.parametrize(
         "message",
         [
@@ -338,6 +377,64 @@ class TestRunCqpMocked:
         fake_popen(stdout=b"out\n", stderr=message.encode())
 
         assert list(mock_cwb.run_cqp("x;")) == ["out"]
+
+    @staticmethod
+    @pytest.mark.parametrize(
+        ("ignored", "attr_ignore"),
+        [
+            (b"``zzz'' is neither a positional/structural attribute", False),
+            (b"No such attribute: zzz", True),
+        ],
+        ids=["ignored_error", "attr_ignore"],
+    )
+    def test_undefined_corpus_after_ignored_error(
+        mock_cwb: CWB, fake_popen: FakePopenFactory, ignored: bytes, attr_ignore: bool
+    ) -> None:
+        """The first undefined system corpus after an ignored error and an undefined named query raises `CQPError`.
+
+        The id `A_B-1` also checks that `_`, `-` and digits are allowed in an id.
+        """
+        fake_popen(
+            stdout=b"out\n",
+            stderr=(
+                b"CQP Error:\n\t" + ignored + b"\nCQP Error:\n\tCorpus ``Last'' is undefined\n"
+                b"CQP Error:\n\tCorpus ``A_B-1'' is undefined\nCQP Error:\n\tCorpus ``C'' is undefined\n"
+            ),
+        )
+
+        with pytest.raises(CQPError) as excinfo:
+            list(mock_cwb.run_cqp("x;", attr_ignore=attr_ignore))
+
+        assert str(excinfo.value) == "Corpus ``A_B-1'' is undefined"
+
+    @staticmethod
+    @pytest.mark.parametrize("named_query", ["Last", "mainresult", "concordance_data_ab_cd"])
+    def test_undefined_named_query_after_ignored_error(
+        mock_cwb: CWB, fake_popen: FakePopenFactory, named_query: str
+    ) -> None:
+        """An undefined named query after an ignored error is ignored, as it is a consequence of the ignored error."""
+        fake_popen(
+            stdout=b"out\n",
+            stderr=(
+                b"CQP Error:\n\t``zzz'' is neither a positional/structural attribute nor a label reference\n"
+                b"CQP Error:\n\tCorpus ``" + named_query.encode() + b"'' is undefined\n"
+            ),
+        )
+
+        assert list(mock_cwb.run_cqp("x;")) == ["out"]
+
+    @staticmethod
+    def test_undefined_corpus_with_ignored_output(mock_cwb: CWB, fake_popen: FakePopenFactory) -> None:
+        """An undefined corpus raises `CQPError` even if the error output after it contains an ignored error."""
+        fake_popen(
+            stderr=(
+                b"CQP Error:\n\tCorpus ``A'' is undefined\n"
+                b"CL: major error, cannot compose string: invalid UTF8 string passed to cl_string_canonical...\n"
+            ),
+        )
+
+        with pytest.raises(CQPError, match=r"^Corpus ``A'' is undefined CL: major error"):
+            list(mock_cwb.run_cqp("x;"))
 
     @staticmethod
     def test_registry_errors_ignored(mock_cwb: CWB, fake_popen: FakePopenFactory) -> None:
