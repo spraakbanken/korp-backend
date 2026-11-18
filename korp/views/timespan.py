@@ -29,7 +29,6 @@ def timespan(args, no_combined_cache=False):
     utils.assert_key("to", args, r"^(\d{8}\d{6}?|\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?)$")
 
     corpora = utils.parse_corpora(args)
-    # check_authorization(corpora)
 
     granularity = (args.get("granularity") or "y").lower()
     combined = utils.parse_bool(args, "combined", True)
@@ -41,6 +40,20 @@ def timespan(args, no_combined_cache=False):
     if fromdate or todate:
         if not fromdate or not todate:
             raise ValueError("When using 'from' or 'to', both need to be specified.")
+
+    denied = set()
+    # The internal caller (/count_time) already checks authorization.
+    if not args["internal"]:
+        unauthorized = utils.check_authorization(corpora, allow_partial=True) or []
+        unauthorized = {corpus.upper() for corpus in unauthorized}
+        denied = {corpus for corpus in corpora if unauthorized.intersection(corpus.upper().split("|"))}
+        corpora = [corpus for corpus in corpora if corpus not in denied]
+
+    def with_empty_corpora(result):
+        if per_corpus and denied:
+            # Keep request-specific placeholders out of the shared cache.
+            return {**result, "corpora": {**result["corpora"], **{corpus: {} for corpus in sorted(denied)}}}
+        return result
 
     shorten = {"y": 4, "m": 7, "d": 10, "h": 13, "n": 16, "s": 19}
 
@@ -62,7 +75,7 @@ def timespan(args, no_combined_cache=False):
             if "debug" in args:
                 result.setdefault("DEBUG", {})
                 result["DEBUG"]["cache_read"] = True
-            yield result
+            yield with_empty_corpora(result)
             return
 
         # Look for per-corpus caches
@@ -157,7 +170,7 @@ def timespan(args, no_combined_cache=False):
         except MemcacheError:
             pass
 
-    yield ns["result"]
+    yield with_empty_corpora(ns["result"])
 
 
 def timespan_calculator(timedata, granularity="y", combined=True, per_corpus=True, strategy=1):

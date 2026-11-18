@@ -645,6 +645,8 @@ paths:
       summary: Distribution Over Time
       description: |
         Show the distribution of all tokens in a corpus over time.
+        Combined totals include only corpora the requester can access.
+        When per-corpus results are included, each denied corpus has an empty object as its value.
         
         ### Example
 

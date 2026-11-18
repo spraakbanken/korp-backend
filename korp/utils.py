@@ -578,9 +578,12 @@ def get_protected_corpora() -> List[str]:
         return []
 
 
-def check_authorization(corpora) -> None:
-    """Take a list of corpora, and if any of them are protected, check authorization.
-    Raises an error if authorization fails."""
+def check_authorization(corpora, *, allow_partial=False) -> Optional[List[str]]:
+    """Check that the user has permission to access the specified corpora.
+
+    By default, raises a `KorpAuthorizationError` if the user does not have access to all corpora. If `allow_partial` is
+    `True`, it returns a list of unauthorized corpora instead.
+    """
 
     if authorizer:
         # Split parallel corpora
@@ -588,9 +591,14 @@ def check_authorization(corpora) -> None:
 
         success, unauthorized, message = authorizer.check_authorization(corpora)
         if not success:
+            if allow_partial:
+                # A denial without corpus names applies to the entire request.
+                return unauthorized or corpora
             if not message:
                 message = "You do not have access to the following corpora: %s" % ", ".join(unauthorized)
             raise KorpAuthorizationError(message)
+
+    return [] if allow_partial else None
 
 
 def strptime(date):
