@@ -68,6 +68,7 @@ Version 9 is a breaking rewrite of the backend and its HTTP API.
   events.
 - Request validation is stricter: unknown parameters and JSON fields are rejected, and JSON collection fields must be
   arrays.
+- Corpus ids and attribute names in parameters may contain only ASCII letters, digits, `_`, `-` and `.`.
 - Corpus IDs are lowercase throughout responses, configuration, authorization, and cache keys.
 - Removed JSONP output and the legacy `callback` and `encoding` controls; responses are UTF-8 JSON or NDJSON.
 - Common response timing is now `elapsed` instead of `time`, and optional debug output is `debug` instead of `DEBUG`.

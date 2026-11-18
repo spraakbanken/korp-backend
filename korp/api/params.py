@@ -10,11 +10,12 @@ from pydantic.json_schema import SkipJsonSchema
 from korp import utils
 
 NonEmptyString: TypeAlias = Annotated[str, StringConstraints(min_length=1)]
-Attribute: TypeAlias = Annotated[str, StringConstraints(pattern=r"^[\w.-]+$")]
+# CWB corpus and attribute names consist of ASCII characters only
+Attribute: TypeAlias = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]+$")]
 
 CorpusId: TypeAlias = Annotated[
     str,
-    StringConstraints(pattern=r"^[\w.-]+(?:\|[\w.-]+)*$"),
+    StringConstraints(pattern=r"^[A-Za-z0-9_.-]+(?:\|[A-Za-z0-9_.-]+)*$"),
     BeforeValidator(lambda value: value.strip() if isinstance(value, str) else value),
 ]
 
@@ -112,7 +113,7 @@ WithinParam: TypeAlias = Annotated[
 ]
 
 DefaultContextParam: TypeAlias = Annotated[
-    Annotated[str, StringConstraints(pattern=r"^\d+\s+[\w_-]+$")] | SkipJsonSchema[None],
+    Annotated[str, StringConstraints(pattern=r"^\d+\s+[A-Za-z0-9_-]+$")] | SkipJsonSchema[None],
     Query(
         description=(
             "Default context to return around each match. Use `<number> <unit>`, for example `10 word` for token "
@@ -122,7 +123,9 @@ DefaultContextParam: TypeAlias = Annotated[
     ),
 ]
 
-CorpusContext: TypeAlias = Annotated[str, StringConstraints(pattern=r"^[\w.-]+(?:\|[\w.-]+)*:\d+\s+[\w_-]+$")]
+CorpusContext: TypeAlias = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]+(?:\|[A-Za-z0-9_.-]+)*:\d+\s+[A-Za-z0-9_-]+$")
+]
 
 ContextParam: TypeAlias = Annotated[
     list[CorpusContext] | SkipJsonSchema[None],

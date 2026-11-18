@@ -63,3 +63,10 @@ class TestCorporaParam:
         """Assert that we handle both comma-separated corpora and multiple corpus parameters."""
         m = M.model_validate({"corpora": ["A,c", "b"]})
         assert m.corpora == ["a", "b", "c"]
+
+    @staticmethod
+    @pytest.mark.parametrize("corpus", ["corpusé", "ärtal", "corpus٣"])
+    def test_corpora_param_non_ascii(corpus: str) -> None:
+        """Assert that corpus names with non-ASCII characters raise a validation error."""
+        with pytest.raises(ValidationError):
+            M.model_validate({"corpora": [corpus]})

@@ -1657,7 +1657,7 @@ def _limit_rows_per_bucket(
 
 
 SourcesParam: TypeAlias = Annotated[
-    list[Annotated[str, StringConstraints(pattern=r"^[\w.-]+:\d+$")]],
+    list[Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]+:\d+$")]],
     Query(
         description="Source ids in the format `CORPUS:ID`.",
         examples=[["romi:253662", "romi:253663"]],
