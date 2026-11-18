@@ -1,5 +1,4 @@
 from flask import Blueprint
-from flask import current_app as app
 
 from korp import utils
 from korp.db import mysql
@@ -13,7 +12,7 @@ bp = Blueprint("lemgram_count", __name__)
 def lemgram_count(args):
     """Return lemgram statistics per corpus."""
     utils.assert_key("lemgram", args, r"", True)
-    utils.assert_key("corpus", args, utils.IS_IDENT)
+    utils.assert_key("corpus", args, utils.IS_IDENT, True)
     utils.assert_key("count", args, r"(lemgram|prefix|suffix)")
 
     corpora = utils.parse_corpora(args)
@@ -36,7 +35,7 @@ def lemgram_count(args):
     sums = " + ".join("SUM(%s)" % counts[c] for c in count)
 
     lemgram_sql = " lemgram IN (%s)" % ", ".join("'%s'" % utils.sql_escape(l) for l in lemgram)
-    corpora_sql = " AND corpus IN (%s)" % ", ".join("'%s'" % utils.sql_escape(c) for c in corpora) if corpora else ""
+    corpora_sql = " AND corpus IN (%s)" % ", ".join("'%s'" % utils.sql_escape(c) for c in corpora)
 
     sql = "SELECT lemgram, " + sums + " AS freq FROM lemgram_index WHERE" + lemgram_sql + corpora_sql + \
           " GROUP BY lemgram;"

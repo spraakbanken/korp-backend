@@ -956,11 +956,12 @@ paths:
           in: query
           explode: false
         - name: corpus
-          description: Corpus name. All corpora if omitted.
+          description: Corpus name.
           schema:
             type: array
             items:
               type: string
+          required: true
           in: query
           explode: false
         - name: count
