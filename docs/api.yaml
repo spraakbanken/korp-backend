@@ -1,7 +1,7 @@
 openapi: 3.0.2
 info: 
   title: Korp API
-  version: 8.1.0
+  version: 8.3.1
   description: |
     # Introduction
     

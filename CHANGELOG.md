@@ -1,5 +1,13 @@
 # Changelog
 
+## [8.3.1] - 2026-11-18
+
+### Changed
+
+- Corpus IDs and attribute names in parameters may contain only ASCII letters, digits, `_`, `-` and `.`.
+- `/lemgram_count` now requires the `corpus` parameter to be specified.
+- `/timespan` now returns empty results for unauthorized corpora.
+
 ## [8.3.0] - 2026-11-04
 
 ### Changed
