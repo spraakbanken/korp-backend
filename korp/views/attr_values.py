@@ -23,7 +23,7 @@ bp = Blueprint("attr_values", __name__)
 def attr_values(args):
     """Get all available values for one or more structural attributes."""
     utils.assert_key("corpus", args, utils.IS_IDENT, True)
-    utils.assert_key(("attr", "struct"), args, re.compile(r"^[\w_,>]+$"), True)
+    utils.assert_key(("attr", "struct"), args, re.compile(r"^[A-Za-z0-9_,>]+$"), True)
     utils.assert_key("incremental", args, r"(true|false)")
 
     incremental = utils.parse_bool(args, "incremental", False)

@@ -31,7 +31,7 @@ RIGHT_DELIM = ":::---"
 
 # Regular expressions for parsing parameters
 IS_NUMBER = re.compile(r"^\d+$")
-IS_IDENT = re.compile(r"^[\w\-,|_]+$")
+IS_IDENT = re.compile(r"^[A-Za-z0-9\-,|_]+$")
 
 QUERY_DELIM = ","
 

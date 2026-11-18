@@ -280,7 +280,7 @@ def relations_sentences(args):
         temp_source = temp_source.split(utils.QUERY_DELIM)
     source = defaultdict(set)
     for s in temp_source:
-        if not isinstance(s, str) or not re.fullmatch(r"[\w-]+:[0-9]+", s):
+        if not isinstance(s, str) or not re.fullmatch(r"[A-Za-z0-9_-]+:[0-9]+", s):
             raise ValueError("Invalid source value; expected CORPUS:ID.")
         c, i = s.split(":")
         source[c].add(i)
