@@ -68,7 +68,6 @@ Version 9 is a breaking rewrite of the backend and its HTTP API.
   events.
 - Request validation is stricter: unknown parameters and JSON fields are rejected, and JSON collection fields must be
   arrays.
-- Corpus ids and attribute names in parameters may contain only ASCII letters, digits, `_`, `-` and `.`.
 - Corpus IDs are lowercase throughout responses, configuration, authorization, and cache keys.
 - Removed JSONP output and the legacy `callback` and `encoding` controls; responses are UTF-8 JSON or NDJSON.
 - Common response timing is now `elapsed` instead of `time`, and optional debug output is `debug` instead of `DEBUG`.
@@ -107,6 +106,14 @@ Version 9 is a breaking rewrite of the backend and its HTTP API.
 - Removed `/struct_values`; use `/attribute-values` with the `attributes` parameter.
 - Removed the `/` alias for `/info`.
 - Removed form-encoded POST requests. POST operations now accept strict `application/json` bodies.
+
+## [8.3.1] - 2026-11-18
+
+### Changed
+
+- Corpus IDs and attribute names in parameters may contain only ASCII letters, digits, `_`, `-` and `.`.
+- `/lemgram_count` now requires the `corpus` parameter to be specified.
+- `/timespan` now returns empty results for unauthorized corpora.
 
 ## [8.3.0] - 2026-11-04
 
