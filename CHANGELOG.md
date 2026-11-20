@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Corpus IDs and attribute names in parameters may contain only ASCII letters, digits, `_`, `-` and `.`.
+- Corpus IDs and attribute names in parameters no longer accept non-ASCII characters.
 - `/lemgram_count` now requires the `corpus` parameter to be specified.
 - `/timespan` now returns empty results for unauthorized corpora.
 
