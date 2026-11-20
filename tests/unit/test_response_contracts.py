@@ -159,8 +159,10 @@ def test_representative_request_schema_fields() -> None:
     concordance_request = schemas["ConcordanceRequest"]
     relation_request = schemas["DependencyRelationsRequest"]
 
-    assert concordance_request["required"] == ["corpora", "cqp"]
+    assert concordance_request["required"] == ["corpora"]
     assert concordance_request["properties"]["cqp"]["type"] == "array"
+    assert concordance_request["properties"]["query"]["type"] == "array"
+    assert concordance_request["properties"]["query_language"]["type"] == "array"
     assert concordance_request["properties"]["attributes"]["default"] == ["word"]
     assert relation_request["properties"]["term_type"]["default"] == "word"
     assert set(schemas["LogLikelihoodResponse"]["required"]) >= {"average", "results"}
