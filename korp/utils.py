@@ -12,6 +12,8 @@ from korp.db import escape_string as _db_escape_string
 from korp.handler import ResponseFragment
 
 QUERY_DELIM = ","
+# Identifier syntax for corpus and attribute names in the CQP lexer (cqp/parser.l).
+CQP_IDENTIFIER_PATTERN = r"[A-Za-z_][A-Za-z0-9_-]*"
 
 
 def normalize_corpus_id(corpus: str) -> str:

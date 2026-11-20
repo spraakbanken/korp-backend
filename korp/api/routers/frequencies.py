@@ -190,7 +190,8 @@ StripSuffixParam: TypeAlias = Annotated[
 ]
 
 MaxValuesPerSetParam: TypeAlias = Annotated[
-    list[Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]+(?:\:\d+)?$")]] | SkipJsonSchema[None],
+    list[Annotated[str, StringConstraints(pattern=rf"^{utils.CQP_IDENTIFIER_PATTERN}(?::\d+)?$")]]
+    | SkipJsonSchema[None],
     Query(
         description=(
             "CWB attributes for which only the first N values in a set should be counted. "

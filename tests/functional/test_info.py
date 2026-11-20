@@ -237,12 +237,11 @@ class TestCorpusInfo:
         [
             (["testcorpus"], [CORPUS_WITHOUT_DATA, "nosuchcorpus"]),
             (["testcorpus"], ["nosuchcorpus"]),
-            (["testcorpus"], ["1abc", "a.b"]),
             (["testcorpus"], ["brokencorpus"]),
-            ([], ["a.b", "nosuchcorpus"]),
+            ([], ["nosuchcorpus", "nosuchcorpus2"]),
             (["testcorpus", "testcorpus5"], []),
         ],
-        ids=["no_data", "no_registry_file", "invalid_id", "broken_registry_file", "all_undefined", "all_defined"],
+        ids=["no_data", "no_registry_file", "broken_registry_file", "all_undefined", "all_defined"],
     )
     def test_corpus_info_report_undefined_corpora(
         client_factory: Callable[..., AbstractContextManager[TestClient]],

@@ -43,7 +43,7 @@ OptimizeCQPParam: TypeAlias = Annotated[
 ]
 
 OptimizeWithinParam: TypeAlias = Annotated[
-    str | SkipJsonSchema[None],
+    params.WithinValue | SkipJsonSchema[None],
     Query(
         description=("Structural unit the optimized query should stay inside. Defaults to `sentence` when omitted."),
         examples=["sentence"],

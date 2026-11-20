@@ -10,12 +10,14 @@ from pydantic.json_schema import SkipJsonSchema
 from korp import utils
 
 NonEmptyString: TypeAlias = Annotated[str, StringConstraints(min_length=1)]
-# CWB corpus and attribute names consist of ASCII characters only
-Attribute: TypeAlias = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]+$")]
+Attribute: TypeAlias = Annotated[str, StringConstraints(pattern=rf"^{utils.CQP_IDENTIFIER_PATTERN}$")]
+
+# IDs of aligned corpora are joined with a pipe character.
+_CORPUS_SELECTION_PATTERN = rf"{utils.CQP_IDENTIFIER_PATTERN}(?:\|{utils.CQP_IDENTIFIER_PATTERN})*"
 
 CorpusId: TypeAlias = Annotated[
     str,
-    StringConstraints(pattern=r"^[A-Za-z0-9_.-]+(?:\|[A-Za-z0-9_.-]+)*$"),
+    StringConstraints(pattern=rf"^{_CORPUS_SELECTION_PATTERN}$"),
     BeforeValidator(lambda value: value.strip() if isinstance(value, str) else value),
 ]
 
@@ -89,8 +91,14 @@ QueryLanguagesParam: TypeAlias = Annotated[
     ),
 ]
 
+# For within parameters, CQP accepts a distance and/or a structural attribute. An empty value disables the boundary.
+# Within values can be quoted with backticks to avoid collision with CQP keywords.
+_WITHIN_ATTRIBUTE_PATTERN = rf"(?:{utils.CQP_IDENTIFIER_PATTERN}|`{utils.CQP_IDENTIFIER_PATTERN}`)"
+_WITHIN_VALUE_PATTERN = rf"\s*(?:\+?[0-9]+(?:\s*{_WITHIN_ATTRIBUTE_PATTERN})?|{_WITHIN_ATTRIBUTE_PATTERN})?\s*"
+WithinValue: TypeAlias = Annotated[str, StringConstraints(pattern=rf"^{_WITHIN_VALUE_PATTERN}$")]
+
 DefaultWithinParam: TypeAlias = Annotated[
-    str | SkipJsonSchema[None],
+    WithinValue | SkipJsonSchema[None],
     Query(
         description=(
             "Default structural unit that query matches must stay inside, for example `sentence` or `text`. This "
@@ -101,7 +109,8 @@ DefaultWithinParam: TypeAlias = Annotated[
 ]
 
 WithinParam: TypeAlias = Annotated[
-    list[str] | SkipJsonSchema[None],
+    list[Annotated[str, StringConstraints(pattern=rf"^\s*{_CORPUS_SELECTION_PATTERN}\s*:{_WITHIN_VALUE_PATTERN}$")]]
+    | SkipJsonSchema[None],
     Query(
         description=(
             "Per-corpus structural unit that query matches must stay inside, overriding `default_within` for the "
@@ -112,8 +121,10 @@ WithinParam: TypeAlias = Annotated[
     BeforeValidator(utils.split_csv),
 ]
 
+_CONTEXT_VALUE_PATTERN = rf"\d+\s+{utils.CQP_IDENTIFIER_PATTERN}"
+
 DefaultContextParam: TypeAlias = Annotated[
-    Annotated[str, StringConstraints(pattern=r"^\d+\s+[A-Za-z0-9_-]+$")] | SkipJsonSchema[None],
+    Annotated[str, StringConstraints(pattern=rf"^{_CONTEXT_VALUE_PATTERN}$")] | SkipJsonSchema[None],
     Query(
         description=(
             "Default context to return around each match. Use `<number> <unit>`, for example `10 word` for token "
@@ -124,7 +135,7 @@ DefaultContextParam: TypeAlias = Annotated[
 ]
 
 CorpusContext: TypeAlias = Annotated[
-    str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]+(?:\|[A-Za-z0-9_.-]+)*:\d+\s+[A-Za-z0-9_-]+$")
+    str, StringConstraints(pattern=rf"^{_CORPUS_SELECTION_PATTERN}:{_CONTEXT_VALUE_PATTERN}$")
 ]
 
 ContextParam: TypeAlias = Annotated[
@@ -249,7 +260,7 @@ IncludePerCorpusParam: TypeAlias = Annotated[
 ]
 
 SplitParam: TypeAlias = Annotated[
-    list[str] | SkipJsonSchema[None],
+    list[Attribute] | SkipJsonSchema[None],
     Query(
         description=(
             "Set-valued CWB attributes whose values should be split on `|` before counting. "

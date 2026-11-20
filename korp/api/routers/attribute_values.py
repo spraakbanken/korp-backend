@@ -56,7 +56,11 @@ Get all authors and their titles with token counts:
 """
 
 AttrParam: TypeAlias = Annotated[
-    list[Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]+(?:>[A-Za-z0-9_.-]+)*$")]],
+    list[
+        Annotated[
+            str, StringConstraints(pattern=rf"^{utils.CQP_IDENTIFIER_PATTERN}(?:>{utils.CQP_IDENTIFIER_PATTERN})*$")
+        ]
+    ],
     Query(
         description=(
             "CWB attribute names or attribute hierarchies. Use `>` to request nested values, "

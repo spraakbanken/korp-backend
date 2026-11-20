@@ -40,7 +40,7 @@ class CWB:
     _UNDEFINED_SYSTEM_CORPUS_MESSAGE = re.compile(r"Corpus ``[A-Z_][A-Z0-9_-]*'' is undefined")
 
     # A (normalized) corpus id that CQP can select, unless it is one of `_CQP_KEYWORDS`
-    _VALID_CORPUS_ID = re.compile(r"[a-z_][a-z0-9_-]*")
+    _VALID_CORPUS_ID = re.compile(utils.CQP_IDENTIFIER_PATTERN)
 
     # Ids that match `_VALID_CORPUS_ID` but whose uppercase form is a keyword in CQP (cqp/parser.l), so that selecting
     # them is a syntax error
